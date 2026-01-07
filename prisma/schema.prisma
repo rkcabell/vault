@@ -1,0 +1,45 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  media        Media[]
+}
+
+model Media {
+  id           String      @id @default(cuid())
+  userId       String
+  status       MediaStatus @default(PENDING)
+  storageKey   String
+  filename     String
+  mimeType     String
+  sizeBytes    Int
+  title        String
+  tags         String[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  thumbnailKey String?
+  document     Document?
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Document {
+  mediaId String @id
+  rawText String
+  media   Media  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+}
+
+enum MediaStatus {
+  PENDING
+  READY
+  FAILED
+}

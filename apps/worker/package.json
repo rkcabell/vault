@@ -1,0 +1,22 @@
+{
+    "name": "worker",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "scripts": {
+        "dev": "tsx watch src/index.ts",
+        "start": "node --enable-source-maps dist/index.js",
+        "build": "tsc -p tsconfig.json"
+    },
+    "dependencies": {
+        "@vault/db": "0.1.0",
+        "dotenv": "^17.2.3",
+        "ioredis": "^5.9.0"
+    },
+    "devDependencies": {
+        "tsx": "^4.21.0",
+        "typescript": "^5.9.3",
+        "@types/node": "^22.19.3"
+    }
+}

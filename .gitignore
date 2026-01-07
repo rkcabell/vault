@@ -1,0 +1,123 @@
+################################################################################
+# Secrets / env files
+################################################################################
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Common secret files
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets/
+secret/
+**/secrets/
+**/secret/
+
+################################################################################
+# Node / package managers
+################################################################################
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+################################################################################
+# Build outputs / caches
+################################################################################
+dist/
+build/
+out/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Turborepo / Nx (safe even if you don't use them)
+.turbo/
+.nx/
+.cache/
+
+################################################################################
+# Logs / temp
+################################################################################
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+
+################################################################################
+# OS junk
+################################################################################
+.DS_Store
+Thumbs.db
+desktop.ini
+
+################################################################################
+# Editor / IDE
+################################################################################
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+
+.idea/
+*.iml
+*.swp
+*.swo
+
+################################################################################
+# Docker / local volumes
+################################################################################
+# Compose overrides often contain machine-specific paths or creds
+docker-compose.override.yml
+compose.override.yml
+
+# Common bind-mount directories for local services
+data/
+db-data/
+postgres-data/
+redis-data/
+minio-data/
+storage/
+uploads/
+media/
+volumes/
+**/data/
+**/db-data/
+**/postgres-data/
+**/redis-data/
+**/minio-data/
+**/storage/
+**/uploads/
+**/media/
+**/volumes/
+
+################################################################################
+# Prisma
+################################################################################
+# Prisma engine binaries
+prisma/.cache/
+**/prisma/.cache/
+
+################################################################################
+# Test artifacts
+################################################################################
+playwright-report/
+test-results/
+screenshots/
+**/playwright-report/
+**/test-results/
+**/screenshots/
+
+################################################################################
+# Misc
+################################################################################
+*.pid
+*.seed
