@@ -1,0 +1,215 @@
+/* apps/web/app/(public)/auth/AuthPage.module.css */
+
+.container {
+    display: flex;
+    min-height: 100vh;
+    align-items: center;
+    justify-content: center;
+    background-color: #f5f5f5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1a1a1a;
+}
+
+.textCenter {
+    text-align: center;
+}
+
+.card {
+    background: #ffffff;
+    padding: 2.5rem;
+    border-radius: 16px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
+    width: 100%;
+    max-width: 400px;
+    animation: fadeIn 0.5s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin: 0 0 0.5rem 0;
+    letter-spacing: -0.025em;
+}
+
+.subtitle {
+    color: #666;
+    font-size: 0.95rem;
+    margin-bottom: 2rem;
+}
+
+.formGroup {
+    margin-bottom: 1.25rem;
+}
+
+.label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: #333;
+}
+
+.inputWrapper {
+    position: relative;
+}
+
+.input {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    outline: none;
+    transition: all 0.2s ease;
+    background: #fafafa;
+    box-sizing: border-box;
+}
+
+.input:focus {
+    border-color: #000;
+    background: #fff;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.05);
+}
+
+.inputError {
+    border-color: #ef4444;
+    background: #fef2f2;
+}
+
+.input:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.fieldError {
+    color: #ef4444;
+    font-size: 0.8rem;
+    margin-top: 0.35rem;
+}
+
+.togglePassword {
+    position: absolute;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #666;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 0.25rem;
+}
+
+.togglePassword:hover {
+    color: #000;
+}
+
+.submitBtn {
+    width: 100%;
+    padding: 0.875rem;
+    background: #000;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.1s, opacity 0.2s;
+    margin-top: 0.5rem;
+}
+
+.submitBtn:hover:not(:disabled) {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+.submitBtn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.submitBtn:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.alert {
+    padding: 0.75rem;
+    border-radius: 8px;
+    background: #fef2f2;
+    color: #dc2626;
+    border: 1px solid #fee2e2;
+    font-size: 0.875rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+    .container {
+        background-color: #0a0a0a;
+        color: #fff;
+    }
+
+    .card {
+        background-color: #171717;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+        border: 1px solid #333;
+    }
+
+    .subtitle {
+        color: #a1a1aa;
+    }
+
+    .label {
+        color: #e5e5e5;
+    }
+
+    .input {
+        background: #262626;
+        border-color: #404040;
+        color: #fff;
+    }
+
+    .input:focus {
+        border-color: #fff;
+        background: #262626;
+    }
+
+    .inputError {
+        border-color: #ef4444;
+        background: #450a0a;
+    }
+
+    .togglePassword {
+        color: #a1a1aa;
+    }
+
+    .togglePassword:hover {
+        color: #000;
+    }
+
+    .submitBtn {
+        background: #fff;
+        color: #000;
+    }
+
+    .alert {
+        background: #450a0a;
+        border-color: #7f1d1d;
+        color: #fca5a5;
+    }
+}

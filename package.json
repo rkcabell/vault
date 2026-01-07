@@ -1,0 +1,27 @@
+{
+  "name": "vault",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run -ws dev",
+    "build": "npm run -ws build",
+    "lint": "npm run -ws lint",
+    "web:dev": "npm run --workspace web dev",
+    "web:build": "npm run --workspace web build",
+    "api:dev": "npm run --workspace api dev",
+    "api:build": "npm run --workspace api build",
+    "db:generate": "npm run --workspace @vault/db generate",
+    "bootitup": "concurrently -n API,WEB,WORKER -c auto \"npm -w api run dev\" \"npm -w web run dev\" \"npm -w worker run dev\""
+  },
+  "engines": {
+    "node": ">=18.18"
+  },
+  "packageManager": "npm@10.5.0",
+  "devDependencies": {
+    "baseline-browser-mapping": "^2.9.11",
+    "concurrently": "^9.2.1"
+  }
+}
