@@ -22,6 +22,10 @@
   "packageManager": "npm@10.5.0",
   "devDependencies": {
     "baseline-browser-mapping": "^2.9.11",
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "tailwindcss-animate": "^1.0.7"
+  },
+  "dependencies": {
+    "@tailwindcss/aspect-ratio": "^0.4.2"
   }
 }

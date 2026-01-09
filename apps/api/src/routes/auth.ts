@@ -1,12 +1,10 @@
+//File: apps/api/src/routes/auth.ts
+
 import type { FastifyPluginAsync } from "fastify";
 import argon2 from "argon2";
 import { z } from "zod";
 
-
-
-export const authRoutes: FastifyPluginAsync = async (app) => {
-
-  
+export const authRoutes: FastifyPluginAsync = async app => {
   app.get("/me", async (req, reply) => {
     const token = req.cookies.access_token;
     if (!token) return reply.unauthorized("Missing token");
@@ -17,17 +15,17 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
       const user = await app.prisma.user.findUnique({
         where: { id: userId },
-      select: { id: true, email: true },
-    });
+        select: { id: true, email: true },
+      });
 
-    if (!user) return reply.unauthorized("User not found");
-    return { user };
-  } catch {
-    return reply.unauthorized("Invalid or expired token");
-  }
-});
+      if (!user) return reply.unauthorized("User not found");
+      return { user };
+    } catch {
+      return reply.unauthorized("Invalid or expired token");
+    }
+  });
 
-  // POST /auth/register  — limit by IP (anti-signup abuse)
+  // POST /auth/register
   app.post(
     "/register",
     {
@@ -63,7 +61,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  // POST /auth/login — limit by IP (pre) and by email (post-parse)
+  // POST /auth/login
   app.post(
     "/login",
     {
@@ -79,7 +77,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         email: z.string().email(),
         password: z.string().min(8),
       });
-      
+
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {
         return reply.badRequest("Invalid email or password format");
@@ -103,24 +101,24 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       const refresh = app.jwt.signRefresh({ sub: user.id });
 
       reply
-      .setCookie("access_token", access, {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-        secure: process.env.NODE_ENV === "production",
-      })
-      .setCookie("refresh_token", refresh, {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-        secure: process.env.NODE_ENV === "production",
-      });
+        .setCookie("access_token", access, {
+          httpOnly: true,
+          sameSite: "lax",
+          path: "/",
+          secure: process.env.NODE_ENV === "production",
+        })
+        .setCookie("refresh_token", refresh, {
+          httpOnly: true,
+          sameSite: "lax",
+          path: "/",
+          secure: process.env.NODE_ENV === "production",
+        });
 
-    return reply.send({ user: { id: user.id, email: user.email } });
+      return reply.send({ user: { id: user.id, email: user.email } });
     },
   );
 
-  // POST /auth/refresh — modest IP limit (token reuse path)
+  // POST /auth/refresh
   app.post(
     "/refresh",
     {

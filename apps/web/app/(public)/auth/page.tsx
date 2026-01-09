@@ -9,6 +9,7 @@ export default function AuthPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -16,12 +17,31 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
+  const isRegister = mode === "register";
 
   const validate = () => {
     const errors: { email?: string; password?: string } = {};
     if (!email.includes("@")) errors.email = "Please enter a valid email address.";
-    if (!password) errors.password = "Password cannot be empty.";
+    if (!password || password.length < 8) {
+      errors.password = "Password must be at least 8 characters.";
+    }
     return errors;
+  };
+
+  const getErrorMessage = async (response: Response, fallback: string) => {
+    try {
+      const data = await response.json();
+      if (data?.error || data?.message) return data.error || data.message;
+    } catch {
+      // Ignore JSON parse errors and use fallback.
+    }
+    return `${fallback} (${response.status})`;
+  };
+
+  const toggleMode = () => {
+    setMode((prev) => (prev === "login" ? "register" : "login"));
+    setError("");
+    setFieldErrors({});
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -39,32 +59,46 @@ export default function AuthPage() {
     setLoading(true);
 
     try {
-      const response = await fetch("/api/auth/login", {
+      const endpoint = isRegister ? "/api/auth/register" : "/api/auth/login";
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ email, password }),
       });
 
-      if (response.ok) {
-        const next = searchParams.get("next");
-        const dest =
-          next && next.startsWith("/") && !next.startsWith("//") ? next : "/media";
-
-        router.push(dest as any);
+      if (!response.ok) {
+        const msg = await getErrorMessage(
+          response,
+          isRegister ? "Registration failed. Please try again." : "Login failed. Please try again.",
+        );
+        setError(msg);
         return;
       }
 
+      if (isRegister) {
+        const loginResponse = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ email, password }),
+        });
 
-      // Try to extract server-provided error message
-      let msg = "Login failed. Please try again.";
-      try {
-        const data = await response.json();
-        if (data?.error || data?.message) msg = data.error || data.message;
-      } catch {
-        msg = `Login failed (${response.status})`;
+        if (!loginResponse.ok) {
+          const msg = await getErrorMessage(
+            loginResponse,
+            "Registration succeeded, but login failed. Please sign in.",
+          );
+          setError(msg);
+          return;
+        }
       }
-      setError(msg);
+
+      const next = searchParams.get("next");
+      const dest =
+        next && next.startsWith("/") && !next.startsWith("//") ? next : "/overview";
+
+      router.push(dest as any);
     } catch {
       setError("Network error. Please check your connection.");
     } finally {
@@ -76,8 +110,10 @@ export default function AuthPage() {
     <div className={styles.container}>
       <div className={styles.card}>
         <div className={styles.textCenter}>
-          <h1 className={styles.title}>Sign In</h1>
-          <p className={styles.subtitle}>Welcome back to Vault</p>
+          <h1 className={styles.title}>{isRegister ? "Create Account" : "Sign In"}</h1>
+          <p className={styles.subtitle}>
+            {isRegister ? "Create your Vault account" : "Welcome to Vault"}
+          </p>
         </div>
 
         {error && (
@@ -103,7 +139,6 @@ export default function AuthPage() {
               }}
               className={`${styles.input} ${fieldErrors.email ? styles.inputError : ""}`}
               placeholder="you@example.com"
-            // ...
             />
             {fieldErrors.email && <div className={styles.fieldError}>{fieldErrors.email}</div>}
           </div>
@@ -124,7 +159,6 @@ export default function AuthPage() {
                 }}
                 className={`${styles.input} ${fieldErrors.password ? styles.inputError : ""}`}
                 placeholder="••••••••"
-              // ...
               />
               <button
                 type="button"
@@ -142,7 +176,21 @@ export default function AuthPage() {
           </div>
 
           <button type="submit" className={styles.submitBtn} disabled={loading}>
-            {loading ? "Signing in..." : "Continue"}
+            {loading
+              ? isRegister
+                ? "Creating account..."
+                : "Signing in..."
+              : isRegister
+                ? "Create account"
+                : "Continue"}
+          </button>
+          <button
+            type="button"
+            className={styles.secondaryBtn}
+            onClick={toggleMode}
+            disabled={loading}
+          >
+            {isRegister ? "Already have an account? Sign in" : "New here? Create an account"}
           </button>
         </form>
       </div>

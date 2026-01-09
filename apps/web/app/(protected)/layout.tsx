@@ -1,6 +1,10 @@
 // File: app/(protected)/layout.tsx
-import { AppShell } from "@/components/app-shell";
+import { AppShell } from "@/components/common/AppShell";
 
 export default function ProtectedLayout({ children }: { children: React.ReactNode }) {
-  return <AppShell>{children}</AppShell>;
+  return (
+    <AppShell tags={[]} savedViews={[]}>
+      {children}
+    </AppShell>
+  );
 }
