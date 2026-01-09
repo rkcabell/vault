@@ -1,4 +1,4 @@
-// File: middleware.ts
+// File: apps\web\middleware.ts
 import { NextResponse, type NextRequest } from 'next/server'
 
 // Public routes that do NOT require auth:
@@ -14,30 +14,34 @@ const PUBLIC_PREFIXES = [
 export function middleware (req: NextRequest) {
   const { pathname } = req.nextUrl
 
-  // Dont gate API routes here (backend should auth them)
-  if (pathname.startsWith("/api")) return NextResponse.next();
+  // Check for access token cookie
+  const token = req.cookies.get('access_token')?.value ?? ''
 
-  const token = req.cookies.get("access_token")?.value ?? "";
+  // Always allow landing page
+  if (pathname === '/') return NextResponse.next()
 
-  // If already logged in, keep them out of /auth (must be BEFORE PUBLIC_PREFIXES early-return)
-  if (pathname === "/auth" && token) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/media";
-    url.search = "";
-    return NextResponse.redirect(url);
+  // Always allow api routes
+  if (pathname.startsWith('/api')) return NextResponse.next()
+
+  // If already logged in, skip past login page
+  if (pathname === '/auth' && token) {
+    const url = req.nextUrl.clone()
+    url.pathname = '/overview'
+    url.search = ''
+    return NextResponse.redirect(url)
   }
 
-  // Allow public prefixes (auth included)
-  if (PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) {
-    return NextResponse.next();
+  // Allow public prefixes
+  if (PUBLIC_PREFIXES.some(p => pathname.startsWith(p))) {
+    return NextResponse.next()
   }
 
-    // Gate everything else
+  // Gate everything else
   if (!token) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/auth";
-    url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
+    const url = req.nextUrl.clone()
+    url.pathname = '/auth'
+    url.searchParams.set('next', pathname)
+    return NextResponse.redirect(url)
   }
 
   return NextResponse.next()

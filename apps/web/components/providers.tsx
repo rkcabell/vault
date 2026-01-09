@@ -1,14 +1,18 @@
-// File: components/providers.tsx
+//File: apps/web/components/providers.tsx
 "use client";
 
 import { ThemeProvider } from "next-themes";
-import { Toaster } from "@/components/ui/toaster";
+import { AuthProvider } from '@/components/contexts/AuthContext';
+import { UploadProvider } from '@/components/contexts/UploadContext';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-      {children}
-      <Toaster />
+      <AuthProvider>
+        <UploadProvider>
+          {children}
+          </UploadProvider>
+        </AuthProvider>
     </ThemeProvider>
   );
 }

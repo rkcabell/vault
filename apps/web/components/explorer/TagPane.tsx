@@ -1,4 +1,4 @@
-﻿"use client";
+//File: apps/web/components/explorer/TagPane.tsx
 const EXAMPLE = ["car", "finance", "insurance", "id", "warranty", "personal"];
 
 export default function TagPane({ selected, onToggle }: { selected: string[]; onToggle: (t: string)=>void }) {

@@ -25,8 +25,6 @@ declare module "fastify" {
 }
 
 export const configPlugin = fp(async (app) => {
-  // Load .env in dev (tsx loads process.env beforehand if you use dotenv here; keeping it simple)
-  // If you prefer dotenv: import('dotenv').then(d => d.config());
   const parsed = EnvSchema.safeParse(process.env);
   if (!parsed.success) {
     app.log.error(parsed.error.format(), "Invalid environment configuration");

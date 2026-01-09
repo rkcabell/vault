@@ -1,5 +1,6 @@
-﻿import Link from "next/link";
-import StatusChip from "@/components/common/StatusChip";
+//File: apps/web/components/explorer/ResultCard.tsx
+import Link from "next/link";
+import { StatusChip } from "@/components/common";
 
 type MediaItem = {
   id: string;

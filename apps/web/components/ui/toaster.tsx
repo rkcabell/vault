@@ -1,4 +1,4 @@
-// File: apps/web/components/ui/toaster.tsx
+//File: apps/web/components/ui/Toaster.tsx
 "use client";
 
 import * as React from "react";
@@ -48,9 +48,8 @@ export function Toaster() {
           aria-live="polite"
           className={[
             "pointer-events-auto rounded-md border px-3 py-2 text-sm shadow transition",
-            "bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100",
-            // borders (use your tokens if you defined them)
-            "border-neutral-200 dark:border-neutral-800",
+            "bg-card text-card-foreground",
+            "border-border",
             t.variant === "success" && "ring-1 ring-emerald-400/50",
             t.variant === "error" && "ring-1 ring-rose-400/50",
           ].join(" ")}

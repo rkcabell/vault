@@ -38,7 +38,7 @@ async function main () {
   await app.register(jwtPlugin); // registers jwt plugin
   await app.register(authRoutes, { prefix: "/api/auth" }); // auth routes plugin
   await app.register(s3Plugin); // aws bucket storage
-  await app.register(mediaRoutes, { prefix: "/media" });
+  await app.register(mediaRoutes, { prefix: "/api/media" });
   await app.register(redisPlugin); // Redis for queue/rate-limit groundwork
   await app.register(rateLimitPlugin); // Redis rate limit
 

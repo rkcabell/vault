@@ -1,7 +1,12 @@
-// apps/api/src/routes/media.ts
+﻿// apps/api/src/routes/media.ts
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import {
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import crypto from "crypto";
 import { requireAuth } from "../utils/authGuard.js";
@@ -10,10 +15,37 @@ import { makeEnqueueThumbnails } from "../queues/enqueueThumbnail.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() }).strict();
 
+function isNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const meta = (err as { $metadata?: { httpStatusCode?: number } }).$metadata;
+  if (meta?.httpStatusCode === 404) return true;
+  const name = (err as { name?: string }).name;
+  return name === "NotFound" || name === "NoSuchKey";
+}
+
 export const mediaRoutes: FastifyPluginAsync = async app => {
   const BUCKET = app.config.S3_BUCKET;
+  type ObjectState = "exists" | "missing" | "unknown";
+  const getObjectState = async (key: string): Promise<ObjectState> => {
+    try {
+      await app.s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
+      return "exists";
+    } catch (err) {
+      return isNotFoundError(err) ? "missing" : "unknown";
+    }
+  };
 
-  // POST media handler — init upload → return presigned PUT + enqueue OCR job
+  const deleteObjectIfPresent = async (key: string) => {
+    try {
+      await app.s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
+    } catch (err) {
+      if (!isNotFoundError(err)) {
+        throw err;
+      }
+    }
+  };
+
+  // POST media handler - init upload -> return presigned PUT + enqueue OCR job
   app.post("/", { preHandler: [requireAuth] }, async req => {
     const body = z
       .object({
@@ -78,32 +110,132 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     return { id: media.id, uploadUrl, storageKey: media.storageKey };
   });
 
-  // GET /media — list my media
+  // GET /media - list my media
   app.get("/", { preHandler: [requireAuth] }, async req => {
     const userId = req.userId!;
-    const Query = z.object({ q: z.string().optional() });
-    const { q } = Query.parse(req.query);
+    const Query = z.object({
+      q: z.string().trim().optional(),
+      search: z.string().trim().optional(),
+      tag: z.string().trim().optional(),
+      status: z.enum(["PENDING", "READY", "FAILED"]).optional(),
+      sort: z.enum(["createdAt_desc", "createdAt_asc"]).optional(),
+      limit: z.coerce.number().int().min(1).max(100).optional(),
+      cursor: z.string().optional(),
+      page: z.coerce.number().int().min(1).optional(),
+    });
+    const { q, search, tag, status, sort, limit, cursor, page } = Query.parse(req.query);
+    const queryText = q ?? search;
+    const take = limit ?? 24;
+    const orderBy =
+      sort === "createdAt_asc"
+        ? [{ createdAt: "asc" as const }, { id: "asc" as const }]
+        : [{ createdAt: "desc" as const }, { id: "desc" as const }];
 
     const items = await app.prisma.media.findMany({
       where: {
         userId,
-        ...(q
+        ...(queryText
           ? {
               OR: [
-                { title: { contains: q, mode: "insensitive" } },
-                { document: { is: { rawText: { contains: q, mode: "insensitive" } } } },
+                { title: { contains: queryText, mode: "insensitive" } },
+                { document: { is: { rawText: { contains: queryText, mode: "insensitive" } } } },
               ],
             }
           : {}),
+        ...(tag ? { tags: { has: tag } } : {}),
+        ...(status ? { status } : {}),
       },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, title: true, status: true, createdAt: true },
+      orderBy,
+      take: take + 1,
+      ...(cursor
+        ? { cursor: { id: cursor }, skip: 1 }
+        : page
+          ? { skip: (page - 1) * take }
+          : {}),
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        createdAt: true,
+        tags: true,
+        thumbnailKey: true,
+        storageKey: true,
+        mimeType: true,
+      },
     });
 
-    return { items };
+    const hasMore = items.length > take;
+    const sliced = hasMore ? items.slice(0, take) : items;
+    const nextCursor = hasMore ? sliced[sliced.length - 1]?.id ?? null : null;
+    const nextPage = page && hasMore ? page + 1 : null;
+
+    const visible = await Promise.all(
+      sliced.map(async item => {
+        const state = await getObjectState(item.storageKey);
+        if (state === "missing") return null;
+        return { item, state };
+      }),
+    );
+    type MediaRow = (typeof sliced)[number];
+    const filtered = visible.filter(
+      (entry): entry is { item: MediaRow; state: ObjectState } => entry !== null,
+    );
+
+    const readyIds = filtered
+      .filter(entry => entry.state === "exists" && entry.item.status === "PENDING")
+      .map(entry => entry.item.id);
+
+    if (readyIds.length > 0) {
+      await app.prisma.media.updateMany({
+        where: { id: { in: readyIds }, status: "PENDING" },
+        data: { status: "READY" },
+      });
+    }
+
+    const responseItems = filtered
+      .map(entry => {
+        const { storageKey: _storageKey, status: originalStatus, ...rest } = entry.item;
+        const resolvedStatus =
+          entry.state === "exists" && originalStatus === "PENDING" ? "READY" : originalStatus;
+        if (status && resolvedStatus !== status) return null;
+        return { ...rest, status: resolvedStatus };
+      })
+      .filter((item): item is Omit<MediaRow, "storageKey"> => item !== null);
+
+    return { items: responseItems, nextCursor, nextPage };
   });
 
-  // GET /media/:id — detail + presigned GET
+  // DELETE /media/:id - delete my media
+  app.delete<{ Params: { id: string } }>(
+    "/:id",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+
+      const media = await app.prisma.media.findFirst({
+        where: { id, userId },
+        select: { storageKey: true, thumbnailKey: true },
+      });
+
+      if (!media) return reply.notFound();
+
+      try {
+        await deleteObjectIfPresent(media.storageKey);
+        if (media.thumbnailKey) {
+          await deleteObjectIfPresent(media.thumbnailKey);
+        }
+      } catch {
+        return reply.code(500).send({ error: "Failed to delete media" });
+      }
+
+      await app.prisma.media.delete({ where: { id } });
+
+      return reply.send({ ok: true });
+    },
+  );
+
+  // GET /media/:id - detail + presigned GET
   app.get<{ Params: { id: string } }>(
     "/:id",
     { preHandler: [requireAuth] },
@@ -122,26 +254,31 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     },
   );
 
-  // GET /media/:id/thumbnail — presigned GET to the thumbnail (404 if missing)
+  // GET /media/:id/thumbnail - presigned GET to the thumbnail
   app.get(
-  "/:id/thumbnail",
-  { preHandler: [requireAuth] },
-  async (req, reply) => {
-    const userId = req.userId!;
-    const { id } = paramsSchema.parse(req.params);
+    "/:id/thumbnail",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
 
-      // Enforce ownership and fetch only what we need
       const media = await app.prisma.media.findFirst({
         where: { id, userId },
-        select: { thumbnailKey: true },
+        select: { thumbnailKey: true, storageKey: true, mimeType: true },
       });
 
-      // Use a generic 404 to avoid leaking whether the media exists
-      if (!media?.thumbnailKey) return reply.notFound();
+      if (!media) return reply.notFound();
+
+      const fallbackKey =
+        !media.thumbnailKey && media.mimeType.startsWith("image/")
+          ? media.storageKey
+          : null;
+      const key = media.thumbnailKey ?? fallbackKey;
+      if (!key) return reply.notFound();
 
       const cmd = new GetObjectCommand({
         Bucket: app.config.S3_BUCKET,
-        Key: media.thumbnailKey,
+        Key: key,
       });
 
       const url = await getSignedUrl(app.s3, cmd, { expiresIn: 600 }); // 10 minutes
