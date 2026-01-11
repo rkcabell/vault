@@ -39,11 +39,11 @@ export async function getMedia (id: string) {
   return res.json()
 }
 
-// Poll until status === "READY" (or attempts exhausted)
+// Poll until thumb/text states are READY (or attempts exhausted)
 export async function pollReady (id: string, attempts = 12, delayMs = 1000) {
   for (let i = 0; i < attempts; i++) {
     const item = await getMedia(id)
-    if (item?.status === 'READY') return item
+    if (item?.thumbState === 'READY' && item?.textState === 'READY') return item
     await new Promise(r => setTimeout(r, delayMs))
   }
   return null

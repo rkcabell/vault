@@ -225,7 +225,7 @@ export default function UploadPage() {
       onProgress: (pct) => updateFileProgress(fileId, pct),
     });
 
-    // 3) Mark completed locally (server will handle READY/thumbnail via workers)
+    // 3) Mark completed locally (server will handle thumb/text states via workers)
     updateFileStatus(fileId, "completed");
     updateFileProgress(fileId, 100);
   };

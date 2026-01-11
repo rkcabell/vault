@@ -2,13 +2,11 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
+import { Worker, type ConnectionOptions } from "bullmq";
 
 // Use your shared plugin clients instead of re-creating singletons here
 import { s3 } from "../plugins/s3Client.js";
 import { prisma } from "../plugins/prismaClient.js";
-
-// Worker still needs its own Redis connection for BRPOP
-import Redis from "ioredis";
 
 /**
  * Job shape (matches enqueueThumbnails.ts)
@@ -19,8 +17,7 @@ import Redis from "ioredis";
  *   "userId": "2222-...-2222",
  *   "storageKey": "originals/demo.jpg",
  *   "outKey": "thumbs/1111-...-1111.webp",
- *   "size": 512,
- *   "attempt": 0
+ *   "size": 512
  * }
  */
 export interface ThumbJob {
@@ -30,7 +27,6 @@ export interface ThumbJob {
   storageKey: string;
   outKey?: string;
   size?: number; // defaults to 512
-  attempt?: number; // number of attempts so far
 }
 
 function isRecord (v: unknown): v is Record<string, unknown> {
@@ -45,9 +41,7 @@ function isThumbJob (v: unknown): v is ThumbJob {
     typeof v["userId"] === "string" &&
     typeof v["storageKey"] === "string" &&
     (v["outKey"] === undefined || typeof v["outKey"] === "string") &&
-    (v["size"] === undefined || (typeof v["size"] === "number" && Number.isFinite(v["size"]))) &&
-    (v["attempt"] === undefined ||
-      (typeof v["attempt"] === "number" && Number.isFinite(v["attempt"])))
+    (v["size"] === undefined || (typeof v["size"] === "number" && Number.isFinite(v["size"])))
   );
 }
 
@@ -56,6 +50,23 @@ if (!BUCKET) {
   // Fail fast at startup if misconfigured
   throw new Error("S3_BUCKET env var is required for thumb worker");
 }
+
+const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb:queue";
+
+function buildRedisConnection (url: string): ConnectionOptions {
+  const parsed = new URL(url);
+  return {
+    host: parsed.hostname,
+    port: parsed.port ? Number(parsed.port) : 6379,
+    username: parsed.username || undefined,
+    password: parsed.password || undefined,
+    db: parsed.pathname ? Number(parsed.pathname.replace("/", "")) || 0 : 0,
+    tls: parsed.protocol === "rediss:" ? {} : undefined,
+  };
+}
+
+const connection = buildRedisConnection(REDIS_URL);
 
 // Utility: stream → Buffer
 async function streamToBuffer (stream: ReadableStream | NodeJS.ReadableStream): Promise<Buffer> {
@@ -98,7 +109,7 @@ async function getObjectToBuffer (bucket: string, key: string): Promise<Buffer |
  * Useful to avoid immediate requeue churn while upload is racing.
  */
 async function waitUntilSourceExists (bucket: string, key: string): Promise<boolean> {
-  const maxTries = 8;
+  const maxTries = 4;
   for (let i = 0; i < maxTries; i++) {
     try {
       await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
@@ -111,19 +122,13 @@ async function waitUntilSourceExists (bucket: string, key: string): Promise<bool
   return false;
 }
 
-function nextBackoffMs (attempt: number): number {
-  // 1s * 2^attempt, capped at 30s
-  const base = 1000 * Math.pow(2, Math.max(0, attempt));
-  return Math.min(base, 30_000);
-}
-
 /**
  * Core processor (pure function over a job).
  * - Derives outKey if missing
  * - Idempotency: skip if DB already points to the same outKey
  * - Polls for source, then fetches and transforms via sharp → webp
  * - Uploads with long-lived cache headers
- * - Updates DB: thumbnailKey (and status: READY)
+ * - Updates DB: thumbnailKey (and thumbState: READY)
  */
 export async function processThumb (job: ThumbJob): Promise<void> {
   const size = Math.max(16, Math.min(4096, job.size ?? 512));
@@ -133,11 +138,17 @@ export async function processThumb (job: ThumbJob): Promise<void> {
   // Idempotency: if DB already has the same key, skip work
   const existing = await prisma.media.findUnique({
     where: { id: job.mediaId },
-    select: { thumbnailKey: true },
+    select: { thumbnailKey: true, thumbState: true },
   });
 
   if (existing?.thumbnailKey === outKey) {
     // Already produced this exact thumbnail
+    if (existing.thumbState !== "READY") {
+      await prisma.media.update({
+        where: { id: job.mediaId },
+        data: { thumbState: "READY" },
+      });
+    }
     return;
   }
 
@@ -177,88 +188,89 @@ export async function processThumb (job: ThumbJob): Promise<void> {
   // Update DB (thumbnailKey; and mark READY if your schema uses this)
   await prisma.media.update({
     where: { id: job.mediaId },
-    data: { thumbnailKey: outKey, status: "READY" },
+    data: { thumbnailKey: outKey, thumbState: "READY" },
   });
 }
 
-/**
- * Worker loop:
- * - BRPOP thumb:queue
- * - Parse & validate
- * - Process
- * - On SOURCE_NOT_READY or transient failure → LPUSH back with attempt+1 and exponential backoff
- */
-async function main (): Promise<void> {
-  const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
-  const queueName = process.env.THUMB_QUEUE ?? "thumb:queue";
-  const redis = new Redis(redisUrl);
-
-  console.log("[thumbWorker] listening on", queueName, "…");
-
-  for (;;) {
-    const res = await redis.brpop(queueName, 0); // blocks until a job is available
-    if (!res) continue;
-
-    const [, payload] = res; // [queue, jsonString]
-    let job: ThumbJob | null = null;
-
-    try {
-      const parsed = JSON.parse(payload) as unknown;
-      if (!isThumbJob(parsed)) {
-        console.warn("[thumbWorker] ignored job (wrong shape):", payload);
-        continue;
-      }
-      job = parsed;
-    } catch (e) {
-      console.error("[thumbWorker] invalid JSON payload:", payload, e);
-      continue;
-    }
-
-    const attempt = Math.max(0, job.attempt ?? 0);
-
-    try {
-      await processThumb(job);
-      console.log(
-        `[thumbWorker] ✅ processed mediaId=${job.mediaId} outKey=${
-          job.outKey ?? `thumbs/${job.mediaId}.webp`
-        }`,
-      );
-    } catch (err) {
-      const msg =
-        isRecord(err) && typeof err["message"] === "string"
-          ? (err["message"] as string)
-          : String(err);
-      const transient =
-        msg.includes("SOURCE_NOT_READY") ||
-        msg.includes("NetworkingError") ||
-        msg.includes("Timeout") ||
-        msg.includes("Throttling");
-
-      if (transient) {
-        const nextAttempt = attempt + 1;
-        const backoffMs = nextBackoffMs(attempt);
-
-        // Requeue with incremented attempt
-        const requeuePayload: ThumbJob = {
-          ...job,
-          attempt: nextAttempt,
-        };
-
-        // Sleep locally before requeue to avoid immediate hotlooping
-        await delay(backoffMs);
-
-        await redis.lpush(queueName, JSON.stringify(requeuePayload));
-        console.warn(
-          `[thumbWorker] ⏳ requeued mediaId=${job.mediaId} attempt=${nextAttempt} backoff=${backoffMs}ms reason=${msg}`,
-        );
-      } else {
-        console.error("[thumbWorker] fatal error for job:", job, err);
-      }
-    }
-  }
+// BullMQ worker: processes thumb jobs with retry/backoff handled by queue options.
+function isTransientError (message: string) {
+  return (
+    message.includes("SOURCE_NOT_READY") ||
+    message.includes("NetworkingError") ||
+    message.includes("Timeout") ||
+    message.includes("Throttling")
+  );
 }
 
-main().catch(e => {
-  console.error("[thumbWorker] crashed:", e);
-  process.exitCode = 1;
-});
+if (process.env.NODE_ENV !== "test") {
+  const worker = new Worker<ThumbJob>(
+    THUMB_QUEUE,
+    async (job) => {
+      const payload = job.data;
+      if (!isThumbJob(payload)) {
+        console.warn("[thumbWorker] ignored job (wrong shape):", payload);
+        return;
+      }
+
+      try {
+        await processThumb(payload);
+        console.log(
+          `[thumbWorker] processed mediaId=${payload.mediaId} outKey=${
+            payload.outKey ?? `thumbs/${payload.mediaId}.webp`
+          }`,
+        );
+      } catch (err) {
+        const msg =
+          isRecord(err) && typeof err["message"] === "string"
+            ? (err["message"] as string)
+            : String(err);
+        console.warn(
+          `[thumbWorker] job failed mediaId=${payload.mediaId} attempt=${job.attemptsMade} error=${msg}`,
+        );
+        throw err;
+      }
+    },
+    { connection, concurrency: 1 },
+  );
+
+  worker.on("completed", (job) => {
+    console.log(
+      `[thumbWorker] job completed id=${job.id} mediaId=${job.data.mediaId}`,
+    );
+  });
+
+  worker.on("failed", async (job, err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    const attempts = job?.opts.attempts ?? 1;
+    const isFinal = job ? job.attemptsMade >= attempts : true;
+    const transient = isTransientError(msg);
+
+    if (job?.data?.mediaId && isFinal && !transient) {
+      try {
+        await prisma.media.update({
+          where: { id: job.data.mediaId },
+          data: { thumbState: "ERROR" },
+        });
+      } catch (updateErr) {
+        console.error("[thumbWorker] failed to mark thumbState ERROR", updateErr);
+      }
+    }
+
+    console.error(
+      `[thumbWorker] job failed id=${job?.id ?? "unknown"} mediaId=${job?.data?.mediaId ?? "unknown"} error=${msg}`,
+    );
+  });
+
+  worker.on("error", (err) => {
+    console.error("[thumbWorker] worker error", err);
+  });
+
+  console.log(`[thumbWorker] listening on ${THUMB_QUEUE}`);
+
+  const shutdown = async () => {
+    await worker.close();
+  };
+
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
+}
