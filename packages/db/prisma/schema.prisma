@@ -18,7 +18,8 @@ model User {
 model Media {
   id           String      @id @default(cuid())
   userId       String
-  status       MediaStatus @default(PENDING)
+  thumbState   MediaWorkerState @default(PENDING)
+  textState    MediaWorkerState @default(PENDING)
   storageKey   String
   filename     String
   mimeType     String
@@ -33,13 +34,20 @@ model Media {
 }
 
 model Document {
-  mediaId String @id
-  rawText String
-  media   Media  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  mediaId    String @id
+  rawText    String
+  pages      Json?
+  textSource TextSource?
+  media      Media  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
 }
 
-enum MediaStatus {
+enum TextSource {
+  OCR
+  NATIVE
+}
+
+enum MediaWorkerState {
   PENDING
   READY
-  FAILED
+  ERROR
 }

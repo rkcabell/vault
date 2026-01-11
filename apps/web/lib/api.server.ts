@@ -1,5 +1,6 @@
 ﻿// apps/web/lib/api.ts
 import { cookies } from 'next/headers'
+import type { MediaWorkerState } from './media/types'
 
 const API_BASE =
   typeof window === 'undefined'
@@ -13,7 +14,8 @@ export type MediaListItem = {
   mimeType?: string | null
   sizeBytes?: number | null
   createdAt?: string
-  status?: string
+  thumbState?: MediaWorkerState | null
+  textState?: MediaWorkerState | null
   tags?: string[]
   thumbnailKey?: string | null
 }
@@ -95,7 +97,7 @@ export async function pollReady (
 ): Promise<void> {
   for (let i = 0; i < attempts; i++) {
     const m = await getMediaById(id)
-    if (m?.status === 'READY' && m?.thumbnailKey) return
+    if (m?.thumbState === 'READY' && m?.textState === 'READY' && m?.thumbnailKey) return
     await new Promise(r => setTimeout(r, ms))
   }
 }

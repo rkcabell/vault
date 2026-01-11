@@ -1,12 +1,15 @@
 //File: apps/web/components/explorer/ResultCard.tsx
 import Link from "next/link";
 import { StatusChip } from "@/components/common";
+import { deriveOverallState } from "@/lib/media/status";
+import type { MediaWorkerState } from "@/lib/media/types";
 
 type MediaItem = {
   id: string;
   title?: string | null;
   filename?: string | null;
-  status?: string;
+  thumbState?: MediaWorkerState | null;
+  textState?: MediaWorkerState | null;
   thumbnailKey?: string | null;
   tags?: string[];
 };
@@ -15,6 +18,7 @@ type MediaRoute = `/media/${string}`;
 
 export default function ResultCard({ item }: { item: MediaItem }) {
   const id = item.id;
+  const overallState = deriveOverallState(item.thumbState, item.textState);
   return (
     <Link href={{ pathname: "/media/[id]", query: { id } }} className="block rounded border bg-white p-2 hover:shadow">
       <div className="aspect-[4/3] overflow-hidden rounded bg-neutral-100">
@@ -27,7 +31,7 @@ export default function ResultCard({ item }: { item: MediaItem }) {
       </div>
       <div className="mt-2 flex items-center justify-between gap-2">
         <div className="truncate text-sm">{item.title ?? item.filename ?? "Untitled"}</div>
-        <StatusChip status={item.status ?? "UNKNOWN"} />
+        <StatusChip status={overallState} />
       </div>
       {item.tags?.length ? (
         <div className="mt-1 line-clamp-1 text-xs opacity-70">#{item.tags.join(" #")}</div>

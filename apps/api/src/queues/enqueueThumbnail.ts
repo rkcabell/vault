@@ -1,9 +1,5 @@
-// queues/enqueueThumbnail.ts
-export const THUMB_QUEUE = "thumb:queue" as const;
-
-export type QueueClient = {
-  push: (queue: string, payload: Record<string, unknown>) => Promise<void>;
-};
+//File: apps/api/src/queues/enqueueThumbnail.ts
+import type { Queue } from "bullmq";
 
 export type ThumbJob = {
   type: "thumb";
@@ -12,7 +8,6 @@ export type ThumbJob = {
   storageKey: string;
   outKey: string; // deterministic path for the worker to write the webp
   size: number; // target edge size (px) for the long side
-  attempt: number; // worker retries can increment this
 };
 
 export type EnqueueThumbArgs = {
@@ -27,12 +22,12 @@ export function computeThumbKey (mediaId: string) {
 }
 
 /**
- * Factory: returns an enqueue function bound to a QueueClient.
+ * Factory: returns an enqueue function bound to a BullMQ Queue.
  * Usage:
  *   const enqueueThumb = makeEnqueueThumbnail(q)
  *   const outKey = await enqueueThumb({ mediaId, userId, storageKey, size })
  */
-export function makeEnqueueThumbnails (queue: QueueClient) {
+export function makeEnqueueThumbnails (queue: Queue<ThumbJob>) {
   return async function enqueueThumbnail (args: EnqueueThumbArgs): Promise<string> {
     const { mediaId, userId, storageKey, size = 512 } = args;
 
@@ -44,17 +39,19 @@ export function makeEnqueueThumbnails (queue: QueueClient) {
       storageKey,
       outKey,
       size,
-      attempt: 0,
     };
 
-    // QueueClient handles JSON.stringify internally
-    await queue.push(THUMB_QUEUE, job as unknown as Record<string, unknown>);
+    await queue.add("thumb", job, {
+      jobId: mediaId,
+      attempts: 5,
+      backoff: { type: "exponential", delay: 2000 },
+    });
     return outKey;
   };
 }
 
 export async function enqueueThumbnail (
-  queue: QueueClient,
+  queue: Queue<ThumbJob>,
   args: EnqueueThumbArgs,
 ): Promise<string> {
   return makeEnqueueThumbnails(queue)(args);
