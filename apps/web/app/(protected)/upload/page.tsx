@@ -38,28 +38,30 @@ const formatFileSize = (bytes: number) => {
   return `${Math.round((bytes / Math.pow(k, i)) * 100) / 100} ${sizes[i]}`;
 };
 
-type InitUploadBody = {
+type BatchInitItem = {
   filename: string;
   mimeType: string;
   sizeBytes: number;
-  title: string;
-  tags: string[];
+  title?: string;
+  tags?: string[];
 };
 
-// Matches your Fastify response: { id, uploadUrl, storageKey }
-type InitUploadResponse = {
+type BatchInitResponseItem = {
   id: string;
-  uploadUrl: string;
   storageKey: string;
+  putUrl: string;
 };
 
-async function initUpload(body: InitUploadBody): Promise<InitUploadResponse> {
-  // Fastify is registered under /api/media
-  const res = await fetch("/api/media", {
+type BatchInitResponse = {
+  items: BatchInitResponseItem[];
+};
+
+async function batchInit(items: BatchInitItem[]): Promise<BatchInitResponse> {
+  const res = await fetch("/api/media/batch-init", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ items }),
   });
 
   if (!res.ok) {
@@ -71,7 +73,25 @@ async function initUpload(body: InitUploadBody): Promise<InitUploadResponse> {
     throw new Error(msg);
   }
 
-  return (await res.json()) as InitUploadResponse;
+  return (await res.json()) as BatchInitResponse;
+}
+
+async function batchFinalize(ids: string[]): Promise<void> {
+  const res = await fetch("/api/media/batch-finalize", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+
+  if (!res.ok) {
+    let msg = `Upload finalize failed (${res.status})`;
+    try {
+      const data = await res.json();
+      msg = data?.error || data?.message || msg;
+    } catch {}
+    throw new Error(msg);
+  }
 }
 
 /**
@@ -109,6 +129,13 @@ function putWithProgress(args: {
 }
 
 type FailedUpload = { id: string; message: string };
+type CompletedUpload = { fileId: string; mediaId: string };
+type UploadPlan = {
+  fileId: string;
+  file: File;
+  contentType: string;
+  init: BatchInitResponseItem;
+};
 
 function getPendingFiles(files: Array<{ id: string; file: File; status: string }>) {
   return files.filter((f) => f.status === "pending");
@@ -130,21 +157,25 @@ function notifyUploadFailures(count: number) {
 }
 
 async function uploadBatch(
-  pendingFiles: Array<{ id: string; file: File }>,
-  uploadOne: (id: string, file: File) => Promise<void>,
-): Promise<{ failed: FailedUpload[] }> {
-  const results = await Promise.allSettled(pendingFiles.map((f) => uploadOne(f.id, f.file)));
+  pendingFiles: UploadPlan[],
+  uploadOne: (plan: UploadPlan) => Promise<void>,
+): Promise<{ failed: FailedUpload[]; completed: CompletedUpload[] }> {
+  const results = await Promise.allSettled(pendingFiles.map((f) => uploadOne(f)));
 
   const failed: FailedUpload[] = [];
+  const completed: CompletedUpload[] = [];
   results.forEach((r, idx) => {
     if (r.status === "rejected") {
-      const id = pendingFiles[idx].id;
+      const id = pendingFiles[idx].fileId;
       const message = r.reason instanceof Error ? r.reason.message : "Upload failed";
       failed.push({ id, message });
+      return;
     }
+    const plan = pendingFiles[idx];
+    completed.push({ fileId: plan.fileId, mediaId: plan.init.id });
   });
 
-  return { failed };
+  return { failed, completed };
 }
 
 function applyFailures(
@@ -200,34 +231,20 @@ export default function UploadPage() {
     setIsDragging(false);
   };
 
-  const uploadOne = async (fileId: string, file: File) => {
-    updateFileStatus(fileId, "uploading");
-    updateFileProgress(fileId, 0);
+  const uploadOne = async (plan: UploadPlan) => {
+    updateFileStatus(plan.fileId, "uploading");
+    updateFileProgress(plan.fileId, 0);
 
-    // Ensure the Content-Type we sign matches what we PUT with
-    const contentType = file.type && file.type.trim() ? file.type : "application/octet-stream";
-
-    // 1) Init upload in API (creates DB row tied to current user + returns presigned PUT)
-    const title = file.name.replace(/\.[^/.]+$/, "");
-    const init = await initUpload({
-      filename: file.name,
-      mimeType: contentType,
-      sizeBytes: file.size,
-      title,
-      tags: [],
-    });
-
-    // 2) PUT file to storage with progress
+    // PUT file to storage with progress
     await putWithProgress({
-      url: init.uploadUrl,
-      file,
-      contentType,
-      onProgress: (pct) => updateFileProgress(fileId, pct),
+      url: plan.init.putUrl,
+      file: plan.file,
+      contentType: plan.contentType,
+      onProgress: (pct) => updateFileProgress(plan.fileId, pct),
     });
 
-    // 3) Mark completed locally (server will handle thumb/text states via workers)
-    updateFileStatus(fileId, "completed");
-    updateFileProgress(fileId, 100);
+    updateFileStatus(plan.fileId, "completed");
+    updateFileProgress(plan.fileId, 100);
   };
 
   const handleUpload = async () => {
@@ -238,7 +255,53 @@ export default function UploadPage() {
     notifyUploadStart(pendingFiles.length);
 
     try {
-      const { failed } = await uploadBatch(pendingFiles, uploadOne);
+      const initPayload = pendingFiles.map((pending) => {
+        const contentType =
+          pending.file.type && pending.file.type.trim()
+            ? pending.file.type
+            : "application/octet-stream";
+        const title = pending.file.name.replace(/\.[^/.]+$/, "");
+        return {
+          fileId: pending.id,
+          file: pending.file,
+          contentType,
+          initBody: {
+            filename: pending.file.name,
+            mimeType: contentType,
+            sizeBytes: pending.file.size,
+            title,
+            tags: [],
+          } satisfies BatchInitItem,
+        };
+      });
+
+      const init = await batchInit(initPayload.map((item) => item.initBody));
+      if (!init?.items || init.items.length !== initPayload.length) {
+        throw new Error("Upload init returned unexpected item count.");
+      }
+
+      const plans: UploadPlan[] = initPayload.map((item, index) => ({
+        fileId: item.fileId,
+        file: item.file,
+        contentType: item.contentType,
+        init: init.items[index],
+      }));
+
+      const { failed, completed } = await uploadBatch(plans, uploadOne);
+
+      if (completed.length > 0) {
+        try {
+          await batchFinalize(completed.map((item) => item.mediaId));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Upload finalize failed.";
+          for (const item of completed) {
+            updateFileStatus(item.fileId, "error", message);
+          }
+          applyFailures(failed, (id, _status, error) => updateFileStatus(id, "error", error));
+          notifyUploadFailures(completed.length + failed.length);
+          return;
+        }
+      }
 
       if (failed.length === 0) {
         notifyUploadSuccess();
@@ -248,6 +311,12 @@ export default function UploadPage() {
 
       applyFailures(failed, (id, _status, error) => updateFileStatus(id, "error", error));
       notifyUploadFailures(failed.length);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Upload failed.";
+      for (const pending of pendingFiles) {
+        updateFileStatus(pending.id, "error", message);
+      }
+      notifyUploadFailures(pendingFiles.length);
     } finally {
       setIsUploading(false);
     }

@@ -1,0 +1,418 @@
+"use client";
+
+import { useEffect, useMemo, useState } from 'react';
+import { Edit2, Save, X, MapPin, Globe, Mail, Calendar, Loader2 } from 'lucide-react';
+import { useAuth } from '@/components/contexts/AuthContext';
+
+type UserProfile = {
+  id: string;
+  email: string;
+  name?: string | null;
+  username?: string | null;
+  bio?: string | null;
+  website?: string | null;
+  location?: string | null;
+  avatarUrl?: string | null;
+  createdAt: string;
+};
+
+type ProfileFormData = {
+  name: string;
+  username: string;
+  bio: string;
+  website: string;
+  location: string;
+  avatarUrl: string;
+};
+
+const emptyForm: ProfileFormData = {
+  name: '',
+  username: '',
+  bio: '',
+  website: '',
+  location: '',
+  avatarUrl: '',
+};
+
+async function readErrorMessage(response: Response, fallback: string) {
+  try {
+    const data = await response.json();
+    if (data?.error || data?.message) return data.error || data.message;
+  } catch {
+    // Ignore JSON parse errors and use fallback.
+  }
+  return `${fallback} (${response.status})`;
+}
+
+function formatDate(dateString: string) {
+  return new Date(dateString).toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+export default function ProfilePage() {
+  const { user, setUser } = useAuth();
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [formData, setFormData] = useState<ProfileFormData>(emptyForm);
+
+  useEffect(() => {
+    loadProfile();
+  }, []);
+
+  const loadProfile = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await fetch('/api/profile', {
+        method: 'GET',
+        credentials: 'include',
+      });
+
+      if (!res.ok) {
+        const message = await readErrorMessage(res, 'Failed to load profile.');
+        setError(message);
+        return;
+      }
+
+      const data = await res.json();
+      const nextProfile = (data?.profile ?? data) as UserProfile | null;
+
+      if (nextProfile) {
+        setProfile(nextProfile);
+        setFormData({
+          name: nextProfile.name ?? '',
+          username: nextProfile.username ?? '',
+          bio: nextProfile.bio ?? '',
+          website: nextProfile.website ?? '',
+          location: nextProfile.location ?? '',
+          avatarUrl: nextProfile.avatarUrl ?? '',
+        });
+
+        if (user) {
+          setUser({
+            ...user,
+            name: nextProfile.name ?? user.name,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error loading profile:', error);
+      setError('Error loading profile. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!profile) return;
+
+    try {
+      setSaving(true);
+      setError(null);
+
+      const res = await fetch('/api/profile', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: formData.name,
+          username: formData.username,
+          bio: formData.bio,
+          website: formData.website,
+          location: formData.location,
+          avatarUrl: formData.avatarUrl,
+        }),
+      });
+
+      if (!res.ok) {
+        const message = await readErrorMessage(res, 'Failed to update profile.');
+        setError(message);
+        return;
+      }
+
+      const data = await res.json();
+      const nextProfile = (data?.profile ?? data) as UserProfile | null;
+      if (nextProfile) {
+        setProfile(nextProfile);
+        setFormData({
+          name: nextProfile.name ?? '',
+          username: nextProfile.username ?? '',
+          bio: nextProfile.bio ?? '',
+          website: nextProfile.website ?? '',
+          location: nextProfile.location ?? '',
+          avatarUrl: nextProfile.avatarUrl ?? '',
+        });
+        if (user) {
+          setUser({
+            ...user,
+            name: nextProfile.name ?? user.name,
+          });
+        }
+      }
+
+      setIsEditing(false);
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      setError('Error updating profile. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    if (profile) {
+      setFormData({
+        name: profile.name ?? '',
+        username: profile.username ?? '',
+        bio: profile.bio ?? '',
+        website: profile.website ?? '',
+        location: profile.location ?? '',
+        avatarUrl: profile.avatarUrl ?? '',
+      });
+    }
+    setIsEditing(false);
+  };
+
+  const initials = useMemo(() => {
+    const label = profile?.name || profile?.email || user?.email || '?';
+    return label.trim().charAt(0).toUpperCase();
+  }, [profile, user]);
+
+  const websiteHref =
+    profile?.website && !profile.website.startsWith('http')
+      ? `https://${profile.website}`
+      : profile?.website;
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-slate-600">Profile not found</p>
+          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+          <button
+            onClick={loadProfile}
+            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
+          <div className="h-48 bg-gradient-to-r from-blue-500 via-blue-600 to-cyan-500 relative">
+            <div className="absolute top-4 right-4">
+              {!isEditing ? (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="px-4 py-2 bg-white text-blue-600 rounded-lg hover:bg-blue-50 transition-colors flex items-center gap-2 font-medium shadow-md"
+                >
+                  <Edit2 className="w-4 h-4" />
+                  Edit Profile
+                </button>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleCancel}
+                    disabled={saving}
+                    className="px-4 py-2 bg-white text-slate-600 rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-2 font-medium shadow-md disabled:opacity-50"
+                  >
+                    <X className="w-4 h-4" />
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="px-4 py-2 bg-white text-blue-600 rounded-lg hover:bg-blue-50 transition-colors flex items-center gap-2 font-medium shadow-md disabled:opacity-50"
+                  >
+                    {saving ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Save className="w-4 h-4" />
+                    )}
+                    Save
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="px-8 pb-8">
+            <div className="flex flex-col items-center -mt-16 mb-6">
+              <div className="relative h-28 w-28 rounded-full border-4 border-white shadow-md overflow-hidden bg-slate-100 flex items-center justify-center text-2xl font-semibold text-slate-600">
+                {profile.avatarUrl ? (
+                  <img
+                    src={profile.avatarUrl}
+                    alt={profile.name ? `${profile.name}'s avatar` : 'User avatar'}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span>{initials}</span>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              {error && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
+
+              {isEditing ? (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Avatar URL
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.avatarUrl}
+                      onChange={(e) => setFormData({ ...formData, avatarUrl: e.target.value })}
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                      placeholder="https://example.com/avatar.png"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Full Name
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                      placeholder="Enter your full name"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Username
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.username}
+                      onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                      placeholder="@username"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Bio
+                    </label>
+                    <textarea
+                      value={formData.bio}
+                      onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
+                      rows={4}
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all resize-none"
+                      placeholder="Tell us about yourself..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Website
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.website}
+                      onChange={(e) => setFormData({ ...formData, website: e.target.value })}
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                      placeholder="https://yourwebsite.com"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Location
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.location}
+                      onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                      placeholder="City, Country"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div className="text-center">
+                    <h1 className="text-3xl font-bold text-slate-900 mb-1">
+                      {profile.name || 'No name set'}
+                    </h1>
+                    {profile.username && (
+                      <p className="text-slate-500 text-lg">@{profile.username}</p>
+                    )}
+                  </div>
+
+                  {profile.bio && (
+                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
+                      <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">
+                        {profile.bio}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="flex items-center gap-3 text-slate-600">
+                      <Mail className="w-5 h-5 text-blue-500" />
+                      <span>{profile.email}</span>
+                    </div>
+
+                    {profile.location && (
+                      <div className="flex items-center gap-3 text-slate-600">
+                        <MapPin className="w-5 h-5 text-blue-500" />
+                        <span>{profile.location}</span>
+                      </div>
+                    )}
+
+                    {profile.website && websiteHref && (
+                      <div className="flex items-center gap-3 text-slate-600">
+                        <Globe className="w-5 h-5 text-blue-500" />
+                        <a
+                          href={websiteHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:text-blue-600 transition-colors underline"
+                        >
+                          {profile.website.replace(/^https?:\/\//, '')}
+                        </a>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-3 text-slate-600">
+                      <Calendar className="w-5 h-5 text-blue-500" />
+                      <span>Joined {formatDate(profile.createdAt)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

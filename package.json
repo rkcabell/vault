@@ -6,18 +6,19 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run -ws dev",
     "build": "npm run -ws build",
     "lint": "npm run -ws lint",
-    "test": "node --test",
-    "test:json": "node --test --test-reporter json > test-results/test-results.json",
-    "test:spec": "node --test --test-reporter spec > test-results/test-results.txt",
+    "test:api": "npm -w @vault/db run build && npm -w api run build && node --test apps/api/dist/tests",
     "web:dev": "npm run --workspace web dev",
     "web:build": "npm run --workspace web build",
     "api:dev": "npm run --workspace api dev",
     "api:build": "npm run --workspace api build",
-    "db:generate": "npm run --workspace @vault/db generate",
-    "bootitup": "concurrently -n API,WEB,WORKER -c auto \"npm -w api run dev\" \"npm -w web run dev\" \"npm -w worker run dev\""
+    "prismagen": "npx prisma generate --schema packages/db/prisma/schema.prisma",
+    "prismigrate": "npx prisma migrate dev --schema packages/db/prisma/schema.prisma",
+    "prismareset": "npx prisma migrate reset --schema packages/db/prisma/schema.prisma",
+    "bootitup": "concurrently -n API,WEB,WORKER -c auto \"npm -w api run dev\" \"npm -w web run dev\" \"npm -w api run worker:dev\"",
+    "docker": "docker compose -f infra/docker/docker-compose.yml up -d",
+    "killdocker": "docker compose -f infra/docker/docker-compose.yml down"
   },
   "engines": {
     "node": ">=18.18"

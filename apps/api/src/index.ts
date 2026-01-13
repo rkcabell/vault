@@ -6,6 +6,7 @@ import { healthRoutes } from "./routes/health.js";
 import prismaPlugin from "./plugins/prisma.js";
 import jwtPlugin from "./plugins/jwt.js";
 import { authRoutes } from "./routes/auth.js";
+import { profileRoutes } from "./routes/profile.js";
 import s3Plugin from "./plugins/s3.js";
 import { mediaRoutes } from "./routes/media.js";
 import redisPlugin from "./plugins/redis.js";
@@ -37,6 +38,7 @@ async function main () {
   await app.register(prismaPlugin); // registers a PrismaClient (DB)
   await app.register(jwtPlugin); // registers jwt plugin
   await app.register(authRoutes, { prefix: "/api/auth" }); // auth routes plugin
+  await app.register(profileRoutes, { prefix: "/api/profile" });
   await app.register(s3Plugin); // aws bucket storage
   await app.register(mediaRoutes, { prefix: "/api/media" });
   await app.register(redisPlugin); // Redis for queue/rate-limit groundwork
@@ -73,4 +75,3 @@ function registerShutdown(app: any) {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
-

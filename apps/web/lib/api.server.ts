@@ -96,8 +96,9 @@ export async function pollReady (
   ms = 1000
 ): Promise<void> {
   for (let i = 0; i < attempts; i++) {
-    const m = await getMediaById(id)
-    if (m?.thumbState === 'READY' && m?.textState === 'READY' && m?.thumbnailKey) return
+    const res = await getMediaById(id)
+    const media = res?.media ?? res
+    if (media?.thumbState === 'READY' && media?.textState === 'READY' && media?.thumbnailKey) return
     await new Promise(r => setTimeout(r, ms))
   }
 }

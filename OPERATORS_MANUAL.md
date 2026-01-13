@@ -131,16 +131,6 @@ Vault is a **user-friendly personal file locker and life administration system**
         └─────────┴───────────────────┴─────────────┘
 ```
 
-### Shared Packages
-
-- **`packages/shared`**: Shared types, DTO schemas, API client, Zod validators
-- **`packages/config`**: Centralized config loader, env schema, secrets mapping
-- **`packages/ui`**: Reusable React/UI primitives for web
-
-TODO: Confirm if these packages are actively used or placeholder structure.
-
----
-
 ## 3. Repo and Directory Layout
 
 ```
@@ -152,19 +142,13 @@ vault/
 │   ├── node-jobs/        Background thumbnail processor (TypeScript)
 │   └── py-ocr/           OCR worker using Tesseract (Python)
 ├── packages/
-│   ├── shared/           Shared types, DTO schemas, API client
-│   ├── config/           Centralized config/env loader
-│   └── ui/               Reusable React components
+│   ├── db/               Prisma client and database scripts
 ├── infra/
 │   ├── docker/           Docker Compose, Dockerfiles, healthchecks
 │   ├── meilisearch/      Index definitions, ranking rules (TODO: Not actively used?)
 │   ├── k6/               Load/smoke test scripts
 │   ├── scripts/          Dev init, seed, snapshot, restore scripts
 │   └── sql/              Raw SQL for views, indexes, migration extras
-├── prisma/
-│   ├── schema.prisma     Data model definition
-│   ├── migrations/       Database migration history
-│   └── seed.ts           Dev seed script
 ├── docs/
 │   ├── adr/              Architecture decision records (mostly empty)
 │   ├── runbook/          Ops playbooks (backups, DLQ, deploy, keys) - empty
@@ -181,9 +165,8 @@ vault/
 |-----------------|------------------------------------------------------------------|
 | `apps/`         | Deployable applications (API server, Web frontend)                |
 | `workers/`      | Background job processors (thumbnail, OCR)                        |
-| `packages/`     | Shared code libraries (internal monorepo dependencies)            |
+| `packages/`     | Prisma client and database tooling                                |
 | `infra/`        | Infrastructure code, Docker, scripts, SQL                         |
-| `prisma/`       | Database schema, migrations, seed data                            |
 | `docs/`         | Documentation, ADRs, runbooks, security docs                      |
 | `.github/`      | CI/CD workflows                                                   |
 
@@ -254,7 +237,7 @@ The `infra/docker/docker-compose.yml` file provides:
 
 ### Prisma Schema Overview
 
-File: [schema.prisma](file:///c:/Users/Rynan/Desktop/Vault/vault/prisma/schema.prisma)
+File: [schema.prisma](packages/db/prisma/schema.prisma)
 
 #### Entity Relationship Diagram
 

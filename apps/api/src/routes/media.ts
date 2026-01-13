@@ -2,20 +2,41 @@
 import type { FastifyPluginAsync } from "fastify";
 import { Queue, type ConnectionOptions } from "bullmq";
 import { z } from "zod";
-import {
-  PutObjectCommand,
-  GetObjectCommand,
-  DeleteObjectCommand,
-  HeadObjectCommand,
-} from "@aws-sdk/client-s3";
+import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Prisma } from "@prisma/client";
 import crypto from "crypto";
 import { requireAuth } from "../utils/authGuard.js";
-import { makeEnqueueThumbnails, type ThumbJob } from "../queues/enqueueThumbnail.js";
+import {
+  computeThumbKey,
+  makeEnqueueThumbnails,
+  type ThumbJob,
+} from "../queues/enqueueThumbnail.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() }).strict();
 const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
 const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
+const SORT_OPTIONS = [
+  "createdAt_desc",
+  "createdAt_asc",
+  "title_asc",
+  "title_desc",
+  "size_desc",
+  "size_asc",
+  "mimeType_asc",
+] as const;
+const MAX_BATCH_ITEMS = 100;
+// 1x1 solid-color WebP placeholder to avoid broken images.
+const FALLBACK_WEBP_BASE64 =
+  "UklGRiwAAABXRUJQVlA4ICAAAABwAQCdASoBAAEAAUAmJZQCdAFAAAD++QRjZQJ+NXuAAA==";
+const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
+
+function deriveTitle (filename: string, title?: string | null): string {
+  if (title && title.trim()) return title.trim();
+  const trimmed = filename.trim();
+  const base = trimmed.replace(/\.[^/.]+$/, "");
+  return base || trimmed || "Untitled";
+}
 
 function isNotFoundError (err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -56,16 +77,6 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     await Promise.allSettled([ocrQueue.close(), thumbQueue.close()]);
   });
 
-  type ObjectState = "exists" | "missing" | "unknown";
-  const getObjectState = async (key: string): Promise<ObjectState> => {
-    try {
-      await app.s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
-      return "exists";
-    } catch (err) {
-      return isNotFoundError(err) ? "missing" : "unknown";
-    }
-  };
-
   const deleteObjectIfPresent = async (key: string) => {
     try {
       await app.s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
@@ -98,6 +109,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         userId,
         thumbState: "PENDING",
         textState: "PENDING",
+        sourceState: "READY",
         storageKey,
         filename: body.filename,
         mimeType: body.mimeType,
@@ -117,11 +129,11 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       storageKey,
       size: 512,
     });
-    
+
     app.log.info(
-  { mediaId: media.id, storageKey, mimeType: body.mimeType },
-  "[media] enqueue after upload"
-);
+      { mediaId: media.id, storageKey, mimeType: body.mimeType },
+      "[media] enqueue after upload",
+    );
 
     // 2) Presigned upload URL
     const putCmd = new PutObjectCommand({
@@ -147,6 +159,120 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     return { id: media.id, uploadUrl, storageKey: media.storageKey };
   });
 
+  // POST /media/batch-init - init uploads in one DB transaction
+  app.post("/batch-init", { preHandler: [requireAuth] }, async req => {
+    const body = z
+      .object({
+        items: z
+          .array(
+            z.object({
+              filename: z.string().trim().min(1),
+              mimeType: z.string().trim().min(1),
+              sizeBytes: z.number().int().positive(),
+              title: z.string().trim().min(1).optional(),
+              tags: z.array(z.string().trim().min(1)).default([]),
+            }),
+          )
+          .min(1)
+          .max(MAX_BATCH_ITEMS),
+      })
+      .parse(req.body);
+
+    const userId = req.userId!;
+    const items = body.items.map(item => {
+      const id = crypto.randomUUID();
+      const storageKey = `${userId}/${id}/${item.filename}`;
+      return {
+        id,
+        userId,
+        storageKey,
+        filename: item.filename,
+        mimeType: item.mimeType,
+        sizeBytes: item.sizeBytes,
+        title: deriveTitle(item.filename, item.title),
+        tags: item.tags ?? [],
+        thumbState: "PENDING" as const,
+        textState: "PENDING" as const,
+        sourceState: "PENDING" as const,
+      };
+    });
+
+    await app.prisma.$transaction(async tx => {
+      await tx.media.createMany({ data: items });
+    });
+
+    const signedItems = await Promise.all(
+      items.map(async item => {
+        const putCmd = new PutObjectCommand({
+          Bucket: BUCKET,
+          Key: item.storageKey,
+          ContentType: item.mimeType,
+        });
+        const putUrl = await getSignedUrl(app.s3, putCmd, { expiresIn: 600 });
+        return { id: item.id, storageKey: item.storageKey, putUrl };
+      }),
+    );
+
+    return { items: signedItems };
+  });
+
+  // POST /media/batch-finalize - mark uploads ready + enqueue processing
+  app.post("/batch-finalize", { preHandler: [requireAuth] }, async req => {
+    const body = z
+      .object({
+        ids: z.array(z.string().uuid()).min(1).max(MAX_BATCH_ITEMS),
+      })
+      .parse(req.body);
+
+    const userId = req.userId!;
+    const ids = Array.from(new Set(body.ids));
+
+    if (ids.length === 0) {
+      return { ok: true, count: 0 };
+    }
+
+    const mediaItems = await app.prisma.$queryRaw<{ id: string; storageKey: string }[]>`
+      UPDATE "Media"
+      SET "sourceState" = 'READY'
+      WHERE "userId" = ${userId} AND "id" IN (${Prisma.join(ids)})
+      RETURNING "id", "storageKey"
+    `;
+
+    if (mediaItems.length === 0) {
+      return { ok: true, count: 0 };
+    }
+
+    const thumbJobs = mediaItems.map(item => ({
+      name: "thumb",
+      data: {
+        type: "thumb" as const,
+        mediaId: item.id,
+        userId,
+        storageKey: item.storageKey,
+        outKey: computeThumbKey(item.id),
+        size: 512,
+      },
+      opts: { jobId: item.id, attempts: 5, backoff: { type: "exponential", delay: 2000 } },
+    }));
+
+    const ocrJobs = mediaItems.map(item => ({
+      name: "ocr",
+      data: {
+        mediaId: item.id,
+        userId,
+        storageKey: item.storageKey,
+      },
+      opts: { attempts: 5, backoff: { type: "exponential", delay: 2000 } },
+    }));
+
+    await Promise.all([
+      thumbJobs.length ? thumbQueue.addBulk(thumbJobs) : Promise.resolve(),
+      ocrJobs.length ? ocrQueue.addBulk(ocrJobs) : Promise.resolve(),
+    ]);
+
+    return { ok: true, count: mediaItems.length };
+  });
+
   // GET /media - list my media
   app.get("/", { preHandler: [requireAuth] }, async req => {
     const userId = req.userId!;
@@ -154,9 +280,9 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       q: z.string().trim().optional(),
       search: z.string().trim().optional(),
       tag: z.string().trim().optional(),
-      thumbState: z.enum(["PENDING", "READY", "ERROR"]).optional(),
-      textState: z.enum(["PENDING", "READY", "ERROR"]).optional(),
-      sort: z.enum(["createdAt_desc", "createdAt_asc"]).optional(),
+      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
+      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
+      sort: z.enum(SORT_OPTIONS).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
       cursor: z.string().optional(),
       page: z.coerce.number().int().min(1).optional(),
@@ -166,10 +292,24 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     );
     const queryText = q ?? search;
     const take = limit ?? 24;
-    const orderBy =
-      sort === "createdAt_asc"
-        ? [{ createdAt: "asc" as const }, { id: "asc" as const }]
-        : [{ createdAt: "desc" as const }, { id: "desc" as const }];
+    const orderBy = (() => {
+      switch (sort) {
+        case "createdAt_asc":
+          return [{ createdAt: "asc" as const }, { id: "asc" as const }];
+        case "title_asc":
+          return [{ title: "asc" as const }, { id: "asc" as const }];
+        case "title_desc":
+          return [{ title: "desc" as const }, { id: "desc" as const }];
+        case "size_asc":
+          return [{ sizeBytes: "asc" as const }, { id: "asc" as const }];
+        case "size_desc":
+          return [{ sizeBytes: "desc" as const }, { id: "desc" as const }];
+        case "mimeType_asc":
+          return [{ mimeType: "asc" as const }, { id: "asc" as const }];
+        default:
+          return [{ createdAt: "desc" as const }, { id: "desc" as const }];
+      }
+    })();
 
     const items = await app.prisma.media.findMany({
       where: {
@@ -196,8 +336,6 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         textState: true,
         createdAt: true,
         tags: true,
-        thumbnailKey: true,
-        storageKey: true,
         mimeType: true,
       },
     });
@@ -207,29 +345,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     const nextCursor = hasMore ? sliced[sliced.length - 1]?.id ?? null : null;
     const nextPage = page && hasMore ? page + 1 : null;
 
-    type ObjectState = "exists" | "missing" | "unknown";
-    type PresentState = Exclude<ObjectState, "missing">; // "exists" | "unknown"
-    type MediaRow = typeof sliced[number];
-    type VisibleEntry = { item: MediaRow; state: PresentState };
-
-    const visible: Array<VisibleEntry | null> = await Promise.all(
-      sliced.map(async item => {
-        const state = await getObjectState(item.storageKey);
-        if (state === "missing") return null;
-        return { item, state: state as PresentState };
-      }),
-    );
-
-    const filtered = visible.filter((e): e is VisibleEntry => e !== null);
-
-    const responseItems = filtered
-      .map(entry => {
-        const { storageKey: _storageKey, ...rest } = entry.item;
-        return { ...rest };
-      })
-      .filter((item): item is Omit<MediaRow, "storageKey"> => item !== null);
-
-    return { items: responseItems, nextCursor, nextPage };
+    return { items: sliced, nextCursor, nextPage };
   });
 
   // DELETE /media/:id - delete my media
@@ -406,43 +522,94 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     },
   );
 
-  // GET /media/:id - detail + presigned GET
+  // GET /media/:id - detail payload (single Prisma query)
   app.get<{ Params: { id: string } }>("/:id", { preHandler: [requireAuth] }, async (req, reply) => {
-    const userId = req.userId!;
-    const m = await app.prisma.media.findFirst({
-      where: { id: req.params.id, userId },
-    });
-    if (!m) return reply.notFound();
-
-    const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: m.storageKey });
-    const downloadUrl = await getSignedUrl(app.s3, getCmd, { expiresIn: 600 });
-
-    return { media: m, downloadUrl };
-  });
-
-  // GET /media/:id/thumbnail - presigned GET to the thumbnail
-  app.get("/:id/thumbnail", { preHandler: [requireAuth] }, async (req, reply) => {
     const userId = req.userId!;
     const { id } = paramsSchema.parse(req.params);
 
     const media = await app.prisma.media.findFirst({
       where: { id, userId },
-      select: { thumbnailKey: true, storageKey: true, mimeType: true },
+      select: {
+        id: true,
+        userId: true,
+        title: true,
+        filename: true,
+        mimeType: true,
+        sizeBytes: true,
+        storageKey: true,
+        createdAt: true,
+        updatedAt: true,
+        tags: true,
+        thumbState: true,
+        thumbError: true,
+        textState: true,
+        thumbnailKey: true,
+        document: {
+          select: {
+            rawText: true,
+            textSource: true,
+          },
+        },
+      },
     });
-
     if (!media) return reply.notFound();
 
-    const fallbackKey =
-      !media.thumbnailKey && media.mimeType.startsWith("image/") ? media.storageKey : null;
-    const key = media.thumbnailKey ?? fallbackKey;
-    if (!key) return reply.notFound();
+    const rawText = media.document?.rawText ?? "";
+    const textTotalLength = rawText.length;
+    const textSource =
+      media.document?.textSource ??
+      (media.mimeType.startsWith("text/") ? "NATIVE" : "UNKNOWN");
 
-    const cmd = new GetObjectCommand({
-      Bucket: app.config.S3_BUCKET,
-      Key: key,
+    const { document: _document, ...mediaPayload } = media;
+
+    return reply.send({
+      media: {
+        ...mediaPayload,
+        hasText: textTotalLength > 0,
+        hasThumb: Boolean(media.thumbnailKey),
+      },
+      document: media.document
+        ? {
+            rawText,
+            textSource,
+            textTotalLength,
+          }
+        : null,
+      permissions: {
+        canEdit: true,
+        canDelete: true,
+        canDownload: true,
+        canOcr: true,
+      },
     });
+  });
 
-    const url = await getSignedUrl(app.s3, cmd, { expiresIn: 600 }); // 10 minutes
-    return reply.send({ url });
+  // GET /media/:id/thumbnail - stream thumbnail bytes or fallback
+  app.get("/:id/thumbnail", { preHandler: [requireAuth] }, async (req, reply) => {
+    const parsed = paramsSchema.safeParse(req.params);
+    if (!parsed.success) {
+      reply.header("Cache-Control", "public, max-age=31536000, immutable");
+      reply.type("image/webp");
+      return reply.send(FALLBACK_WEBP);
+    }
+
+    const thumbKey = computeThumbKey(parsed.data.id);
+    try {
+      const res = await app.s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: thumbKey }));
+      if (res.Body) {
+        reply.header("Cache-Control", "public, max-age=31536000, immutable");
+        if (res.ETag) reply.header("ETag", res.ETag);
+        reply.type("image/webp");
+        return reply.send(res.Body);
+      }
+    } catch (err) {
+      if (!isNotFoundError(err)) {
+        app.log.warn({ err, thumbKey }, "[media] thumbnail fetch failed");
+      }
+    }
+
+    reply.header("Cache-Control", "public, max-age=31536000, immutable");
+    reply.type("image/webp");
+    return reply.send(FALLBACK_WEBP);
   });
 };

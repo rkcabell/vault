@@ -15,7 +15,7 @@ export const authRoutes: FastifyPluginAsync = async app => {
 
       const user = await app.prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, email: true },
+        select: { id: true, email: true, name: true, username: true, avatarUrl: true },
       });
 
       if (!user) return reply.unauthorized("User not found");

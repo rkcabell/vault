@@ -4,14 +4,13 @@ import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { HeadObjectCommand } from "@aws-sdk/client-s3";
 import { s3 } from "../../../plugins/s3Client.js";
-import { prisma } from "../../../plugins/prismaClient.js";
+import { prisma } from "@vault/db";
+import { processOcrJob, OcrDeps } from "../../../worker/ocrWorker.js";
 
 process.env.NODE_ENV = "test";
 process.env.S3_BUCKET = "test-bucket";
 process.env.REDIS_URL = "redis://localhost:6379";
 process.env.OCR_QUEUE = "ocr_queue";
-
-const { handleJob } = await import("../../../worker/ocrWorker.js");
 
 const originalSend = s3.send.bind(s3);
 const originalFindUnique = prisma.media.findUnique.bind(prisma.media);
@@ -34,6 +33,15 @@ function mockDocumentUpsert (fn: (args: any) => any) {
   (prisma.document as any).upsert = async (args: any) => fn(args);
 }
 
+function mockOcrDeps (): OcrDeps {
+  return {
+    prisma,
+    s3,
+    bucket: "test-bucket",
+    enqueueOcr: async () => {},
+  };
+}
+
 afterEach(() => {
   (s3 as any).send = originalSend;
   (prisma.media as any).findUnique = originalFindUnique;
@@ -41,7 +49,7 @@ afterEach(() => {
   (prisma.document as any).upsert = originalUpsert;
 });
 
-test("handleJob returns when media is missing", async () => {
+test("processOcrJob returns when media is missing", async () => {
   let s3Called = false;
 
   mockS3Send(() => {
@@ -50,11 +58,11 @@ test("handleJob returns when media is missing", async () => {
   });
   mockMediaFindUnique(null);
 
-  await handleJob({ mediaId: "missing-media" });
+  await processOcrJob(mockOcrDeps(), { mediaId: "missing-media" });
   assert.equal(s3Called, false);
 });
 
-test("handleJob writes OCR text for non-PDF media", async () => {
+test("processOcrJob writes OCR text for non-PDF media", async () => {
   mockS3Send(cmd => {
     if (cmd instanceof HeadObjectCommand) return {};
     throw new Error("unexpected s3 command");
@@ -74,7 +82,7 @@ test("handleJob writes OCR text for non-PDF media", async () => {
     return {} as any;
   });
 
-  await handleJob({ mediaId: "media-1" });
+  await processOcrJob(mockOcrDeps(), { mediaId: "media-1" });
 
   const upsertData = upsertArgs as { update: { textSource: string; rawText: string } };
   assert.equal(upsertData.update.textSource, "OCR");
@@ -82,7 +90,7 @@ test("handleJob writes OCR text for non-PDF media", async () => {
   assert.deepEqual((updateArgs as { data: unknown }).data, { textState: "READY" });
 });
 
-test("handleJob throws when source is not ready", async () => {
+test("processOcrJob throws when source is not ready", async () => {
   mockS3Send(() => {
     throw new Error("not found");
   });
@@ -91,5 +99,5 @@ test("handleJob throws when source is not ready", async () => {
   mockMediaUpdate(() => ({} as any));
   mockDocumentUpsert(() => ({} as any));
 
-  await assert.rejects(handleJob({ mediaId: "media-2" }), /SOURCE_NOT_READY/);
+  await assert.rejects(processOcrJob(mockOcrDeps(), { mediaId: "media-2" }), /SOURCE_NOT_READY/);
 });
