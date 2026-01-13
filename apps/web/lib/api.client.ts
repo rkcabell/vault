@@ -27,7 +27,12 @@ export async function initUpload (
     throw new Error(`initUpload failed (${res.status})`)
   }
 
-  return res.json()
+  const data = await res.json()
+  const putUrl = data?.putUrl ?? data?.uploadUrl
+  if (!data?.id || !putUrl) {
+    throw new Error('initUpload response missing putUrl')
+  }
+  return { id: data.id, putUrl }
 }
 
 export async function getMedia (id: string) {
@@ -43,7 +48,8 @@ export async function getMedia (id: string) {
 export async function pollReady (id: string, attempts = 12, delayMs = 1000) {
   for (let i = 0; i < attempts; i++) {
     const item = await getMedia(id)
-    if (item?.thumbState === 'READY' && item?.textState === 'READY') return item
+    const media = item?.media ?? item
+    if (media?.thumbState === 'READY' && media?.textState === 'READY') return item
     await new Promise(r => setTimeout(r, delayMs))
   }
   return null

@@ -5,9 +5,10 @@
   "version": "0.1.0",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "worker": "tsx src/worker/ocrWorker.ts",
+    "worker:dev": "tsx watch src/worker/index.ts",
+    "worker": "node dist/worker/index.js",
     "start": "node dist/index.js",
-    "build": "tsc -p .",
+    "build": "tsc -p . --extendedDiagnostics",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

@@ -1,3 +1,4 @@
+//File: packages/db/src/index.ts
 import { PrismaClient } from "@prisma/client";
 
 const globalForPrisma = globalThis as unknown as {

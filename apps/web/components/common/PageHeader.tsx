@@ -6,13 +6,22 @@ interface PageHeaderProps {
   description?: string;
   actions?: React.ReactNode;
   className?: string;
+  titleClassName?: string;
 }
 
-export function PageHeader({ title, description, actions, className }: PageHeaderProps) {
+export function PageHeader({
+  title,
+  description,
+  actions,
+  className,
+  titleClassName,
+}: PageHeaderProps) {
   return (
     <div className={cn('mb-8 flex items-center justify-between', className)}>
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">{title}</h1>
+      <div className="min-w-0">
+        <h1 className={cn("text-3xl font-bold tracking-tight", titleClassName)}>
+          {title}
+        </h1>
         {description && (
           <p className="mt-2 text-muted-foreground">{description}</p>
         )}

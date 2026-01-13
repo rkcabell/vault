@@ -34,7 +34,7 @@ const jwtPlugin: FastifyPluginAsync = async (app) => {
 
   app.decorate("jwt", {
     signAccess(payload: Record<string, unknown>) {
-      return jwt.sign(payload, accessSecret, { expiresIn: "15m" });
+      return jwt.sign(payload, accessSecret, { expiresIn: "20h" });
     },
     signRefresh(payload: Record<string, unknown>) {
       return jwt.sign(payload, refreshSecret, { expiresIn: "7d" });
