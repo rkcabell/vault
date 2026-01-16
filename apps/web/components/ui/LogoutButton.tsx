@@ -1,4 +1,4 @@
-//File: apps/web/components/ui/logout_button.tsx
+//File: apps/web/components/ui/LogoutButton.tsx
 
 import { useRouter } from "next/navigation";
 

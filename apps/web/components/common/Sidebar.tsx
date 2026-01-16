@@ -5,8 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ChevronDown, ChevronRight, Tag, BookmarkCheck, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button } from "@/components/ui/Button";
-import { ScrollArea } from '@/ui/Scroll-Area';
+import { ScrollArea } from '@/ui/ScrollArea';
 import { Badge } from '@/ui/Badge';
 import type { Route } from "next";
 
@@ -86,80 +85,108 @@ export function Sidebar({ tags = [], savedViews = [], isLoading = false, classNa
             title="Tags"
             icon={<Tag className="h-4 w-4" />}
           >
-            {tags.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-muted-foreground">
-                No tags yet
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {tags.map((tag) => {
-                  const href = `/tags/${tag.id}`;
-                  const isActive = pathname === href;
+            <div className="space-y-2">
+              <Link
+                href={'/tags/new' as Route}
+                className={cn(
+                  'flex items-center px-3 py-2 text-sm rounded-md',
+                  'border border-dashed border-muted-foreground/40 text-primary',
+                  'transition-colors hover:bg-accent hover:text-accent-foreground',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                )}
+              >
+                + Add new tag
+              </Link>
 
-                  return (
-                    <Link
-                      key={tag.id}
-                      href={href as Route}
-                      className={cn(
-                        'flex items-center justify-between px-3 py-2 text-sm rounded-md',
-                        'transition-colors hover:bg-accent hover:text-accent-foreground',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                        isActive
-                          ? 'bg-accent text-accent-foreground font-medium'
-                          : 'text-muted-foreground'
-                      )}
-                    >
-                      <span className="truncate">{tag.name}</span>
-                      {tag.count !== undefined && (
-                        <Badge variant="secondary" className="ml-2 h-5 px-1.5 text-xs">
-                          {tag.count}
-                        </Badge>
-                      )}
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
+              {tags.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-muted-foreground">
+                  No tags yet
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {tags.map((tag) => {
+                    const href = `/tags/${tag.id}`;
+                    const isActive = pathname === href;
+
+                    return (
+                      <Link
+                        key={tag.id}
+                        href={href as Route}
+                        className={cn(
+                          'flex items-center justify-between px-3 py-2 text-sm rounded-md',
+                          'transition-colors hover:bg-accent hover:text-accent-foreground',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                          isActive
+                            ? 'bg-accent text-accent-foreground font-medium'
+                            : 'text-muted-foreground'
+                        )}
+                      >
+                        <span className="truncate">{tag.name}</span>
+                        {tag.count !== undefined && (
+                          <Badge variant="secondary" className="ml-2 h-5 px-1.5 text-xs">
+                            {tag.count}
+                          </Badge>
+                        )}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </SidebarSection>
 
           <SidebarSection
-            title="Saved Views"
+            title="Saved Albums"
             icon={<BookmarkCheck className="h-4 w-4" />}
           >
-            {savedViews.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-muted-foreground">
-                No saved views
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {savedViews.map((view) => {
-                  const href = `/views/${view.id}`;
-                  const isActive = pathname === href;
+            <div className="space-y-2">
+              <Link
+                href={'/albums/new' as Route}
+                className={cn(
+                  'flex items-center px-3 py-2 text-sm rounded-md',
+                  'border border-dashed border-muted-foreground/40 text-primary',
+                  'transition-colors hover:bg-accent hover:text-accent-foreground',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                )}
+              >
+                + Add new album
+              </Link>
 
-                  return (
-                    <Link
-                      key={view.id}
-                      href={href as Route}
-                      className={cn(
-                        'flex items-center justify-between px-3 py-2 text-sm rounded-md',
-                        'transition-colors hover:bg-accent hover:text-accent-foreground',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                        isActive
-                          ? 'bg-accent text-accent-foreground font-medium'
-                          : 'text-muted-foreground'
-                      )}
-                    >
-                      <span className="truncate">{view.name}</span>
-                      {view.count !== undefined && (
-                        <Badge variant="secondary" className="ml-2 h-5 px-1.5 text-xs">
-                          {view.count}
-                        </Badge>
-                      )}
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
+              {savedViews.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-muted-foreground">
+                  No saved albums
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {savedViews.map((view) => {
+                    const href = `/views/${view.id}`;
+                    const isActive = pathname === href;
+
+                    return (
+                      <Link
+                        key={view.id}
+                        href={href as Route}
+                        className={cn(
+                          'flex items-center justify-between px-3 py-2 text-sm rounded-md',
+                          'transition-colors hover:bg-accent hover:text-accent-foreground',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                          isActive
+                            ? 'bg-accent text-accent-foreground font-medium'
+                            : 'text-muted-foreground'
+                        )}
+                      >
+                        <span className="truncate">{view.name}</span>
+                        {view.count !== undefined && (
+                          <Badge variant="secondary" className="ml-2 h-5 px-1.5 text-xs">
+                            {view.count}
+                          </Badge>
+                        )}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </SidebarSection>
         </nav>
       </ScrollArea>

@@ -2,7 +2,6 @@
 "use client"
 
 import { useState } from 'react';
-import { cn } from '@/lib/utils';
 import { TopNav } from './TopNav';
 import { Sidebar, type TagItem, type SavedView } from './Sidebar';
 import { Sheet, SheetContent } from '@/components/ui/Sheet';

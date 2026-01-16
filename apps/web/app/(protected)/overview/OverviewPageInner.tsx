@@ -14,7 +14,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/Dropdown-Menu";
+} from "@/components/ui/DropdownMenu";
 
 // Thumbnail loading behavior.
 const EAGER_THUMB_COUNT = 6;

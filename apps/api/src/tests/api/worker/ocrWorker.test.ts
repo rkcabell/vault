@@ -3,9 +3,9 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { HeadObjectCommand } from "@aws-sdk/client-s3";
-import { s3 } from "../../../plugins/s3Client.js";
+import { s3 } from "@/plugins/s3Client.js";
 import { prisma } from "@vault/db";
-import { processOcrJob, OcrDeps } from "../../../worker/ocrWorker.js";
+import { processOcrJob, OcrDeps } from "@/worker/ocrWorker.js";
 
 process.env.NODE_ENV = "test";
 process.env.S3_BUCKET = "test-bucket";
@@ -86,7 +86,7 @@ test("processOcrJob writes OCR text for non-PDF media", async () => {
 
   const upsertData = upsertArgs as { update: { textSource: string; rawText: string } };
   assert.equal(upsertData.update.textSource, "OCR");
-  assert.ok(upsertData.update.rawText.includes("OCR STUB"));
+  assert.ok(upsertData.update.rawText.includes("STUB: File processed"));
   assert.deepEqual((updateArgs as { data: unknown }).data, { textState: "READY" });
 });
 

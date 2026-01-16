@@ -30,6 +30,7 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.88",
     "@tailwindcss/aspect-ratio": "^0.4.2"
   }
 }

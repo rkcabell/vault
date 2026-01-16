@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import type { S3Client } from "@aws-sdk/client-s3";
-import { getObjectBuffer } from "../../../lib/s3/getObjectBuffer.js";
+import { getObjectBuffer } from "@/adapters/s3/getObjectBuffer.js";
 
 test("getObjectBuffer returns buffer from stream body", async () => {
   const payload = Buffer.from("hello");

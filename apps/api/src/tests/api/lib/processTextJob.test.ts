@@ -4,9 +4,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import type { S3Client } from "@aws-sdk/client-s3";
-import { processTextJob } from "../../../lib/text/processTextJob.js";
+import { processTextJob } from "@/lib/text/processTextJob.js";
 
-function buildMinimalPdf(text: string): Buffer {
+function buildMinimalPdf (text: string): Buffer {
   const stream = `BT /F1 24 Tf 72 120 Td (${text}) Tj ET`;
   const objects = [
     "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
@@ -71,7 +71,7 @@ test("processTextJob returns OCR stub for non-PDFs", async () => {
   });
 
   assert.equal(result.textSource, "OCR");
-  assert.ok(result.rawText.includes("OCR STUB"));
+  assert.ok(result.rawText.includes("STUB: File processed"));
   assert.equal(result.pages, null);
 });
 

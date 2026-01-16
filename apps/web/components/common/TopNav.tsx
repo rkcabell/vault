@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/ui/Dropdown-Menu';
+} from '@/ui/DropdownMenu';
 import { Input } from '@/ui/Input';
 import { useAuth } from '@/components/contexts/AuthContext';
 import { ThemeToggle } from './ThemeToggle';

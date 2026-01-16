@@ -1,4 +1,4 @@
-//File: apps/web/components/ui/Scroll-Area.tsx
+//File: apps/web/components/ui/ScrollArea.tsx
 
 import * as React from "react"
 import { cn } from '@/lib/utils';

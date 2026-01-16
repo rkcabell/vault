@@ -8,12 +8,14 @@ import jwtPlugin from "./plugins/jwt.js";
 import { authRoutes } from "./routes/auth.js";
 import { profileRoutes } from "./routes/profile.js";
 import s3Plugin from "./plugins/s3.js";
+import mediaServicesPlugin from "./plugins/mediaServices.js";
 import { mediaRoutes } from "./routes/media.js";
 import redisPlugin from "./plugins/redis.js";
 import rateLimitPlugin from "./plugins/rateLimit.js";
 import dotenv from "dotenv";
 import path from "node:path";
 import cookie from "@fastify/cookie";
+import { createLogger } from "./lib/logger.js";
 
 dotenv.config({
   path: process.env.DOTENV_CONFIG_PATH ?? path.join(process.cwd(), ".env"),
@@ -40,6 +42,7 @@ async function main () {
   await app.register(authRoutes, { prefix: "/api/auth" }); // auth routes plugin
   await app.register(profileRoutes, { prefix: "/api/profile" });
   await app.register(s3Plugin); // aws bucket storage
+  await app.register(mediaServicesPlugin); // media services + queues wiring
   await app.register(mediaRoutes, { prefix: "/api/media" });
   await app.register(redisPlugin); // Redis for queue/rate-limit groundwork
   await app.register(rateLimitPlugin); // Redis rate limit
@@ -51,16 +54,17 @@ async function main () {
 }
 
 main().catch(err => {
-  console.error(err);
+  const logger = createLogger("api");
+  logger.error({ err }, "fatal startup error");
   process.exit(1);
 });
 
 function registerShutdown(app: any) {
-  let shuttingDown = false;
+  let isShuttingDown = false;
 
   const shutdown = async (signal: string) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (isShuttingDown) return;
+    isShuttingDown = true;
 
     try {
       app.log.info({ signal }, "Shutting down");

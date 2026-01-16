@@ -1,9 +1,20 @@
-//File: apps/api/src/lib/text/processTextJob.ts
+// File: apps/api/src/lib/text/processTextJob.ts
 import type { S3Client } from "@aws-sdk/client-s3";
-import { extractPdfText, type PdfTextPage } from "../pdf/extractPdfText.js";
-import { getObjectBuffer } from "../s3/getObjectBuffer.js";
+import { extractPdfText, type PdfTextPage } from "@/services/pdf/extractPdfText.js";
+import { getObjectBuffer } from "../../adapters/s3/getObjectBuffer.js";
 
 export type TextSource = "NATIVE" | "OCR";
+export type TextJobErrorCode = "SOURCE_NOT_READY";
+
+export class TextJobError extends Error {
+  code: TextJobErrorCode;
+
+  constructor (code: TextJobErrorCode, message?: string) {
+    super(message ?? code);
+    this.name = "TextJobError";
+    this.code = code;
+  }
+}
 
 export type ProcessTextResult = {
   textSource: TextSource;
@@ -21,11 +32,15 @@ export async function processTextJob (args: {
 }): Promise<ProcessTextResult> {
   const { s3, bucket, key, mimeType, forceOcr } = args;
 
-  if (mimeType?.startsWith("application/pdf") && !forceOcr) {
+  const isPdf = mimeType?.includes("pdf");
+
+  // Native extraction path
+  if (isPdf && !forceOcr) {
     const pdfBuffer = await getObjectBuffer(s3, bucket, key);
-    if (!pdfBuffer) throw new Error("SOURCE_NOT_READY");
+    if (!pdfBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 
     const extracted = await extractPdfText(pdfBuffer);
+
     return {
       textSource: "NATIVE",
       rawText: extracted.fullText,
@@ -34,10 +49,11 @@ export async function processTextJob (args: {
     };
   }
 
+  // OCR not performed here; signal that OCR is needed.
   return {
     textSource: "OCR",
-    rawText: `OCR STUB: File processed at ${new Date().toISOString()}`,
+    rawText: "STUB: File processed at ${new Date().toISOString()}",
     pages: null,
-    needsOcr: false,
+    needsOcr: true,
   };
 }
