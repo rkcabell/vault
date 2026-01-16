@@ -1,36 +1,26 @@
-﻿import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 import Link from "next/link";
 
-export default async function Default() {
-  const cookieStore = await cookies();
-  const isLoggedIn = Boolean(cookieStore.get("access_token")?.value);
-
-  // if (isLoggedIn) redirect("/overview");
-
+export default function Default() {
   return (
     <div className="landing-page">
       {/* Hero Section */}
       <section className="hero">
         <div className="hero__container">
+          <div className="hero__top">
+            <div className="hero__eyebrow">
+              <span className="hero__pill">Local-first</span>
+              <span className="hero__eyebrow-text">Private, on your own infrastructure</span>
+            </div>
+          </div>
           <h1 className="hero__title">Your Personal File Locker</h1>
           <p className="hero__subtitle">
             Transform your pile of documents, receipts, and photos into a searchable,
             organized system with automatic OCR text extraction and smart tagging.
           </p>
           <div className="hero__highlights">
-            <div className="highlight">
-              <span className="highlight__icon">🏠</span>
-              <span className="highlight__text">Runs locally, free</span>
-            </div>
-            <div className="highlight">
-              <span className="highlight__icon">🔍</span>
-              <span className="highlight__text">Search everything</span>
-            </div>
-            <div className="highlight">
-              <span className="highlight__icon">🏷️</span>
-              <span className="highlight__text">Color-coded tags</span>
-            </div>
+            <Link href="/overview" className="button button--cta">
+              Get Started
+            </Link>
           </div>
         </div>
       </section>
@@ -94,19 +84,6 @@ export default async function Default() {
               </p>
             </div>
           </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className="cta">
-        <div className="cta__container">
-          <h2 className="cta__title">Ready to Organize Your Digital Life?</h2>
-          <p className="cta__subtitle">
-            Join the growing community of users who have transformed their document management.
-          </p>
-          <Link href="/overview" className="button button--cta">
-            Get Started
-          </Link>
         </div>
       </section>
     </div>

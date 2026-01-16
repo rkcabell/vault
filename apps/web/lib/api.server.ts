@@ -1,6 +1,6 @@
 ﻿// apps/web/lib/api.ts
 import { cookies } from 'next/headers'
-import type { MediaWorkerState } from './media/types'
+import type { MediaDetailResponse, MediaWorkerState } from './media/types'
 
 const API_BASE =
   typeof window === 'undefined'
@@ -67,8 +67,8 @@ export async function initUpload (
   })
 }
 
-export async function getMediaById (id: string): Promise<any> {
-  return http(`/media/${id}`)
+export async function getMediaById (id: string): Promise<MediaDetailResponse> {
+  return http<MediaDetailResponse>(`/media/${id}`)
 }
 
 export async function getThumbnailUrl (id: string): Promise<string | null> {

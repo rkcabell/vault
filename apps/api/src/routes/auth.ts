@@ -1,26 +1,30 @@
 //File: apps/api/src/routes/auth.ts
 
 import type { FastifyPluginAsync } from "fastify";
-import argon2 from "argon2";
 import { z } from "zod";
+import { createAuthService, AuthError } from "../services/authService.js";
+import { UserRepository } from "../repositories/userRepository.js";
+import { createPasswordHasher } from "../adapters/passwordHasher.js";
+import { createJwtAdapter } from "../adapters/jwtAdapter.js";
 
 export const authRoutes: FastifyPluginAsync = async app => {
+  const authService = createAuthService({
+    userRepository: new UserRepository(app.prisma),
+    passwordHasher: createPasswordHasher(),
+    jwt: createJwtAdapter(app.jwt),
+  });
+
   app.get("/me", async (req, reply) => {
     const token = req.cookies.access_token;
     if (!token) return reply.unauthorized("Missing token");
 
     try {
-      const payload = app.jwt.verifyAccess(token);
-      const userId = payload.sub;
-
-      const user = await app.prisma.user.findUnique({
-        where: { id: userId },
-        select: { id: true, email: true, name: true, username: true, avatarUrl: true },
-      });
-
-      if (!user) return reply.unauthorized("User not found");
+      const { user } = await authService.getMe(token);
       return { user };
-    } catch {
+    } catch (err) {
+      if (err instanceof AuthError && err.code === "INVALID_TOKEN") {
+        return reply.unauthorized("Invalid or expired token");
+      }
       return reply.unauthorized("Invalid or expired token");
     }
   });
@@ -46,18 +50,15 @@ export const authRoutes: FastifyPluginAsync = async app => {
       });
       const data = schema.parse(req.body);
 
-      const existing = await app.prisma.user.findUnique({ where: { email: data.email } });
-      if (existing) return reply.badRequest("User already exists");
-
-      const hash = await argon2.hash(data.password);
-      const user = await app.prisma.user.create({
-        data: { email: data.email, passwordHash: hash },
-      });
-
-      const access = app.jwt.signAccess({ sub: user.id });
-      const refresh = app.jwt.signRefresh({ sub: user.id });
-
-      return { user: { id: user.id, email: user.email }, access, refresh };
+      try {
+        const { user, tokens } = await authService.register(data.email, data.password);
+        return { user, access: tokens.access, refresh: tokens.refresh };
+      } catch (err) {
+        if (err instanceof AuthError && err.code === "USER_EXISTS") {
+          return reply.badRequest("User already exists");
+        }
+        throw err;
+      }
     },
   );
 
@@ -91,30 +92,30 @@ export const authRoutes: FastifyPluginAsync = async app => {
       );
       if (reply.sent) return;
 
-      const user = await app.prisma.user.findUnique({ where: { email: data.email } });
-      if (!user) return reply.unauthorized("Invalid credentials");
+      try {
+        const { user, tokens } = await authService.login(data.email, data.password);
 
-      const valid = await argon2.verify(user.passwordHash, data.password);
-      if (!valid) return reply.unauthorized("Invalid credentials");
+        reply
+          .setCookie("access_token", tokens.access, {
+            httpOnly: true,
+            sameSite: "lax",
+            path: "/",
+            secure: process.env.NODE_ENV === "production",
+          })
+          .setCookie("refresh_token", tokens.refresh, {
+            httpOnly: true,
+            sameSite: "lax",
+            path: "/",
+            secure: process.env.NODE_ENV === "production",
+          });
 
-      const access = app.jwt.signAccess({ sub: user.id });
-      const refresh = app.jwt.signRefresh({ sub: user.id });
-
-      reply
-        .setCookie("access_token", access, {
-          httpOnly: true,
-          sameSite: "lax",
-          path: "/",
-          secure: process.env.NODE_ENV === "production",
-        })
-        .setCookie("refresh_token", refresh, {
-          httpOnly: true,
-          sameSite: "lax",
-          path: "/",
-          secure: process.env.NODE_ENV === "production",
-        });
-
-      return reply.send({ user: { id: user.id, email: user.email } });
+        return reply.send({ user });
+      } catch (err) {
+        if (err instanceof AuthError && err.code === "INVALID_CREDENTIALS") {
+          return reply.unauthorized("Invalid credentials");
+        }
+        throw err;
+      }
     },
   );
 
@@ -137,11 +138,13 @@ export const authRoutes: FastifyPluginAsync = async app => {
       const { refresh } = schema.parse(req.body);
 
       try {
-        const payload = app.jwt.verifyRefresh(refresh);
-        const access = app.jwt.signAccess({ sub: payload.sub });
+        const { access } = await authService.refreshTokens(refresh);
         return { access };
-      } catch {
-        return reply.unauthorized("Invalid or expired refresh token");
+      } catch (err) {
+        if (err instanceof AuthError && err.code === "INVALID_TOKEN") {
+          return reply.unauthorized("Invalid or expired refresh token");
+        }
+        throw err;
       }
     },
   );

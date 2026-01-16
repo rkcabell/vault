@@ -1,10 +1,10 @@
-//File: apps/api/src/tests/api/lib/extractPdfText.test.ts
+//File: apps/api/src/tests/api/services/pdf/extractPdfText.test.ts
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractPdfText } from "../../../lib/pdf/extractPdfText.js";
+import { extractPdfText } from "@/services/pdf/extractPdfText.js";
 
-function buildMinimalPdf(text: string): Buffer {
+function buildMinimalPdf (text: string): Buffer {
   const stream = `BT /F1 24 Tf 72 120 Td (${text}) Tj ET`;
   const objects = [
     "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",

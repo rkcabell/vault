@@ -17,6 +17,13 @@ export type EnqueueThumbArgs = {
   size?: number; // default 512
 };
 
+export type EnqueueThumbBulkItem = {
+  mediaId: string;
+  userId: string;
+  storageKey: string;
+  size?: number;
+};
+
 export function computeThumbKey (mediaId: string) {
   return `thumbs/${mediaId}.webp`;
 }
@@ -55,4 +62,23 @@ export async function enqueueThumbnail (
   args: EnqueueThumbArgs,
 ): Promise<string> {
   return makeEnqueueThumbnails(queue)(args);
+}
+
+export async function enqueueThumbBulk (queue: Queue<ThumbJob>, items: EnqueueThumbBulkItem[]) {
+  if (!items.length) return;
+
+  const jobs = items.map(item => ({
+    name: "thumb",
+    data: {
+      type: "thumb" as const,
+      mediaId: item.mediaId,
+      userId: item.userId,
+      storageKey: item.storageKey,
+      outKey: computeThumbKey(item.mediaId),
+      size: item.size ?? 512,
+    },
+    opts: { jobId: item.mediaId, attempts: 5, backoff: { type: "exponential", delay: 2000 } },
+  }));
+
+  await queue.addBulk(jobs);
 }

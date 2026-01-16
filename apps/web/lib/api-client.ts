@@ -1,4 +1,4 @@
-// apps/web/lib/api.client.ts
+// apps/web/lib/api-client.ts
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? ''
 

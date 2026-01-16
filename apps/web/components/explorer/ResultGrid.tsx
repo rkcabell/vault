@@ -1,7 +1,7 @@
 //File: apps/web/components/explorer/ResultGrid.tsx
-import ResultCard from "@/components/explorer/ResultCard";
+import ResultCard, { type MediaItem } from "@/components/explorer/ResultCard";
 
-export default function ResultGrid({ items, loading }: { items: any[]; loading: boolean }) {
+export default function ResultGrid({ items, loading }: { items: MediaItem[]; loading: boolean }) {
   if (loading) return <div className="opacity-60">Loading…</div>;
   if (!items?.length) return <div className="opacity-60">No results</div>;
   return (

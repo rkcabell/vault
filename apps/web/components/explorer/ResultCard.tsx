@@ -7,7 +7,7 @@ import { StatusChip } from "@/components/common";
 import { deriveOverallState } from "@/lib/media/status";
 import type { MediaWorkerState } from "@/lib/media/types";
 
-type MediaItem = {
+export type MediaItem = {
   id: string;
   title?: string | null;
   filename?: string | null;
@@ -16,8 +16,6 @@ type MediaItem = {
   tags?: string[];
   mimeType?: string | null;
 };
-
-type MediaRoute = `/media/${string}`;
 
 export default function ResultCard({ item }: { item: MediaItem }) {
   const id = item.id;

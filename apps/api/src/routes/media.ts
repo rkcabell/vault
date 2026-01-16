@@ -1,91 +1,19 @@
-﻿// apps/api/src/routes/media.ts
+// apps/api/src/routes/media.ts
 import type { FastifyPluginAsync } from "fastify";
-import { Queue, type ConnectionOptions } from "bullmq";
 import { z } from "zod";
-import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { Prisma } from "@prisma/client";
-import crypto from "crypto";
 import { requireAuth } from "../utils/authGuard.js";
-import {
-  computeThumbKey,
-  makeEnqueueThumbnails,
-  type ThumbJob,
-} from "../queues/enqueueThumbnail.js";
+import { MEDIA_SORT_OPTIONS } from "../services/media/mediaQueryService.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() }).strict();
-const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
-const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
-const SORT_OPTIONS = [
-  "createdAt_desc",
-  "createdAt_asc",
-  "title_asc",
-  "title_desc",
-  "size_desc",
-  "size_asc",
-  "mimeType_asc",
-] as const;
+const SORT_OPTIONS = MEDIA_SORT_OPTIONS;
 const MAX_BATCH_ITEMS = 100;
 // 1x1 solid-color WebP placeholder to avoid broken images.
 const FALLBACK_WEBP_BASE64 =
   "UklGRiwAAABXRUJQVlA4ICAAAABwAQCdASoBAAEAAUAmJZQCdAFAAAD++QRjZQJ+NXuAAA==";
 const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
 
-function deriveTitle (filename: string, title?: string | null): string {
-  if (title && title.trim()) return title.trim();
-  const trimmed = filename.trim();
-  const base = trimmed.replace(/\.[^/.]+$/, "");
-  return base || trimmed || "Untitled";
-}
-
-function isNotFoundError (err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const meta = (err as { $metadata?: { httpStatusCode?: number } }).$metadata;
-  if (meta?.httpStatusCode === 404) return true;
-  const name = (err as { name?: string }).name;
-  return name === "NotFound" || name === "NoSuchKey";
-}
-
 export const mediaRoutes: FastifyPluginAsync = async app => {
-  const BUCKET = app.config.S3_BUCKET;
-  let queueConnection: ConnectionOptions | null = null;
-
-  const getQueueConnection = () => {
-    if (!queueConnection) {
-      const parsed = new URL(app.config.REDIS_URL);
-      queueConnection = {
-        host: parsed.hostname,
-        port: parsed.port ? Number(parsed.port) : 6379,
-        username: parsed.username || undefined,
-        password: parsed.password || undefined,
-        db: parsed.pathname ? Number(parsed.pathname.replace("/", "")) || 0 : 0,
-        tls: parsed.protocol === "rediss:" ? {} : undefined,
-      };
-    }
-    return queueConnection;
-  };
-
-  const ocrQueue = new Queue(OCR_QUEUE, {
-    connection: getQueueConnection(),
-  });
-
-  const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, {
-    connection: getQueueConnection(),
-  });
-
-  app.addHook("onClose", async () => {
-    await Promise.allSettled([ocrQueue.close(), thumbQueue.close()]);
-  });
-
-  const deleteObjectIfPresent = async (key: string) => {
-    try {
-      await app.s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
-    } catch (err) {
-      if (!isNotFoundError(err)) {
-        throw err;
-      }
-    }
-  };
+  const { uploadService, queryService, readService, actionsService } = app.mediaServices;
 
   // POST media handler - init upload -> return presigned PUT + enqueue OCR job
   app.post("/", { preHandler: [requireAuth] }, async req => {
@@ -99,64 +27,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       })
       .parse(req.body);
 
-    const userId = req.userId!;
-    const id = crypto.randomUUID();
-    const storageKey = `${userId}/${id}/${body.filename}`;
-
-    const media = await app.prisma.media.create({
-      data: {
-        id,
-        userId,
-        thumbState: "PENDING",
-        textState: "PENDING",
-        sourceState: "READY",
-        storageKey,
-        filename: body.filename,
-        mimeType: body.mimeType,
-        sizeBytes: body.sizeBytes,
-        title: body.title,
-        tags: body.tags,
-      },
-      select: { id: true, storageKey: true, title: true },
-    });
-
-    // 1) enqueue the thumbnail job
-    const enqueueThumb = makeEnqueueThumbnails(thumbQueue);
-
-    await enqueueThumb({
-      mediaId: media.id,
-      userId,
-      storageKey,
-      size: 512,
-    });
-
-    app.log.info(
-      { mediaId: media.id, storageKey, mimeType: body.mimeType },
-      "[media] enqueue after upload",
-    );
-
-    // 2) Presigned upload URL
-    const putCmd = new PutObjectCommand({
-      Bucket: BUCKET,
-      Key: storageKey,
-      ContentType: body.mimeType,
-    });
-    const uploadUrl = await getSignedUrl(app.s3, putCmd, { expiresIn: 600 });
-
-    // 3) Enqueue OCR job (native PDF extraction happens in the worker)
-    await ocrQueue.add(
-      "ocr",
-      {
-        mediaId: media.id,
-        userId,
-        storageKey,
-        title: media.title,
-      },
-      { attempts: 5, backoff: { type: "exponential", delay: 2000 } },
-    );
-
-    // 4) Return what is ready to use
-    return { id: media.id, uploadUrl, storageKey: media.storageKey };
+    return uploadService.initUpload(req.userId!, body);
   });
 
   // POST /media/batch-init - init uploads in one DB transaction
@@ -178,42 +49,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       })
       .parse(req.body);
 
-    const userId = req.userId!;
-    const items = body.items.map(item => {
-      const id = crypto.randomUUID();
-      const storageKey = `${userId}/${id}/${item.filename}`;
-      return {
-        id,
-        userId,
-        storageKey,
-        filename: item.filename,
-        mimeType: item.mimeType,
-        sizeBytes: item.sizeBytes,
-        title: deriveTitle(item.filename, item.title),
-        tags: item.tags ?? [],
-        thumbState: "PENDING" as const,
-        textState: "PENDING" as const,
-        sourceState: "PENDING" as const,
-      };
-    });
-
-    await app.prisma.$transaction(async tx => {
-      await tx.media.createMany({ data: items });
-    });
-
-    const signedItems = await Promise.all(
-      items.map(async item => {
-        const putCmd = new PutObjectCommand({
-          Bucket: BUCKET,
-          Key: item.storageKey,
-          ContentType: item.mimeType,
-        });
-        const putUrl = await getSignedUrl(app.s3, putCmd, { expiresIn: 600 });
-        return { id: item.id, storageKey: item.storageKey, putUrl };
-      }),
-    );
-
-    return { items: signedItems };
+    return uploadService.initBatchUploads(req.userId!, body.items);
   });
 
   // POST /media/batch-finalize - mark uploads ready + enqueue processing
@@ -224,53 +60,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       })
       .parse(req.body);
 
-    const userId = req.userId!;
-    const ids = Array.from(new Set(body.ids));
-
-    if (ids.length === 0) {
-      return { ok: true, count: 0 };
-    }
-
-    const mediaItems = await app.prisma.$queryRaw<{ id: string; storageKey: string }[]>`
-      UPDATE "Media"
-      SET "sourceState" = 'READY'
-      WHERE "userId" = ${userId} AND "id" IN (${Prisma.join(ids)})
-      RETURNING "id", "storageKey"
-    `;
-
-    if (mediaItems.length === 0) {
-      return { ok: true, count: 0 };
-    }
-
-    const thumbJobs = mediaItems.map(item => ({
-      name: "thumb",
-      data: {
-        type: "thumb" as const,
-        mediaId: item.id,
-        userId,
-        storageKey: item.storageKey,
-        outKey: computeThumbKey(item.id),
-        size: 512,
-      },
-      opts: { jobId: item.id, attempts: 5, backoff: { type: "exponential", delay: 2000 } },
-    }));
-
-    const ocrJobs = mediaItems.map(item => ({
-      name: "ocr",
-      data: {
-        mediaId: item.id,
-        userId,
-        storageKey: item.storageKey,
-      },
-      opts: { attempts: 5, backoff: { type: "exponential", delay: 2000 } },
-    }));
-
-    await Promise.all([
-      thumbJobs.length ? thumbQueue.addBulk(thumbJobs) : Promise.resolve(),
-      ocrJobs.length ? ocrQueue.addBulk(ocrJobs) : Promise.resolve(),
-    ]);
-
-    return { ok: true, count: mediaItems.length };
+    return uploadService.finalizeBatch(req.userId!, body.ids);
   });
 
   // GET /media - list my media
@@ -291,61 +81,17 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       req.query,
     );
     const queryText = q ?? search;
-    const take = limit ?? 24;
-    const orderBy = (() => {
-      switch (sort) {
-        case "createdAt_asc":
-          return [{ createdAt: "asc" as const }, { id: "asc" as const }];
-        case "title_asc":
-          return [{ title: "asc" as const }, { id: "asc" as const }];
-        case "title_desc":
-          return [{ title: "desc" as const }, { id: "desc" as const }];
-        case "size_asc":
-          return [{ sizeBytes: "asc" as const }, { id: "asc" as const }];
-        case "size_desc":
-          return [{ sizeBytes: "desc" as const }, { id: "desc" as const }];
-        case "mimeType_asc":
-          return [{ mimeType: "asc" as const }, { id: "asc" as const }];
-        default:
-          return [{ createdAt: "desc" as const }, { id: "desc" as const }];
-      }
-    })();
 
-    const items = await app.prisma.media.findMany({
-      where: {
-        userId,
-        ...(queryText
-          ? {
-              OR: [
-                { title: { contains: queryText, mode: "insensitive" } },
-                { document: { is: { rawText: { contains: queryText, mode: "insensitive" } } } },
-              ],
-            }
-          : {}),
-        ...(tag ? { tags: { has: tag } } : {}),
-        ...(thumbState ? { thumbState } : {}),
-        ...(textState ? { textState } : {}),
-      },
-      orderBy,
-      take: take + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : page ? { skip: (page - 1) * take } : {}),
-      select: {
-        id: true,
-        title: true,
-        thumbState: true,
-        textState: true,
-        createdAt: true,
-        tags: true,
-        mimeType: true,
-      },
+    return queryService.listMedia(userId, {
+      queryText,
+      tag,
+      thumbState,
+      textState,
+      sort,
+      limit,
+      cursor,
+      page,
     });
-
-    const hasMore = items.length > take;
-    const sliced = hasMore ? items.slice(0, take) : items;
-    const nextCursor = hasMore ? sliced[sliced.length - 1]?.id ?? null : null;
-    const nextPage = page && hasMore ? page + 1 : null;
-
-    return { items: sliced, nextCursor, nextPage };
   });
 
   // DELETE /media/:id - delete my media
@@ -356,25 +102,11 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       const userId = req.userId!;
       const { id } = paramsSchema.parse(req.params);
 
-      const media = await app.prisma.media.findFirst({
-        where: { id, userId },
-        select: { storageKey: true, thumbnailKey: true },
-      });
+      const result = await actionsService.deleteMedia(userId, id);
 
-      if (!media) return reply.notFound();
+      if (!result) return reply.notFound();
 
-      try {
-        await deleteObjectIfPresent(media.storageKey);
-        if (media.thumbnailKey) {
-          await deleteObjectIfPresent(media.thumbnailKey);
-        }
-      } catch {
-        return reply.code(500).send({ error: "Failed to delete media" });
-      }
-
-      await app.prisma.media.delete({ where: { id } });
-
-      return reply.send({ ok: true });
+      return reply.send(result);
     },
   );
 
@@ -391,26 +123,9 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         })
         .parse(req.body);
 
-      const existing = await app.prisma.media.findFirst({
-        where: { id, userId },
-        select: { id: true },
-      });
+      const media = await actionsService.updateMediaTitle(userId, id, body.title);
 
-      if (!existing) return reply.notFound();
-
-      const media = await app.prisma.media.update({
-        where: { id },
-        data: { title: body.title },
-        select: {
-          id: true,
-          title: true,
-          filename: true,
-          sizeBytes: true,
-          mimeType: true,
-          thumbState: true,
-          textState: true,
-        },
-      });
+      if (!media) return reply.notFound();
 
       return reply.send({ media });
     },
@@ -424,17 +139,11 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       const userId = req.userId!;
       const { id } = paramsSchema.parse(req.params);
 
-      const media = await app.prisma.media.findFirst({
-        where: { id, userId },
-        select: { storageKey: true },
-      });
+      const url = await actionsService.getDownloadUrl(userId, id);
 
-      if (!media) return reply.notFound();
+      if (!url) return reply.notFound();
 
-      const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: media.storageKey });
-      const url = await getSignedUrl(app.s3, getCmd, { expiresIn: 600 });
-
-      return reply.send({ url });
+      return reply.send(url);
     },
   );
 
@@ -451,37 +160,17 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       });
       const { offset, limit } = Query.parse(req.query);
 
-      const media = await app.prisma.media.findFirst({
-        where: { id, userId },
-        select: {
-          mimeType: true,
-          document: { select: { rawText: true, textSource: true } },
-        },
-      });
+      const text = await readService.getTextChunk(userId, id, offset, limit);
 
-      if (!media) return reply.notFound();
+      if (!text) return reply.notFound();
 
-      const rawText = media.document?.rawText ?? "";
-      const totalLength = rawText.length;
-      const text = rawText.slice(offset, offset + limit);
-      const hasMore = offset + text.length < totalLength;
-      const textSource =
-        media.document?.textSource ?? (media.mimeType.startsWith("text/") ? "NATIVE" : "UNKNOWN");
-
-      return reply.send({
-        text,
-        offset,
-        limit,
-        totalLength,
-        hasMore,
-        textSource,
-      });
+      return reply.send(text);
     },
   );
 
-  // POST /media/:id/ocr - re-run OCR with options
+  // POST /media/:id/text - re-run text extraction
   app.post<{ Params: { id: string } }>(
-    "/:id/ocr",
+    "/:id/text",
     { preHandler: [requireAuth] },
     async (req, reply) => {
       const userId = req.userId!;
@@ -493,32 +182,15 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         })
         .parse(req.body ?? {});
 
-      const media = await app.prisma.media.findFirst({
-        where: { id, userId },
-        select: { id: true, storageKey: true, title: true },
+      const result = await actionsService.enqueueTextExtraction(userId, id, {
+        language: body.language,
+        rotation: body.rotation,
+        forceOcr: false,
       });
 
-      if (!media) return reply.notFound();
+      if (!result) return reply.notFound();
 
-      await ocrQueue.add(
-        "ocr",
-        {
-          mediaId: media.id,
-          userId,
-          storageKey: media.storageKey,
-          title: media.title,
-          language: body.language,
-          rotation: body.rotation,
-          forceOcr: true,
-        },
-        { attempts: 5, backoff: { type: "exponential", delay: 2000 } },
-      );
-      await app.prisma.media.update({
-        where: { id },
-        data: { textState: "PENDING" },
-      });
-
-      return reply.send({ ok: true });
+      return reply.send(result);
     },
   );
 
@@ -527,61 +199,11 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     const userId = req.userId!;
     const { id } = paramsSchema.parse(req.params);
 
-    const media = await app.prisma.media.findFirst({
-      where: { id, userId },
-      select: {
-        id: true,
-        userId: true,
-        title: true,
-        filename: true,
-        mimeType: true,
-        sizeBytes: true,
-        storageKey: true,
-        createdAt: true,
-        updatedAt: true,
-        tags: true,
-        thumbState: true,
-        thumbError: true,
-        textState: true,
-        thumbnailKey: true,
-        document: {
-          select: {
-            rawText: true,
-            textSource: true,
-          },
-        },
-      },
-    });
+    const media = await readService.getMediaDetail(userId, id);
+
     if (!media) return reply.notFound();
 
-    const rawText = media.document?.rawText ?? "";
-    const textTotalLength = rawText.length;
-    const textSource =
-      media.document?.textSource ??
-      (media.mimeType.startsWith("text/") ? "NATIVE" : "UNKNOWN");
-
-    const { document: _document, ...mediaPayload } = media;
-
-    return reply.send({
-      media: {
-        ...mediaPayload,
-        hasText: textTotalLength > 0,
-        hasThumb: Boolean(media.thumbnailKey),
-      },
-      document: media.document
-        ? {
-            rawText,
-            textSource,
-            textTotalLength,
-          }
-        : null,
-      permissions: {
-        canEdit: true,
-        canDelete: true,
-        canDownload: true,
-        canOcr: true,
-      },
-    });
+    return reply.send(media);
   });
 
   // GET /media/:id/thumbnail - stream thumbnail bytes or fallback
@@ -593,19 +215,13 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       return reply.send(FALLBACK_WEBP);
     }
 
-    const thumbKey = computeThumbKey(parsed.data.id);
-    try {
-      const res = await app.s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: thumbKey }));
-      if (res.Body) {
-        reply.header("Cache-Control", "public, max-age=31536000, immutable");
-        if (res.ETag) reply.header("ETag", res.ETag);
-        reply.type("image/webp");
-        return reply.send(res.Body);
-      }
-    } catch (err) {
-      if (!isNotFoundError(err)) {
-        app.log.warn({ err, thumbKey }, "[media] thumbnail fetch failed");
-      }
+    const thumb = await readService.getThumbnail(parsed.data.id);
+
+    if (thumb?.body) {
+      reply.header("Cache-Control", "public, max-age=31536000, immutable");
+      if (thumb.etag) reply.header("ETag", thumb.etag);
+      reply.type("image/webp");
+      return reply.send(thumb.body);
     }
 
     reply.header("Cache-Control", "public, max-age=31536000, immutable");

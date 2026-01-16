@@ -98,7 +98,7 @@ export default function AuthPage() {
       const dest =
         next && next.startsWith("/") && !next.startsWith("//") ? next : "/overview";
 
-      router.push(dest as any);
+      router.push(dest);
     } catch {
       setError("Network error. Please check your connection.");
     } finally {

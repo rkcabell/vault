@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
-import { s3 } from "../../../plugins/s3Client.js";
+import { s3 } from "@/plugins/s3Client.js";
 import { prisma } from "@vault/db";
-import { processThumb, ThumbDeps } from "../../../worker/thumbWorker.js";
+import { processThumb, ThumbDeps } from "@/worker/thumbWorker.js";
 
 process.env.NODE_ENV = "test";
 process.env.S3_BUCKET = "test-bucket";
