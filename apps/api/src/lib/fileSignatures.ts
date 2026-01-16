@@ -15,3 +15,9 @@ export function looksLikePng (buf: Buffer): boolean {
     buf[7] === 0x0a
   );
 }
+
+export function looksLikeMp4 (buf: Buffer): boolean {
+  // MP4 typically starts with a 4-byte box size followed by "ftyp"
+  if (buf.length < 12) return false;
+  return buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70;
+}

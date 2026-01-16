@@ -1,13 +1,89 @@
-﻿//File: app/(protected)/overview/page.tsx
-"use client";
+import Link from "next/link";
+import { listMedia } from "@/lib/api.server";
+import { deriveOverallState } from "@/lib/media/status";
 
-import { Suspense } from "react";
-import OverviewPageInner from "./OverviewPageInner";
+export default async function OverviewPage() {
+  const recent = (await listMedia({ q: "" })).slice(0, 9);
 
-export default function OverviewPage() {
+  const inbox = recent
+    .filter((m) => deriveOverallState(m.thumbState, m.textState) !== "READY")
+    .slice(0, 8);
+
   return (
-    <Suspense fallback={null}>
-      <OverviewPageInner />
-    </Suspense>
+    <div className="overview-page">
+      <main className="mx-auto max-w-6xl space-y-8 p-6">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Home</h1>
+          <p className="text-sm text-neutral-600 dark:text-neutral-400">
+            {inbox.length
+              ? `${inbox.length} item(s) still processing or awaiting review`
+              : "Nothing pending. You're caught up."}
+          </p>
+        </div>
+
+        <div className="flex gap-2">
+          <Link
+            className="overview-secondary-btn rounded-md border px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
+            href="/library"
+          >
+            Open Library
+          </Link>
+          <Link
+            className="overview-secondary-btn rounded-md bg-black px-3 py-2 text-sm text-white hover:opacity-90 dark:bg-white dark:text-black"
+            href="/upload"
+          >
+            Upload
+          </Link>
+        </div>
+      </header>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold">Inbox</h2>
+        {inbox.length === 0 ? (
+          <div className="rounded-2xl border p-6 text-sm text-neutral-600 dark:text-neutral-400">
+            No items in the inbox.
+          </div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {inbox.map((m) => (
+              <Link
+                key={m.id}
+                href={`/media/${m.id}`}
+                className="overview-card rounded-2xl border p-4 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+              >
+                <div className="truncate text-sm font-medium">
+                  {m.title || m.filename || m.id}
+                </div>
+                <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+                  {deriveOverallState(m.thumbState, m.textState)}
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold">Recent</h2>
+        <div className="grid gap-3 md:grid-cols-3">
+          {recent.map((m) => (
+            <Link
+              key={m.id}
+              href={`/media/${m.id}`}
+              className="overview-card rounded-2xl border p-4 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+            >
+              <div className="truncate text-sm font-medium">
+                {m.title || m.filename || m.id}
+              </div>
+              <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+                {m.mimeType ?? "file"}
+              </div>
+            </Link>
+          ))}
+        </div>
+      </section>
+      </main>
+    </div>
   );
 }

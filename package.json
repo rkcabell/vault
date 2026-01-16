@@ -16,7 +16,7 @@
     "prismagen": "npx prisma generate --schema packages/db/prisma/schema.prisma",
     "prismigrate": "npx prisma migrate dev --schema packages/db/prisma/schema.prisma",
     "prismareset": "npx prisma migrate reset --schema packages/db/prisma/schema.prisma",
-    "bootitup": "concurrently -n API,WEB,WORKER -c auto \"npm -w api run dev\" \"npm -w web run dev\" \"npm -w api run worker:dev\"",
+    "boot": "concurrently -n API,WEB,WORKER -c auto \"npm -w api run dev\" \"npm -w web run dev\" \"npm -w api run worker:dev\"",
     "docker": "docker compose -f infra/docker/docker-compose.yml up -d",
     "killdocker": "docker compose -f infra/docker/docker-compose.yml down"
   },

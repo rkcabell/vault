@@ -1,5 +1,5 @@
 import { createCanvas, Path2D, DOMMatrix, ImageData } from "@napi-rs/canvas";
-import { loadPdfJs } from "./loadPdfJs.js";
+import { loadPdfJs } from "../pdf/loadPdfJs.js";
 
 function toPdfJsData (input: Uint8Array | Buffer): Uint8Array {
   if (Buffer.isBuffer(input)) {

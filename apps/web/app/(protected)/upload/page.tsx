@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/Card";
 
 import { useUpload } from "@/components/contexts/UploadContext";
 import { toast } from "@/components/ui/Toaster";
+import { getFileSizeError, UPLOAD_LIMIT_LABELS } from "@/lib/media/uploadLimits";
 
 import {
   Upload,
@@ -37,6 +38,8 @@ const formatFileSize = (bytes: number) => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${Math.round((bytes / Math.pow(k, i)) * 100) / 100} ${sizes[i]}`;
 };
+
+const LIBRARY_PATH = "/library";
 
 type BatchInitItem = {
   filename: string;
@@ -187,7 +190,7 @@ function applyFailures(
   }
 }
 
-function exitToOverview(clearFiles: () => void, navigate: () => void) {
+function exitToLibrary(clearFiles: () => void, navigate: () => void) {
   setTimeout(() => {
     clearFiles();
     navigate();
@@ -211,7 +214,36 @@ export default function UploadPage() {
 
   const handleFileSelect = (selectedFiles: FileList | null) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
-    addFiles(Array.from(selectedFiles));
+    const incoming = Array.from(selectedFiles);
+    const valid: File[] = [];
+    const tooLarge: File[] = [];
+    const errors: string[] = [];
+
+    incoming.forEach((file) => {
+      const error = getFileSizeError(file);
+      if (error) {
+        errors.push(`${file.name}: ${error}`);
+        tooLarge.push(file);
+        return;
+      }
+      valid.push(file);
+    });
+
+    if (errors.length > 0) {
+      const summary =
+        errors.length === 1
+          ? errors[0]
+          : `${errors.length} files exceed the upload limits. First: ${errors[0]}`;
+      toast(summary, { variant: "error", duration: 5000 });
+    }
+
+    if (valid.length > 0) {
+      addFiles(valid);
+    }
+
+    if (tooLarge.length > 0) {
+      addFiles(tooLarge, { status: "error", error: "File Too Large" });
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -305,7 +337,7 @@ export default function UploadPage() {
 
       if (failed.length === 0) {
         notifyUploadSuccess();
-        exitToOverview(clearFiles, () => router.push("/overview?uploaded=1"));
+        exitToLibrary(clearFiles, () => router.push(`${LIBRARY_PATH}?uploaded=1`));
         return;
       }
 
@@ -328,9 +360,9 @@ export default function UploadPage() {
         title="Upload Media"
         description="Upload your media files"
         actions={
-          <Button variant="outline" size="sm" onClick={() => router.push("/overview")}>
+          <Button variant="outline" size="sm" onClick={() => router.push(LIBRARY_PATH)}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Overview
+            Back to Library
           </Button>
         }
       />
@@ -347,8 +379,12 @@ export default function UploadPage() {
           <div className="p-12 text-center">
             <Upload className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
             <h3 className="mb-2 text-lg font-semibold">Drop files here or click to browse</h3>
-            <p className="mb-4 text-sm text-muted-foreground">
+            <p className="mb-2 text-sm text-muted-foreground">
               Support for images, videos, and documents
+            </p>
+            <p className="mb-4 text-xs text-muted-foreground">
+              File size limits: photos up to {UPLOAD_LIMIT_LABELS.photo}, documents up to{" "}
+              {UPLOAD_LIMIT_LABELS.document}, other files up to {UPLOAD_LIMIT_LABELS.other} (hard cap).
             </p>
 
             <input

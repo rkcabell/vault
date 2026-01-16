@@ -8,6 +8,7 @@ interface User {
   id: string;
   email: string;
   name?: string;
+  avatarUrl?: string | null;
 }
 
 interface AuthContextType {
@@ -19,7 +20,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const defaultUser = { id: "0", name: "Ryan", email: "ryan@example.com" };
+const defaultUser = { id: "0", name: "default", email: "test@example.com" };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(defaultUser);
