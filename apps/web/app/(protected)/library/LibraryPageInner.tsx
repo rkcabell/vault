@@ -1,4 +1,4 @@
-// File: apps/web/app/(protected)/overview/page.tsx
+// File: apps/web/app/(protected)/library/LibraryPageInner.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -7,7 +7,7 @@ import { Container, PageHeader } from "@/components/common";
 import { MediaCard, MediaCardSkeleton, type MediaItem } from "@/components/media";
 import { Button } from "@/components/ui/Button";
 import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown } from "lucide-react";
-import { useUpload } from "@/components/contexts/UploadContext"; 
+import { useUpload } from "@/components/contexts/UploadContext";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -38,6 +38,7 @@ type DensityValue = (typeof DENSITY_OPTIONS)[number];
 
 // Default query param values.
 const DEFAULT_SORT: SortValue = "createdAt_desc";
+const LIBRARY_PATH = "/library";
 
 type MediaListItem = {
   id: string;
@@ -64,7 +65,7 @@ async function readErrorMessage(response: Response) {
   return `Failed to load media (${response.status})`;
 }
 
-export default function Overview() {
+export default function LibraryPageInner() {
   const router = useRouter();
 
   // Upload context.
@@ -145,7 +146,7 @@ export default function Overview() {
       if (value === DEFAULT_SORT) params.delete("sort");
       else params.set("sort", value);
       const nextQuery = params.toString();
-      router.push(nextQuery ? `/overview?${nextQuery}` : "/overview");
+      router.push(nextQuery ? `${LIBRARY_PATH}?${nextQuery}` : LIBRARY_PATH);
     },
     [router, searchParams],
   );
@@ -220,7 +221,7 @@ export default function Overview() {
       }
 
       if (process.env.NODE_ENV === "development") {
-        console.debug("[overview] list request", { cursor: cursor ?? null, append });
+        console.debug("[library] list request", { cursor: cursor ?? null, append });
       }
 
       try {
@@ -272,7 +273,7 @@ export default function Overview() {
     [buildQuery, hydrateItems]
   );
 
-  // Handle /overview?refresh=1 or ?uploaded=1
+  // Handle /library?refresh=1 or ?uploaded=1
   useEffect(() => {
     const refresh = searchParams.get("refresh") ?? searchParams.get("uploaded");
     if (refresh) {
@@ -283,7 +284,7 @@ export default function Overview() {
       next.delete("uploaded");
       const nextQuery = next.toString();
 
-      router.replace(nextQuery ? `/overview?${nextQuery}` : "/overview");
+      router.replace(nextQuery ? `${LIBRARY_PATH}?${nextQuery}` : LIBRARY_PATH);
     }
     setHasHandledRefreshParam(true);
   }, [router, searchParams]);
@@ -364,43 +365,43 @@ export default function Overview() {
     [deletingIds, fetchMedia]
   );
 
-const handleRename = useCallback(
-  async (id: string, nextTitle: string) => {
-    if (deletingIds.has(id)) return;
-    const trimmedTitle = nextTitle.trim();
-    if (!trimmedTitle) return;
+  const handleRename = useCallback(
+    async (id: string, nextTitle: string) => {
+      if (deletingIds.has(id)) return;
+      const trimmedTitle = nextTitle.trim();
+      if (!trimmedTitle) return;
 
-    try {
-      const res = await fetch(`/api/media/${id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ title: trimmedTitle }),
-      });
+      try {
+        const res = await fetch(`/api/media/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ title: trimmedTitle }),
+        });
 
-      if (!res.ok) {
-        const msg = await readErrorMessage(res);
-        setError(msg);
-        return;
+        if (!res.ok) {
+          const msg = await readErrorMessage(res);
+          setError(msg);
+          return;
+        }
+
+        const data = (await res.json()) as { media?: { title?: string } } | null;
+        const updatedTitle = data?.media?.title ?? trimmedTitle;
+
+        setMediaItems((prev) =>
+          prev.map((item) =>
+            item.id === id ? { ...item, title: updatedTitle } : item
+          )
+        );
+        setError(null);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to rename media.";
+        setError(message);
       }
-
-      const data = (await res.json()) as { media?: { title?: string } } | null;
-      const updatedTitle = data?.media?.title ?? trimmedTitle;
-
-      setMediaItems((prev) =>
-        prev.map((item) =>
-          item.id === id ? { ...item, title: updatedTitle } : item
-        )
-      );
-      setError(null);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to rename media.";
-      setError(message);
-    }
-  },
-  [deletingIds]
-);
+    },
+    [deletingIds]
+  );
 
   // Drag & drop handlers (no window/global pattern)
   const onDragEnter = useCallback((e: React.DragEvent) => {

@@ -1,12 +1,13 @@
 import { GetObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import type { Logger } from "pino";
-import type { MediaRepository } from "../repositories/mediaRepository.js";
-import { waitUntilObjectExists } from "../adapters/s3ObjectProbe.js";
-import { streamToBuffer } from "../lib/streams/toBuffer.js";
-import { looksLikePdf, looksLikePng } from "../lib/fileSignatures.js";
-import { renderPdfThumbnail } from "./pdf/renderPdfThumbnail.js";
-import { computeThumbKey } from "../queues/enqueueThumbnail.js";
+import type { MediaRepository } from "../../repositories/mediaRepository.js";
+import { waitUntilObjectExists } from "../../adapters/s3ObjectProbe.js";
+import { streamToBuffer } from "../../lib/streams/toBuffer.js";
+import { looksLikeMp4, looksLikePdf, looksLikePng } from "../../lib/fileSignatures.js";
+import { renderPdfThumbnail } from "./renderPdfThumbnail.js";
+import { renderVideoThumbnail } from "./renderVideoThumbnail.js";
+import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
 
 export type ThumbJob = {
   type: "thumb";
@@ -78,9 +79,30 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   if (!original) throw new Error("SOURCE_NOT_READY");
 
   let inputForSharp: Buffer = original;
-  const isPdf = (existing?.mimeType ?? "").includes("pdf") || looksLikePdf(original);
+  const mimeType = existing?.mimeType ?? "";
+  const isVideo = mimeType.startsWith("video/") || looksLikeMp4(original);
+  const isPdf = mimeType.includes("pdf") || looksLikePdf(original);
 
-  if (isPdf) {
+  if (isVideo) {
+    try {
+      inputForSharp = await renderVideoThumbnail({
+        video: original,
+        targetWidth: Math.min(1600, Math.max(800, size * 3)),
+      });
+
+      if (!looksLikePng(inputForSharp)) {
+        throw new Error("VIDEO_RENDER_DID_NOT_RETURN_PNG");
+      }
+    } catch (err) {
+      const reason = sanitizeThumbError(err);
+      await prismaMedia.setThumbFailed(job.mediaId, reason);
+      logger.error(
+        { ...logContext, reason, errorCode: reason, durationMs: Date.now() - startedAt, err },
+        "failed to render video thumbnail",
+      );
+      return;
+    }
+  } else if (isPdf) {
     try {
       inputForSharp = await renderPdfThumbnail({
         pdf: original,

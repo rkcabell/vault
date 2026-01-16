@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { requireAuth } from "../utils/authGuard.js";
 import { MEDIA_SORT_OPTIONS } from "../services/media/mediaQueryService.js";
+import { getUploadSizeError } from "../lib/media/uploadLimits.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() }).strict();
 const SORT_OPTIONS = MEDIA_SORT_OPTIONS;
@@ -14,6 +15,10 @@ const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
 
 export const mediaRoutes: FastifyPluginAsync = async app => {
   const { uploadService, queryService, readService, actionsService } = app.mediaServices;
+  const assertUploadWithinLimit = (file: { filename: string; mimeType: string; sizeBytes: number }) => {
+    const error = getUploadSizeError(file);
+    if (error) throw app.httpErrors.badRequest(error);
+  };
 
   // POST media handler - init upload -> return presigned PUT + enqueue OCR job
   app.post("/", { preHandler: [requireAuth] }, async req => {
@@ -26,6 +31,8 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         tags: z.array(z.string()).default([]),
       })
       .parse(req.body);
+
+    assertUploadWithinLimit(body);
 
     return uploadService.initUpload(req.userId!, body);
   });
@@ -48,6 +55,8 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
           .max(MAX_BATCH_ITEMS),
       })
       .parse(req.body);
+
+    body.items.forEach(assertUploadWithinLimit);
 
     return uploadService.initBatchUploads(req.userId!, body.items);
   });

@@ -35,6 +35,8 @@
     --background: 0 0% 100%;
     --foreground: 0 0% 3.9%;
 
+    --page-background: 0 0% 93.3%;
+
     --card: 0 0% 100%;
     --card-foreground: 0 0% 3.9%;
 
@@ -96,6 +98,9 @@
     --background: 0 0% 3.9%;
     --foreground: 0 0% 98%;
 
+    --page-background: 220 28% 6%;
+    /* #0b0f14 */
+
     --card: 0 0% 3.9%;
     --card-foreground: 0 0% 98%;
 
@@ -136,7 +141,7 @@
   }
 
   body {
-    background-color: hsl(var(--background));
+    background-color: hsl(var(--page-background));
     color: hsl(var(--foreground));
   }
 }
@@ -405,7 +410,8 @@ html.dark .theme-toggle {
 /* Apply this to the thumbnail card/container */
 .media-item {
   overflow: hidden;
-  border-radius: 12px;/* optional */
+  border-radius: 12px;
+  /* optional */
   transition: transform 160ms ease, box-shadow 160ms ease;
   will-change: transform;
 }
@@ -430,6 +436,7 @@ html.dark .theme-toggle {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .media-item,
   .media-item__img {
     transition: none;
@@ -456,6 +463,67 @@ html.dark .theme-toggle {
   line-height: 1.25;
   min-height: calc(1.25em * 2);
 }
+
+/* --------------------------------------
+   Overview page surfaces
+   ------------------------------------ */
+.overview-page {
+  min-height: 100vh;
+  background-color: #eeeeee;
+}
+
+html.dark .overview-page,
+:root[data-theme="dark"] .overview-page,
+[data-theme="dark"] .overview-page {
+  background-color: #0b0f14;
+}
+
+.overview-card {
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.overview-card:hover {
+  background-color: #e5e5e5;
+}
+
+html.dark .overview-card,
+[data-theme="dark"] .overview-card {
+  background-color: #111827;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.08);
+}
+
+html.dark .overview-card:hover,
+[data-theme="dark"] .overview-card:hover {
+  background-color: #273240;
+}
+
+.overview-secondary-btn {
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.overview-secondary-btn:hover {
+  background-color: #F3F4F6;
+}
+
+
+html.dark .overview-secondary-btn,
+[data-theme="dark"] .overview-secondary-btn {
+  color: #ffffff;
+  background-color: #111827;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+html.dark .overview-secondary-btn:hover,
+[data-theme="dark"] .overview-secondary-btn:hover {
+  background-color: #273240;
+}
+
 
 /* Mobile */
 

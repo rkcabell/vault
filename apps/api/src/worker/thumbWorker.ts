@@ -7,7 +7,7 @@ import {
   sanitizeThumbError,
   type ThumbJob,
   type ThumbDeps as ServiceThumbDeps,
-} from "../services/thumbnailService.js";
+} from "../services/thumb/thumbnailService.js";
 import { createLogger } from "../lib/logger.js";
 
 export type ThumbDeps = {

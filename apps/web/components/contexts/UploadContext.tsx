@@ -12,7 +12,7 @@ export interface UploadFile {
 
 interface UploadContextType {
   files: UploadFile[];
-  addFiles: (files: File[]) => void;
+  addFiles: (files: File[], opts?: { status?: UploadFile['status']; error?: string }) => void;
   removeFile: (id: string) => void;
   clearFiles: () => void;
   updateFileProgress: (id: string, progress: number) => void;
@@ -24,12 +24,13 @@ const UploadContext = createContext<UploadContextType | undefined>(undefined);
 export function UploadProvider({ children }: { children: ReactNode }) {
   const [files, setFiles] = useState<UploadFile[]>([]);
 
-  const addFiles = (newFiles: File[]) => {
+  const addFiles = (newFiles: File[], opts?: { status?: UploadFile['status']; error?: string }) => {
     const uploadFiles: UploadFile[] = newFiles.map((file) => ({
       id: `${file.name}-${Date.now()}-${Math.random()}`,
       file,
       progress: 0,
-      status: 'pending',
+      status: opts?.status ?? 'pending',
+      error: opts?.error,
     }));
     setFiles((prev) => [...prev, ...uploadFiles]);
   };

@@ -23,11 +23,9 @@ interface TopNavProps {
 }
 
 const navLinks = [
-  { href: '/search', label: 'Search' },
-  { href: '/saved-views', label: 'Saved Views' },
+  { href: '/overview', label: 'Overview' },
+  { href: '/library', label: 'Library' },
   { href: '/albums', label: 'Albums' },
-  { href: '/entities', label: 'Entities' },
-  { href: '/reminders', label: 'Reminders' },
 ];
 
 export function TopNav({ onMenuClick }: TopNavProps) {
@@ -51,6 +49,25 @@ export function TopNav({ onMenuClick }: TopNavProps) {
   (user?.name?.trim()?.charAt(0) ||
     user?.email?.trim()?.charAt(0) ||
     "?").toUpperCase();
+  const avatarUrl = user?.avatarUrl?.trim?.() || null;
+
+  const renderAvatar = (size: "sm" | "lg" = "sm") => {
+    const dimension = size === "lg" ? "h-10 w-10" : "h-8 w-8";
+    if (avatarUrl) {
+      return (
+        <img
+          src={avatarUrl}
+          alt={user?.name || user?.email || "User avatar"}
+          className={`${dimension} rounded-full object-cover border border-border`}
+        />
+      );
+    }
+    return (
+      <div className={`flex ${dimension} items-center justify-center rounded-full bg-primary text-primary-foreground text-sm`}>
+        {initial}
+      </div>
+    );
+  };
 
   return (
     <nav className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -67,7 +84,7 @@ export function TopNav({ onMenuClick }: TopNavProps) {
 
         <Link href="/" className="flex items-center gap-2 font-semibold text-lg">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-             {"U"}
+             {"V"}
           </div>
           <span className="hidden sm:inline-block">Vault</span>
         </Link>
@@ -140,9 +157,7 @@ export function TopNav({ onMenuClick }: TopNavProps) {
                 className="gap-2"
                 aria-label="User menu"
               >
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm">
-                 {initial}
-                </div>
+                {renderAvatar("sm")}
                 <span className="hidden sm:inline-block text-sm font-medium">
                   {user.name || user.email}
                 </span>
@@ -151,9 +166,7 @@ export function TopNav({ onMenuClick }: TopNavProps) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <div className="flex items-center gap-2 p-2">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                  {initial}
-                </div>
+                {renderAvatar("lg")}
                 <div className="flex flex-col">
                   <span className="text-sm font-medium">{user.name || 'User'}</span>
                   <span className="text-xs text-muted-foreground">{user.email}</span>
