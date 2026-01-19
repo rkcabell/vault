@@ -2,12 +2,13 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/contexts/AuthContext";
 import styles from "./authpage.module.css";
 
 export default function AuthPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const { refresh } = useAuth();
 
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
@@ -94,11 +95,8 @@ export default function AuthPage() {
         }
       }
 
-      const next = searchParams.get("next");
-      const dest =
-        next && next.startsWith("/") && !next.startsWith("//") ? next : "/overview";
-
-      router.push(dest);
+      await refresh();
+      router.push("/overview");
     } catch {
       setError("Network error. Please check your connection.");
     } finally {

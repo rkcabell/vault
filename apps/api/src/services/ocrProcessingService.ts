@@ -4,7 +4,11 @@ import type { Logger } from "pino";
 import type { DocumentRepository } from "../repositories/documentRepository.js";
 import type { MediaRepository } from "../repositories/mediaRepository.js";
 import { waitUntilObjectExists } from "../adapters/s3ObjectProbe.js";
-import { processTextJob, TextJobError } from "../lib/text/processTextJob.js";
+import {
+  processTextJob,
+  TextJobError,
+  type ProcessTextJobDeps,
+} from "../lib/text/processTextJob.js";
 
 export type OcrJobData = {
   mediaId: string;
@@ -25,6 +29,7 @@ export type OcrProcessingDeps = {
   logger: Logger;
   queueName: string;
   sleep?: (ms: number) => Promise<unknown>;
+  textDeps?: ProcessTextJobDeps;
 };
 
 function isTransientError (err: unknown) {
@@ -46,7 +51,7 @@ function isTransientError (err: unknown) {
 
 export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) {
   const { mediaRepository, documentRepository, s3, bucket, enqueueOcr, logger, sleep } = deps;
-  const { mediaId, storageKey, forceOcr } = data;
+  const { mediaId, storageKey, forceOcr, language, rotation } = data;
 
   const logContext = {
     jobName: "ocr",
@@ -83,7 +88,9 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
         bucket,
         key,
         mimeType: media.mimeType,
-      });
+        language,
+        rotation,
+      }, deps.textDeps);
 
       logger.info(
         {
@@ -106,8 +113,8 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
 
       if (extracted.needsOcr) {
         await enqueueOcr(
-          { mediaId, storageKey: key, forceOcr: true },
-          { attempts: 5, backoff: { type: "exponential", delay: 2000 } },
+          { mediaId, storageKey: key, forceOcr: true, language, rotation },
+          { attempts: 1 },
         );
         logger.info({ ...logContext }, "queued OCR fallback");
       }
@@ -131,7 +138,9 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
     key,
     mimeType: media.mimeType,
     forceOcr: true,
-  });
+    language,
+    rotation,
+  }, deps.textDeps);
 
   await documentRepository.upsertDocument({
     mediaId,

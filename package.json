@@ -17,8 +17,12 @@
     "prismigrate": "npx prisma migrate dev --schema packages/db/prisma/schema.prisma",
     "prismareset": "npx prisma migrate reset --schema packages/db/prisma/schema.prisma",
     "boot": "concurrently -n API,WEB,WORKER -c auto \"npm -w api run dev\" \"npm -w web run dev\" \"npm -w api run worker:dev\"",
-    "docker": "docker compose -f infra/docker/docker-compose.yml up -d",
-    "killdocker": "docker compose -f infra/docker/docker-compose.yml down"
+    "localdocker": "docker compose -f infra/docker/docker-minimal.yml up -d",
+    "docker:build": "docker compose -f infra/docker/docker-compose.yml up -d --build",
+    "docker:rebuild-clean": "docker compose -f infra/docker/docker-compose.yml build --no-cache && docker compose -f infra/docker/docker-compose.yml up -d",
+    "docker:logs": "docker compose -f infra/docker/docker-compose.yml logs -f",
+    "dockerup": "docker compose -f infra/docker/docker-compose.yml up -d",
+    "dockerdown": "docker compose -f infra/docker/docker-compose.yml down"
   },
   "engines": {
     "node": ">=18.18"
@@ -31,6 +35,8 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.88",
-    "@tailwindcss/aspect-ratio": "^0.4.2"
+    "@tailwindcss/aspect-ratio": "^0.4.2",
+    "franc": "^6.2.0",
+    "react-resizable-panels": "^4.4.1"
   }
 }

@@ -1,8 +1,7 @@
 //File: apps/web/components/contexts/AuthContext.tsx
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-
 
 interface User {
   id: string;
@@ -11,53 +10,87 @@ interface User {
   avatarUrl?: string | null;
 }
 
+type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
+
 interface AuthContextType {
   user: User | null;
-  isLoading: boolean;
+  status: AuthStatus;
   logout: () => Promise<void>;
+  refresh: () => Promise<void>;
   setUser: (user: User | null) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const defaultUser = { id: "0", name: "default", email: "test@example.com" };
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(defaultUser);
-  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [status, setStatus] = useState<AuthStatus>('loading');
   const router = useRouter();
 
-  useEffect(() => {
-    checkAuth();
-  }, []);
-
-  const checkAuth = async () => {
+  const logout = useCallback(async () => {
     try {
-      const response = await fetch('/api/auth/me');
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch (error) {
+      console.error('Logout failed:', error);
+    } finally {
+      setUser(null);
+      setStatus('unauthenticated');
+      router.push('/auth');
+    }
+  }, [router]);
+
+  const refresh = useCallback(async () => {
+    setStatus('loading');
+    try {
+      const response = await fetch('/api/auth/me', { credentials: 'include' });
+
       if (response.ok) {
         const userData = await response.json();
         const nextUser = userData?.user ?? userData;
-        setUser(nextUser ?? null);
+        if (nextUser) {
+          setUser({ ...nextUser });
+          setStatus('authenticated');
+          return;
+        }
+        await logout();
+        return;
       }
-    } catch (error) {
-      console.error('Auth check failed:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
-  const logout = async () => {
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      if ([401, 404, 500].includes(response.status)) {
+        await logout();
+        return;
+      }
+
       setUser(null);
-      router.push('/auth');
+      setStatus('unauthenticated');
     } catch (error) {
-      console.error('Logout failed:', error);
+      console.error('Auth refresh failed:', error);
+      setUser(null);
+      setStatus('unauthenticated');
+    }
+  }, [logout]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      if (status !== 'authenticated') void refresh();
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [status, refresh]);
+
+  const replaceUser = (nextUser: User | null) => {
+    setUser(nextUser ? { ...nextUser } : null);
+    if (!nextUser) {
+      setStatus('unauthenticated');
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, logout, setUser }}>
+    <AuthContext.Provider value={{ user, status, logout, refresh, setUser: replaceUser }}>
       {children}
     </AuthContext.Provider>
   );

@@ -464,6 +464,33 @@ html.dark .theme-toggle {
   min-height: calc(1.25em * 2);
 }
 
+.previewer-surface {
+  background-color: #aaa;
+}
+
+html.dark .previewer-surface,
+:root[data-theme="dark"] .previewer-surface,
+[data-theme="dark"] .previewer-surface {
+  background-color: transparent;
+}
+
+/* Text extraction error panel dark mode overrides */
+html.dark .text-error-panel,
+:root[data-theme="dark"] .text-error-panel,
+[data-theme="dark"] .text-error-panel {
+  background-color: #2b0f12;
+  border-color: #7f1d1d;
+  color: #fecaca;
+}
+
+html.dark .text-error-panel__detail,
+:root[data-theme="dark"] .text-error-panel__detail,
+[data-theme="dark"] .text-error-panel__detail {
+  background-color: rgba(127, 29, 29, 0.2);
+  border-color: #7f1d1d;
+  color: #fecaca;
+}
+
 /* --------------------------------------
    Overview page surfaces
    ------------------------------------ */

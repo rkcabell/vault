@@ -23,14 +23,6 @@ export function middleware (req: NextRequest) {
   // Always allow api routes
   if (pathname.startsWith('/api')) return NextResponse.next()
 
-  // If already logged in, skip past login page
-  if (pathname === '/auth' && token) {
-    const url = req.nextUrl.clone()
-    url.pathname = '/overview'
-    url.search = ''
-    return NextResponse.redirect(url)
-  }
-
   // Allow public prefixes
   if (PUBLIC_PREFIXES.some(p => pathname.startsWith(p))) {
     return NextResponse.next()

@@ -8,6 +8,21 @@ services:
     ports: [ "5432:5432" ]
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U vault -d vault" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports: [ "6379:6379" ]
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -17,9 +32,93 @@ services:
     ports: [ "9000:9000", "9001:9001" ]
     volumes:
       - minio:/data
-  redis:
-    image: redis:7
-    ports: [ "6379:6379" ]
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    env_file:
+      - ../../.env.docker
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - ../..:/app
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      POSTGRES_URL: postgresql://vault:vault@postgres:5432/vault
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY_ID: vault
+      S3_SECRET_ACCESS_KEY: vaultvault
+      S3_BUCKET: vault-media
+      S3_REGION: us-east-1
+      S3_FORCE_PATH_STYLE: "true"
+      JWT_SECRET: 3799e17f467feb61d731aed1195b492afd8c8b351b3170b9896a365799249f38
+      JWT_REFRESH_SECRET: e65fb1af84db165f66d64083dffb5350f3381036968466610b50246d81952ab0
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "500"
+    ports: [ "8000:8000" ]
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: web
+    depends_on:
+      - api
+    working_dir: /app
+    volumes:
+      - ../..:/app
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+      API_BASE_URL: http://api:8000
+      WATCHPACK_POLLING: "true"
+      WATCHPACK_POLLING_INTERVAL: "500"
+    ports: [ "3000:3000" ]
+
+  jobs:
+    env_file:
+      - ../../.env.docker
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: jobs
+    depends_on:
+      - api
+    working_dir: /app
+    volumes:
+      - ../..:/app
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+      POSTGRES_URL: postgresql://vault:vault@postgres:5432/vault
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY_ID: vault
+      S3_SECRET_ACCESS_KEY: vaultvault
+      S3_BUCKET: vault-media
+      S3_REGION: us-east-1
+      S3_FORCE_PATH_STYLE: "true"
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "500"
 
 volumes:
   minio:

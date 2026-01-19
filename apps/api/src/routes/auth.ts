@@ -94,20 +94,18 @@ export const authRoutes: FastifyPluginAsync = async app => {
 
       try {
         const { user, tokens } = await authService.login(data.email, data.password);
+        const cookieConfig = {
+          httpOnly: true,
+          sameSite: "lax" as const,
+          path: "/",
+          secure: process.env.NODE_ENV === "production",
+        };
 
         reply
-          .setCookie("access_token", tokens.access, {
-            httpOnly: true,
-            sameSite: "lax",
-            path: "/",
-            secure: process.env.NODE_ENV === "production",
-          })
-          .setCookie("refresh_token", tokens.refresh, {
-            httpOnly: true,
-            sameSite: "lax",
-            path: "/",
-            secure: process.env.NODE_ENV === "production",
-          });
+          .clearCookie("access_token", { ...cookieConfig })
+          .clearCookie("refresh_token", { ...cookieConfig })
+          .setCookie("access_token", tokens.access, cookieConfig)
+          .setCookie("refresh_token", tokens.refresh, cookieConfig);
 
         return reply.send({ user });
       } catch (err) {

@@ -52,7 +52,7 @@ function formatDate(dateString: string) {
 }
 
 export default function ProfilePage() {
-  const { user, setUser } = useAuth();
+  const { user, setUser, status } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -63,6 +63,16 @@ export default function ProfilePage() {
   useEffect(() => {
     loadProfile();
   }, []);
+
+  const syncAuthUser = (nextProfile: UserProfile) => {
+    if (status !== 'authenticated') return;
+    setUser({
+      id: nextProfile.id,
+      email: nextProfile.email,
+      name: nextProfile.name ?? undefined,
+      avatarUrl: nextProfile.avatarUrl ?? null,
+    });
+  };
 
   const loadProfile = async () => {
     try {
@@ -92,13 +102,7 @@ export default function ProfilePage() {
           location: nextProfile.location ?? '',
           avatarUrl: nextProfile.avatarUrl ?? '',
         });
-
-        if (user) {
-          setUser({
-            ...user,
-            name: nextProfile.name ?? user.name,
-          });
-        }
+        syncAuthUser(nextProfile);
       }
     } catch (error) {
       console.error('Error loading profile:', error);
@@ -147,12 +151,7 @@ export default function ProfilePage() {
           location: nextProfile.location ?? '',
           avatarUrl: nextProfile.avatarUrl ?? '',
         });
-        if (user) {
-          setUser({
-            ...user,
-            name: nextProfile.name ?? user.name,
-          });
-        }
+        syncAuthUser(nextProfile);
       }
 
       setIsEditing(false);

@@ -1,6 +1,7 @@
 // File: apps/api/src/lib/text/processTextJob.ts
 import type { S3Client } from "@aws-sdk/client-s3";
 import { extractPdfText, type PdfTextPage } from "@/services/pdf/extractPdfText.js";
+import { ocrWithOcrmypdf } from "@/services/ocr/ocrWithOcrmypdf.js";
 import { getObjectBuffer } from "../../adapters/s3/getObjectBuffer.js";
 
 export type TextSource = "NATIVE" | "OCR";
@@ -23,20 +24,32 @@ export type ProcessTextResult = {
   needsOcr: boolean;
 };
 
-export async function processTextJob (args: {
-  s3: S3Client;
-  bucket: string;
-  key: string;
-  mimeType?: string | null;
-  forceOcr?: boolean;
-}): Promise<ProcessTextResult> {
-  const { s3, bucket, key, mimeType, forceOcr } = args;
+export type ProcessTextJobDeps = {
+  getObjectBuffer?: typeof getObjectBuffer;
+  ocrWithOcrmypdf?: typeof ocrWithOcrmypdf;
+};
 
-  const isPdf = mimeType?.includes("pdf");
+export async function processTextJob (
+  args: {
+    s3: S3Client;
+    bucket: string;
+    key: string;
+    mimeType?: string | null;
+    forceOcr?: boolean;
+    language?: string | null;
+    rotation?: string | null;
+  },
+  deps: ProcessTextJobDeps = {},
+): Promise<ProcessTextResult> {
+  const { s3, bucket, key, mimeType, forceOcr, language, rotation } = args;
+  const getBuffer = deps.getObjectBuffer ?? getObjectBuffer;
+  const runOcrmypdf = deps.ocrWithOcrmypdf ?? ocrWithOcrmypdf;
+
+  const isPdf = mimeType ? mimeType.toLowerCase().includes("pdf") : false;
 
   // Native extraction path
   if (isPdf && !forceOcr) {
-    const pdfBuffer = await getObjectBuffer(s3, bucket, key);
+    const pdfBuffer = await getBuffer(s3, bucket, key);
     if (!pdfBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 
     const extracted = await extractPdfText(pdfBuffer);
@@ -49,11 +62,29 @@ export async function processTextJob (args: {
     };
   }
 
-  // OCR not performed here; signal that OCR is needed.
+  const sourceBuffer = await getBuffer(s3, bucket, key);
+  if (!sourceBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
+
+  // OCR path for images and PDFs (forced) using OCRmyPDF, then extract text from OCR'd PDF.
+  const { ocrPdf } = await runOcrmypdf({
+    input: sourceBuffer,
+    mimeType,
+    language: language ?? undefined,
+    rotation: rotation ?? undefined,
+  });
+
+  let extracted;
+  try {
+    extracted = await extractPdfText(ocrPdf);
+  } catch {
+    // One retry for OCR text extraction only.
+    extracted = await extractPdfText(ocrPdf);
+  }
+
   return {
     textSource: "OCR",
-    rawText: "STUB: File processed at ${new Date().toISOString()}",
-    pages: null,
-    needsOcr: true,
+    rawText: extracted.fullText,
+    pages: extracted.pages,
+    needsOcr: false,
   };
 }

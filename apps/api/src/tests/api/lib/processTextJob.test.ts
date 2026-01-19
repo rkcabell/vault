@@ -61,18 +61,33 @@ test("processTextJob extracts native text for PDFs", async () => {
   assert.equal(result.pages?.length, 1);
 });
 
-test("processTextJob returns OCR stub for non-PDFs", async () => {
+test("processTextJob runs OCRmyPDF for non-PDFs", async () => {
   const s3 = { send: async () => ({}) } as unknown as S3Client;
-  const result = await processTextJob({
-    s3,
-    bucket: "bucket",
-    key: "file.png",
-    mimeType: "image/png",
-  });
+  const ocrCalls: unknown[] = [];
+  const result = await processTextJob(
+    {
+      s3,
+      bucket: "bucket",
+      key: "file.png",
+      mimeType: "image/png",
+      language: "eng",
+      rotation: "90",
+    },
+    {
+      getObjectBuffer: async () => Buffer.from("fake image bytes"),
+      ocrWithOcrmypdf: async args => {
+        ocrCalls.push(args);
+        return { ocrPdf: buildMinimalPdf("Hello from OCR") };
+      },
+    },
+  );
 
   assert.equal(result.textSource, "OCR");
-  assert.ok(result.rawText.includes("STUB: File processed"));
-  assert.equal(result.pages, null);
+  assert.equal(result.rawText, "Hello from OCR");
+  assert.equal(result.pages?.length, 1);
+  assert.equal(result.needsOcr, false);
+  assert.equal(ocrCalls.length, 1);
+  assert.equal((ocrCalls[0] as { language: string }).language, "eng");
 });
 
 test("processTextJob throws when PDF source is missing", async () => {

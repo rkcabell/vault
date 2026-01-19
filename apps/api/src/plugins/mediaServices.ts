@@ -50,6 +50,7 @@ export default fp(
         s3Adapter,
         bucket: app.config.S3_BUCKET,
         logger: app.log,
+        ocrQueue,
       }),
       actionsService: createMediaActionsService({
         repository,
