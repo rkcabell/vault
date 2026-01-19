@@ -10,6 +10,7 @@ import { profileRoutes } from "./routes/profile.js";
 import s3Plugin from "./plugins/s3.js";
 import mediaServicesPlugin from "./plugins/mediaServices.js";
 import { mediaRoutes } from "./routes/media.js";
+import { tagsRoutes } from "./routes/tags.js";
 import redisPlugin from "./plugins/redis.js";
 import rateLimitPlugin from "./plugins/rateLimit.js";
 import dotenv from "dotenv";
@@ -44,6 +45,7 @@ async function main () {
   await app.register(s3Plugin); // aws bucket storage
   await app.register(mediaServicesPlugin); // media services + queues wiring
   await app.register(mediaRoutes, { prefix: "/api/media" });
+  await app.register(tagsRoutes, { prefix: "/api/tags" });
   await app.register(redisPlugin); // Redis for queue/rate-limit groundwork
   await app.register(rateLimitPlugin); // Redis rate limit
 

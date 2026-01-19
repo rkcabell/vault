@@ -3,7 +3,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 export type MediaListFilters = {
   userId: string;
   queryText?: string | null;
-  tag?: string | null;
+  tags?: string[];
   thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED";
   textState?: "PENDING" | "READY" | "ERROR" | "FAILED";
   orderBy: Prisma.MediaOrderByWithRelationInput[];
@@ -38,7 +38,7 @@ export class MediaRepository {
   }
 
   async listMedia (filters: MediaListFilters) {
-    const { userId, queryText, tag, thumbState, textState, orderBy, take, cursor, skip } = filters;
+    const { userId, queryText, tags, thumbState, textState, orderBy, take, cursor, skip } = filters;
 
     return this.prisma.media.findMany({
       where: {
@@ -51,7 +51,7 @@ export class MediaRepository {
               ],
             }
           : {}),
-        ...(tag ? { tags: { has: tag } } : {}),
+        ...(tags?.length ? { tags: { hasEvery: tags } } : {}),
         ...(thumbState ? { thumbState } : {}),
         ...(textState ? { textState } : {}),
       },
@@ -82,6 +82,10 @@ export class MediaRepository {
   }
 
   async findMediaForTitleUpdate (userId: string, id: string) {
+    return this.findMediaForUpdate(userId, id);
+  }
+
+  async findMediaForUpdate (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
       select: { id: true },
@@ -89,9 +93,16 @@ export class MediaRepository {
   }
 
   async updateTitle (id: string, title: string) {
+    return this.updateMetadata(id, { title });
+  }
+
+  async updateMetadata (id: string, data: { title?: string; tags?: string[] }) {
     return this.prisma.media.update({
       where: { id },
-      data: { title },
+      data: {
+        ...(data.title !== undefined ? { title: data.title } : {}),
+        ...(data.tags !== undefined ? { tags: data.tags } : {}),
+      },
       select: {
         id: true,
         title: true,
@@ -100,6 +111,7 @@ export class MediaRepository {
         mimeType: true,
         thumbState: true,
         textState: true,
+        tags: true,
       },
     });
   }
@@ -157,6 +169,7 @@ export class MediaRepository {
           select: {
             rawText: true,
             textSource: true,
+            pages: true,
           },
         },
       },
@@ -196,5 +209,61 @@ export class MediaRepository {
       where: { id: mediaId },
       data: { textState: state },
     });
+  }
+
+  async listTopTags (userId: string, limit: number) {
+    return this.prisma.$queryRaw<{ tag: string; count: number }[]>`
+      WITH media_counts AS (
+        SELECT tag, COUNT(*)::int AS count
+        FROM (
+          SELECT unnest("tags") AS tag
+          FROM "Media"
+          WHERE "userId" = ${userId}
+        ) t
+        GROUP BY tag
+      ),
+      catalog AS (
+        SELECT "name" AS tag, 0::int AS count
+        FROM "Tag"
+        WHERE "userId" = ${userId}
+      ),
+      combined AS (
+        SELECT tag, count FROM media_counts
+        UNION
+        SELECT c.tag, c.count FROM catalog c WHERE NOT EXISTS (
+          SELECT 1 FROM media_counts mc WHERE mc.tag = c.tag
+        )
+      )
+      SELECT tag, count
+      FROM combined
+      ORDER BY count DESC, tag ASC
+      LIMIT ${limit}
+    `;
+  }
+
+  async ensureTag (userId: string, tag: string) {
+    await this.prisma.tag.upsert({
+      where: { userId_name: { userId, name: tag } },
+      update: {},
+      create: { userId, name: tag },
+    });
+  }
+
+  async ensureTags (userId: string, tags: string[]) {
+    if (!tags.length) return;
+    await Promise.all(tags.map(tag => this.ensureTag(userId, tag)));
+  }
+
+  async deleteTag (userId: string, tag: string) {
+    await this.prisma.$transaction([
+      this.prisma.$executeRaw`
+        UPDATE "Media"
+        SET "tags" = array_remove("tags", ${tag})
+        WHERE "userId" = ${userId} AND ${tag} = ANY("tags")
+      `,
+      this.prisma.tag.deleteMany({
+        where: { userId, name: tag },
+      }),
+    ]);
   }
 }

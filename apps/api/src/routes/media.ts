@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireAuth } from "../utils/authGuard.js";
 import { MEDIA_SORT_OPTIONS } from "../services/media/mediaQueryService.js";
 import { getUploadSizeError } from "../lib/media/uploadLimits.js";
+import { normalizeTags, TagValidationError } from "../lib/tags/normalizeTags.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() }).strict();
 const SORT_OPTIONS = MEDIA_SORT_OPTIONS;
@@ -19,6 +20,14 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     const error = getUploadSizeError(file);
     if (error) throw app.httpErrors.badRequest(error);
   };
+  const parseTags = (value: unknown) => {
+    try {
+      return normalizeTags(value);
+    } catch (error) {
+      if (error instanceof TagValidationError) throw app.httpErrors.badRequest(error.message);
+      throw error;
+    }
+  };
 
   // POST media handler - init upload -> return presigned PUT + enqueue OCR job
   app.post("/", { preHandler: [requireAuth] }, async req => {
@@ -28,13 +37,13 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         mimeType: z.string().min(1),
         sizeBytes: z.number().int().positive(),
         title: z.string().min(1),
-        tags: z.array(z.string()).default([]),
+        tags: z.unknown().optional(),
       })
       .parse(req.body);
 
     assertUploadWithinLimit(body);
 
-    return uploadService.initUpload(req.userId!, body);
+    return uploadService.initUpload(req.userId!, { ...body, tags: parseTags(body.tags) });
   });
 
   // POST /media/batch-init - init uploads in one DB transaction
@@ -48,7 +57,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
               mimeType: z.string().trim().min(1),
               sizeBytes: z.number().int().positive(),
               title: z.string().trim().min(1).optional(),
-              tags: z.array(z.string().trim().min(1)).default([]),
+              tags: z.unknown().optional(),
             }),
           )
           .min(1)
@@ -58,7 +67,9 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     body.items.forEach(assertUploadWithinLimit);
 
-    return uploadService.initBatchUploads(req.userId!, body.items);
+    const items = body.items.map(item => ({ ...item, tags: parseTags(item.tags) }));
+
+    return uploadService.initBatchUploads(req.userId!, items);
   });
 
   // POST /media/batch-finalize - mark uploads ready + enqueue processing
@@ -75,10 +86,12 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
   // GET /media - list my media
   app.get("/", { preHandler: [requireAuth] }, async req => {
     const userId = req.userId!;
+    const rawQuery = req.query as Record<string, unknown>;
     const Query = z.object({
       q: z.string().trim().optional(),
       search: z.string().trim().optional(),
       tag: z.string().trim().optional(),
+      tags: z.unknown().optional(),
       thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
       textState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
       sort: z.enum(SORT_OPTIONS).optional(),
@@ -86,14 +99,33 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       cursor: z.string().optional(),
       page: z.coerce.number().int().min(1).optional(),
     });
-    const { q, search, tag, thumbState, textState, sort, limit, cursor, page } = Query.parse(
-      req.query,
+    const { q, search, tag, tags, thumbState, textState, sort, limit, cursor, page } = Query.parse(
+      rawQuery,
     );
+    const hasTagsParam = Object.prototype.hasOwnProperty.call(rawQuery, "tags");
+    const hasTagParam = Object.prototype.hasOwnProperty.call(rawQuery, "tag");
+
+    if (hasTagParam && hasTagsParam) {
+      throw app.httpErrors.badRequest("Use either ?tag=one or ?tags=one,two");
+    }
+
+    const tagFilters: string[] = [];
+    if (hasTagsParam) {
+      const parsed = parseTags(tags);
+      if (parsed.length === 0) throw app.httpErrors.badRequest("Provide at least one tag");
+      tagFilters.push(...parsed);
+    } else if (hasTagParam) {
+      const parsed = parseTags(tag);
+      if (parsed.length !== 1)
+        throw app.httpErrors.badRequest("Use ?tags=... for multiple tag filters");
+      tagFilters.push(parsed[0]);
+    }
+
     const queryText = q ?? search;
 
     return queryService.listMedia(userId, {
       queryText,
-      tag,
+      tags: tagFilters,
       thumbState,
       textState,
       sort,
@@ -101,6 +133,19 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       cursor,
       page,
     });
+  });
+
+  // GET /media/tags - list top tags for the user
+  app.get("/tags", { preHandler: [requireAuth] }, async req => {
+    const userId = req.userId!;
+    const Query = z.object({
+      limit: z.coerce.number().int().min(1).max(200).default(50),
+    });
+    const { limit } = Query.parse(req.query);
+
+    const tags = await queryService.listTopTags(userId, limit);
+
+    return { tags };
   });
 
   // DELETE /media/:id - delete my media
@@ -128,11 +173,21 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       const { id } = paramsSchema.parse(req.params);
       const body = z
         .object({
-          title: z.string().min(1),
+          title: z.string().min(1).optional(),
+          tags: z.unknown().optional(),
+        })
+        .refine(data => data.title !== undefined || data.tags !== undefined, {
+          message: "Provide a title or tags to update",
         })
         .parse(req.body);
 
-      const media = await actionsService.updateMediaTitle(userId, id, body.title);
+      const hasTagsField = Object.prototype.hasOwnProperty.call(req.body ?? {}, "tags");
+      const tags = hasTagsField ? parseTags(body.tags) : undefined;
+
+      const media = await actionsService.updateMediaMetadata(userId, id, {
+        title: body.title,
+        tags,
+      });
 
       if (!media) return reply.notFound();
 
@@ -188,13 +243,14 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         .object({
           language: z.string().trim().min(2).max(12).optional(),
           rotation: z.enum(["0", "90", "180", "270"]).optional(),
+          forceOcr: z.boolean().optional(),
         })
         .parse(req.body ?? {});
 
       const result = await actionsService.enqueueTextExtraction(userId, id, {
         language: body.language,
         rotation: body.rotation,
-        forceOcr: false,
+        forceOcr: body.forceOcr ?? false,
       });
 
       if (!result) return reply.notFound();

@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/Card";
 
 import { useUpload } from "@/components/contexts/UploadContext";
 import { toast } from "@/components/ui/Toaster";
+import { emitTagsUpdated } from "@/lib/tags";
 import { getFileSizeError, UPLOAD_LIMIT_LABELS } from "@/lib/media/uploadLimits";
 
 import {
@@ -322,6 +323,7 @@ export default function UploadPage() {
       const { failed, completed } = await uploadBatch(plans, uploadOne);
 
       if (completed.length > 0) {
+        emitTagsUpdated();
         try {
           await batchFinalize(completed.map((item) => item.mediaId));
         } catch (err) {

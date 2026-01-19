@@ -9,43 +9,22 @@ Vault is intentionally built as a real system (auth, storage, queues, async jobs
 
 ---
 
-## What Vault Is (Conceptually)
+## What Vault Is
 
-Vault is built around a simple loop:
 
-**Capture → Enrich → Review → Act → Archive**
 
-- **Capture**: Upload files securely using presigned URLs.
-- **Enrich**: Background workers perform OCR, thumbnail generation, and metadata extraction.
-- **Review**: Users browse an inbox/library view driven by queries, not folders.
-- **Act**: Content can generate reminders, tasks, or planning signals.
-- **Archive**: Files remain searchable and linked by meaning, not location.
 
----
-
-## Current State
-
-Implemented:
-
-- Authentication via cookies
-- Media upload initialization with presigned S3/MinIO URLs
-- Object storage (S3-compatible)
-- Relational metadata storage
-- Background job queue for async processing (OCR/thumbnails)
-- Basic API routes for media creation and retrieval
-
----
 
 ## Tech Stack
 
 ### Backend
 
 - Node.js
-- Fastify
-- Prisma
+- Fastify - HTTP framework. Handles routing, requests, and responses
+- Prisma - Data access. Maps application models to database tables
 - PostgreSQL
-- Redis
-- MinIO local S3-compatible storage
+- Redis - Volatile data layer. Used for caching, sessions, queues
+- MinIO - Local object storage
 
 ### Frontend
 

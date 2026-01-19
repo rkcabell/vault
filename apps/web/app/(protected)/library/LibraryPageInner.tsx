@@ -100,7 +100,16 @@ export default function LibraryPageInner() {
   // Search and filter params.
   const searchParams = useSearchParams();
   const q = searchParams.get("q")?.trim() ?? "";
-  const tag = searchParams.get("tag")?.trim() ?? "";
+  const tagsParam = searchParams.get("tags")?.trim() ?? "";
+  const singleTag = searchParams.get("tag")?.trim() ?? "";
+  const tags = useMemo(() => {
+    const list = tagsParam
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (list.length > 0) return list;
+    return singleTag ? [singleTag] : [];
+  }, [singleTag, tagsParam]);
   const thumbState = searchParams.get("thumbState")?.trim() ?? "";
   const textState = searchParams.get("textState")?.trim() ?? "";
   const sortParam = searchParams.get("sort")?.trim();
@@ -131,13 +140,13 @@ export default function LibraryPageInner() {
       params.set("limit", String(PAGE_SIZE));
       params.set("sort", sort);
       if (q) params.set("q", q);
-      if (tag) params.set("tag", tag);
+      if (tags.length) params.set("tags", tags.join(","));
       if (thumbState) params.set("thumbState", thumbState);
       if (textState) params.set("textState", textState);
       if (cursor) params.set("cursor", cursor);
       return params.toString();
     },
-    [q, sort, tag, textState, thumbState]
+    [q, sort, tags, textState, thumbState]
   );
 
   const handleSortChange = useCallback(
@@ -292,7 +301,7 @@ export default function LibraryPageInner() {
   useEffect(() => {
     if (!hasHandledRefreshParam) return;
     fetchMedia();
-  }, [fetchMedia, hasHandledRefreshParam, q, refreshToken, sort, tag, textState, thumbState]);
+  }, [fetchMedia, hasHandledRefreshParam, q, refreshToken, sort, tags, textState, thumbState]);
 
   // Poll while anything is pending
   const hasPending = useMemo(
@@ -617,8 +626,8 @@ export default function LibraryPageInner() {
         )}
 
         {nextCursor && mediaItems.length > 0 && (
-          <div className="mt-6 flex justify-center">
-            <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}>
+          <div className=" mt-6 flex justify-center">
+            <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}> 
               {isLoadingMore ? "Loading more..." : "Load more"}
             </Button>
           </div>
