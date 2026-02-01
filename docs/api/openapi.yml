@@ -1,0 +1,2422 @@
+openapi: 3.1.0
+info:
+  title: Vault API
+  version: 0.1.0
+  description: |
+    Vault HTTP JSON API.
+
+    Conventions:
+    - JSON request/response bodies use `application/json` unless otherwise noted.
+    - Error responses use the `ErrorResponse` schema.
+    - Pagination: list endpoints use `limit` with cursor-based pagination via `cursor`/`nextCursor`. The media list also supports page-based pagination via `page`/`nextPage` when `cursor` is omitted. Max `limit` for media list is 100.
+    - IDs are strings; media IDs are validated as UUIDs in path parameters.
+    - Timestamps are RFC3339 `date-time` strings.
+    - Auth: `requireAuth` prefers `Authorization: Bearer <token>` and falls back to the `access_token` cookie. `/api/auth/me` is cookie-only.
+    - Query array params use `style: form` with `explode: true` (e.g., `tags=one&tags=two`).
+servers:
+  - url: http://127.0.0.1:8000
+    description: Local dev
+tags:
+  - name: Auth
+  - name: Profile
+  - name: Media
+  - name: Tags
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+paths:
+  /api/auth/me:
+    get:
+      summary: Get the current user
+      description: Reads the `access_token` cookie.
+      tags:
+        - Auth
+      operationId: auth_me
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthMeResponse"
+              examples:
+                success:
+                  value:
+                    user:
+                      id: "usr_123"
+                      email: "user@example.com"
+                      name: "Casey"
+                      username: "casey"
+                      avatarUrl: "https://cdn.example.com/avatar.png"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/auth/register:
+    post:
+      summary: Register a new user
+      tags:
+        - Auth
+      operationId: auth_register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthRegisterRequest"
+            examples:
+              register:
+                value:
+                  email: "user@example.com"
+                  password: "correct-horse-battery"
+      responses:
+        "200":
+          description: Registration completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthRegisterResponse"
+              examples:
+                success:
+                  value:
+                    user:
+                      id: "usr_123"
+                      email: "user@example.com"
+                    access: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.access"
+                    refresh: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.refresh"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                badRequest:
+                  value:
+                    statusCode: 400
+                    error: "Bad Request"
+                    message: "User already exists"
+        "429":
+          description: Too many requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                rateLimited:
+                  $ref: "#/components/examples/ErrorRateLimited"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/auth/login:
+    post:
+      summary: Log in and set auth cookies
+      description: Sets `access_token` and `refresh_token` cookies.
+      tags:
+        - Auth
+      operationId: auth_login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthLoginRequest"
+            examples:
+              login:
+                value:
+                  email: "user@example.com"
+                  password: "correct-horse-battery"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthLoginResponse"
+              examples:
+                success:
+                  value:
+                    user:
+                      id: "usr_123"
+                      email: "user@example.com"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                badRequest:
+                  value:
+                    statusCode: 400
+                    error: "Bad Request"
+                    message: "Invalid email or password format"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value:
+                    statusCode: 401
+                    error: "Unauthorized"
+                    message: "Invalid credentials"
+        "429":
+          description: Too many requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                rateLimited:
+                  $ref: "#/components/examples/ErrorRateLimited"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/auth/refresh:
+    post:
+      summary: Refresh the access token
+      tags:
+        - Auth
+      operationId: auth_refresh
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthRefreshRequest"
+            examples:
+              refresh:
+                value:
+                  refresh: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.refresh"
+      responses:
+        "200":
+          description: Access token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthRefreshResponse"
+              examples:
+                success:
+                  value:
+                    access: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.access"
+        "401":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  value:
+                    statusCode: 401
+                    error: "Unauthorized"
+                    message: "Invalid or expired refresh token"
+        "429":
+          description: Too many requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                rateLimited:
+                  $ref: "#/components/examples/ErrorRateLimited"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/profile:
+    get:
+      summary: Get the current user's profile
+      tags:
+        - Profile
+      operationId: profile_get
+      responses:
+        "200":
+          description: Profile payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileResponse"
+              examples:
+                success:
+                  value:
+                    profile:
+                      id: "usr_123"
+                      email: "user@example.com"
+                      name: "Casey"
+                      username: "casey"
+                      bio: "Scanning everything."
+                      website: "https://example.com"
+                      location: "Seattle, WA"
+                      avatarUrl: "https://cdn.example.com/avatar.png"
+                      createdAt: "2026-01-29T18:35:00Z"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "404":
+          description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  $ref: "#/components/examples/ErrorNotFound"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+    patch:
+      summary: Update the current user's profile
+      tags:
+        - Profile
+      operationId: profile_update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfilePatchRequest"
+            examples:
+              update:
+                value:
+                  name: "Casey"
+                  bio: "Scanning everything."
+                  location: "Seattle, WA"
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileResponse"
+              examples:
+                success:
+                  value:
+                    profile:
+                      id: "usr_123"
+                      email: "user@example.com"
+                      name: "Casey"
+                      username: "casey"
+                      bio: "Scanning everything."
+                      website: null
+                      location: "Seattle, WA"
+                      avatarUrl: null
+                      createdAt: "2026-01-29T18:35:00Z"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "404":
+          description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  $ref: "#/components/examples/ErrorNotFound"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media:
+    post:
+      summary: Initialize a media upload
+      tags:
+        - Media
+      operationId: media_initUpload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaInitUploadRequest"
+            examples:
+              init:
+                value:
+                  filename: "receipt.pdf"
+                  mimeType: "application/pdf"
+                  sizeBytes: 24576
+                  title: "January receipt"
+                  tags:
+                    - "receipt"
+                    - "2026"
+      responses:
+        "200":
+          description: Upload initialized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaInitUploadResponse"
+              examples:
+                success:
+                  value:
+                    id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                    uploadUrl: "https://s3.example.com/presigned-put"
+                    storageKey: "usr_123/7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9/receipt.pdf"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                badRequest:
+                  value:
+                    statusCode: 400
+                    error: "Bad Request"
+                    message: "receipt.pdf exceeds the documents limit (250 MB max)."
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+    get:
+      summary: List media for the current user
+      description: If `cursor` is provided, `page` is ignored.
+      tags:
+        - Media
+      operationId: media_list
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+          description: Search text (alias of `search`).
+        - in: query
+          name: search
+          schema:
+            type: string
+          description: Search text (alias of `q`).
+        - in: query
+          name: tag
+          schema:
+            type: string
+          description: Single tag filter. Mutually exclusive with `tags`.
+        - in: query
+          name: tags
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+          description: Multiple tag filters. Mutually exclusive with `tag`.
+        - in: query
+          name: thumbState
+          schema:
+            $ref: "#/components/schemas/MediaWorkerState"
+        - in: query
+          name: textState
+          schema:
+            $ref: "#/components/schemas/MediaWorkerState"
+        - in: query
+          name: sort
+          schema:
+            $ref: "#/components/schemas/MediaSortOption"
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 24
+        - in: query
+          name: cursor
+          schema:
+            type: string
+          description: Cursor for pagination.
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+          description: Page number when not using cursor pagination.
+      responses:
+        "200":
+          description: Media list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaListResponse"
+              examples:
+                cursorMode:
+                  value:
+                    items:
+                      - id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                        title: "January receipt"
+                        thumbState: "READY"
+                        textState: "READY"
+                        createdAt: "2026-01-29T18:35:00Z"
+                        tags:
+                          - "receipt"
+                          - "application-pdf"
+                        mimeType: "application/pdf"
+                    nextCursor: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                    nextPage: null
+                pageMode:
+                  value:
+                    items:
+                      - id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                        title: "January receipt"
+                        thumbState: "READY"
+                        textState: "READY"
+                        createdAt: "2026-01-29T18:35:00Z"
+                        tags:
+                          - "receipt"
+                          - "application-pdf"
+                        mimeType: "application/pdf"
+                    nextCursor: null
+                    nextPage: 2
+        "400":
+          description: Invalid filters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                badRequest:
+                  $ref: "#/components/examples/ErrorBadRequest"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media/batch-init:
+    post:
+      summary: Initialize multiple uploads in a batch
+      tags:
+        - Media
+      operationId: media_batchInit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaBatchInitRequest"
+            examples:
+              init:
+                value:
+                  items:
+                    - filename: "receipt.pdf"
+                      mimeType: "application/pdf"
+                      sizeBytes: 24576
+                      title: "January receipt"
+                      tags: "receipt,2026"
+                    - filename: "scan.png"
+                      mimeType: "image/png"
+                      sizeBytes: 10240
+      responses:
+        "200":
+          description: Batch initialized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaBatchInitResponse"
+              examples:
+                success:
+                  value:
+                    items:
+                      - id: "8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da"
+                        storageKey: "usr_123/8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da/receipt.pdf"
+                        putUrl: "https://s3.example.com/presigned-put-1"
+                      - id: "b5d3adbb-2bd5-4b22-9412-7d1c54a89b7b"
+                        storageKey: "usr_123/b5d3adbb-2bd5-4b22-9412-7d1c54a89b7b/scan.png"
+                        putUrl: "https://s3.example.com/presigned-put-2"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                badRequest:
+                  value:
+                    statusCode: 400
+                    error: "Bad Request"
+                    message: "Tags may only contain lowercase letters, digits, and dashes"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media/batch-finalize:
+    post:
+      summary: Finalize multiple uploads
+      tags:
+        - Media
+      operationId: media_batchFinalize
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaBatchFinalizeRequest"
+            examples:
+              finalize:
+                value:
+                  ids:
+                    - "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                    - "8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da"
+      responses:
+        "200":
+          description: Batch finalized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaFinalizeResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+                    count: 2
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media/{id}/finalize:
+    post:
+      summary: Finalize a single upload
+      tags:
+        - Media
+      operationId: media_finalize
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Upload finalized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaFinalizeResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+                    count: 1
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media/tags:
+    get:
+      summary: List top tags for the current user (media)
+      tags:
+        - Media
+      operationId: media_listTags
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          description: Maximum number of tags to return.
+      responses:
+        "200":
+          description: Tag list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaTagsResponse"
+              examples:
+                success:
+                  value:
+                    tags:
+                      - tag: "receipt"
+                        count: 12
+                      - tag: "application-pdf"
+                        count: 9
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media/{id}:
+    get:
+      summary: Get media detail
+      tags:
+        - Media
+      operationId: media_getDetail
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Media detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaDetailResponse"
+              examples:
+                success:
+                  value:
+                    media:
+                      id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                      userId: "usr_123"
+                      title: "January receipt"
+                      filename: "receipt.pdf"
+                      mimeType: "application/pdf"
+                      sizeBytes: 24576
+                      storageKey: "usr_123/7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9/receipt.pdf"
+                      createdAt: "2026-01-29T18:35:00Z"
+                      updatedAt: "2026-01-29T18:35:30Z"
+                      tags:
+                        - "receipt"
+                        - "application-pdf"
+                      thumbState: "READY"
+                      thumbError: null
+                      textState: "READY"
+                      thumbnailKey: "usr_123/7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9/thumb.webp"
+                      hasText: true
+                      hasThumb: true
+                      textError: null
+                      textAttemptsMade: null
+                      textAttemptsTotal: null
+                    document:
+                      rawText: "Lorem ipsum..."
+                      textSource: "OCR"
+                      textTotalLength: 1200
+                      textLanguage: "English"
+                      textLanguageStatus: "ok"
+                    metadata:
+                      text:
+                        totalChars: 1200
+                        totalWords: 220
+                        pageCount: 1
+                        pagesWithText: 1
+                        avgCharsPerPage: 1200
+                        avgWordsPerPage: 220
+                      pdf:
+                        pageCount: 1
+                        encrypted: false
+                    permissions:
+                      canEdit: true
+                      canDelete: true
+                      canDownload: true
+                      canOcr: true
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "404":
+          description: Media not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  $ref: "#/components/examples/ErrorNotFound"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+    patch:
+      summary: Update media metadata
+      tags:
+        - Media
+      operationId: media_update
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaUpdateRequest"
+            examples:
+              update:
+                value:
+                  title: "January receipt (updated)"
+                  tags:
+                    - "receipt"
+                    - "2026"
+      responses:
+        "200":
+          description: Updated media
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaUpdateResponse"
+              examples:
+                success:
+                  value:
+                    media:
+                      id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                      title: "January receipt (updated)"
+                      filename: "receipt.pdf"
+                      sizeBytes: 24576
+                      mimeType: "application/pdf"
+                      thumbState: "READY"
+                      textState: "READY"
+                      tags:
+                        - "receipt"
+                        - "2026"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                badRequest:
+                  value:
+                    statusCode: 400
+                    error: "Bad Request"
+                    message: "Provide a title or tags to update"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "404":
+          description: Media not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  $ref: "#/components/examples/ErrorNotFound"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+    delete:
+      summary: Delete media
+      tags:
+        - Media
+      operationId: media_delete
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Media deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaDeleteResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "404":
+          description: Media not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  $ref: "#/components/examples/ErrorNotFound"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media/{id}/download:
+    get:
+      summary: Get a presigned download URL
+      tags:
+        - Media
+      operationId: media_getDownloadUrl
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Download URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaDownloadResponse"
+              examples:
+                success:
+                  value:
+                    url: "https://s3.example.com/presigned-get"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "404":
+          description: Media not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  $ref: "#/components/examples/ErrorNotFound"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media/{id}/text:
+    get:
+      summary: Get a chunk of extracted text
+      tags:
+        - Media
+      operationId: media_getText
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20000
+            default: 4000
+      responses:
+        "200":
+          description: Text chunk
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaTextChunk"
+              examples:
+                success:
+                  value:
+                    text: "Lorem ipsum..."
+                    offset: 0
+                    limit: 4000
+                    totalLength: 12000
+                    hasMore: true
+                    textSource: "OCR"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "404":
+          description: Media not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  $ref: "#/components/examples/ErrorNotFound"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+    post:
+      summary: Re-run text extraction
+      tags:
+        - Media
+      operationId: media_rerunTextExtraction
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TextExtractionRequest"
+            examples:
+              enqueue:
+                value:
+                  language: "eng"
+                  rotation: "0"
+                  forceOcr: false
+      responses:
+        "200":
+          description: OCR job enqueued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "404":
+          description: Media not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  $ref: "#/components/examples/ErrorNotFound"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media/{id}/text/cancel:
+    post:
+      summary: Cancel text extraction
+      tags:
+        - Media
+      operationId: media_cancelTextExtraction
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OCR job cancellation requested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "404":
+          description: Media not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  $ref: "#/components/examples/ErrorNotFound"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/media/{id}/thumbnail:
+    get:
+      summary: Get a thumbnail image
+      description: Returns a WebP image. Missing thumbnails return a 1x1 fallback image.
+      tags:
+        - Media
+      operationId: media_getThumbnail
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: WebP thumbnail
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+              examples:
+                success:
+                  value: "<binary>"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/tags:
+    get:
+      summary: List top tags for the current user (catalog)
+      tags:
+        - Tags
+      operationId: tags_list
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Tag list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagsResponse"
+              examples:
+                success:
+                  value:
+                    tags:
+                      - name: "receipt"
+                        count: 12
+                      - name: "application-pdf"
+                        count: 9
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+    post:
+      summary: Create or ensure a tag exists
+      tags:
+        - Tags
+      operationId: tags_create
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagCreateRequest"
+            examples:
+              create:
+                value:
+                  name: "receipt"
+      responses:
+        "200":
+          description: Tag ensured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagCreateResponse"
+              examples:
+                success:
+                  value:
+                    tag: "receipt"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                badRequest:
+                  value:
+                    statusCode: 400
+                    error: "Bad Request"
+                    message: "Provide a tag name or tags array"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+  /api/tags/{tag}:
+    delete:
+      summary: Delete a tag from the catalog and remove it from media
+      tags:
+        - Tags
+      operationId: tags_delete
+      parameters:
+        - in: path
+          name: tag
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tag deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagDeleteResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+                    tag: "receipt"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                badRequest:
+                  value:
+                    statusCode: 400
+                    error: "Bad Request"
+                    message: "Tags may only contain lowercase letters, digits, and dashes"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  $ref: "#/components/examples/ErrorUnauthorized"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                serverError:
+                  $ref: "#/components/examples/ErrorInternalServer"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Error response payloads from Fastify and rate limiting.
+      properties:
+        statusCode:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        limit:
+          type: integer
+        windowMs:
+          type: integer
+    User:
+      type: object
+      description: User summary returned by auth endpoints.
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type:
+            - string
+            - "null"
+        username:
+          type:
+            - string
+            - "null"
+        avatarUrl:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - email
+    AuthRegisterRequest:
+      type: object
+      description: Registration credentials.
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+      required:
+        - email
+        - password
+    AuthRegisterResponse:
+      type: object
+      description: User and tokens returned after registration.
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        access:
+          type: string
+        refresh:
+          type: string
+      required:
+        - user
+        - access
+        - refresh
+    AuthLoginRequest:
+      type: object
+      description: Login credentials.
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+      required:
+        - email
+        - password
+    AuthLoginResponse:
+      type: object
+      description: User returned after login.
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+      required:
+        - user
+    AuthRefreshRequest:
+      type: object
+      description: Refresh token payload.
+      properties:
+        refresh:
+          type: string
+      required:
+        - refresh
+    AuthRefreshResponse:
+      type: object
+      description: New access token payload.
+      properties:
+        access:
+          type: string
+      required:
+        - access
+    AuthMeResponse:
+      type: object
+      description: Current user response.
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+      required:
+        - user
+    Profile:
+      type: object
+      description: Profile details for the current user.
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type:
+            - string
+            - "null"
+        username:
+          type:
+            - string
+            - "null"
+        bio:
+          type:
+            - string
+            - "null"
+        website:
+          type:
+            - string
+            - "null"
+        location:
+          type:
+            - string
+            - "null"
+        avatarUrl:
+          type:
+            - string
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - email
+        - name
+        - username
+        - bio
+        - website
+        - location
+        - avatarUrl
+        - createdAt
+    ProfileResponse:
+      type: object
+      description: Profile response envelope.
+      properties:
+        profile:
+          $ref: "#/components/schemas/Profile"
+      required:
+        - profile
+    ProfilePatchRequest:
+      type: object
+      description: Profile fields to update (all optional).
+      additionalProperties: false
+      properties:
+        name:
+          type:
+            - string
+            - "null"
+        username:
+          type:
+            - string
+            - "null"
+        bio:
+          type:
+            - string
+            - "null"
+        website:
+          type:
+            - string
+            - "null"
+        location:
+          type:
+            - string
+            - "null"
+        avatarUrl:
+          type:
+            - string
+            - "null"
+    MediaWorkerState:
+      type: string
+      description: Background processing state for media.
+      enum:
+        - PENDING
+        - READY
+        - ERROR
+        - FAILED
+    MediaSortOption:
+      type: string
+      description: Sort options for media listing.
+      enum:
+        - createdAt_desc
+        - createdAt_asc
+        - title_asc
+        - title_desc
+        - size_desc
+        - size_asc
+        - mimeType_asc
+    TextSource:
+      type: string
+      description: Source of extracted text.
+      enum:
+        - OCR
+        - NATIVE
+        - UNKNOWN
+    TextLanguageStatus:
+      type: string
+      description: Language detection status.
+      enum:
+        - ok
+        - short
+        - error
+    TagInput:
+      description: Tag list as a comma-separated string or array of strings.
+      oneOf:
+        - type: string
+        - type: array
+          items:
+            type: string
+    MediaInitUploadRequest:
+      type: object
+      description: Request to initialize an upload and receive a presigned URL.
+      properties:
+        filename:
+          type: string
+          minLength: 1
+        mimeType:
+          type: string
+          minLength: 1
+        sizeBytes:
+          type: integer
+          minimum: 1
+          description: Upload size limit is 50 MB for photos, 250 MB for documents, with a hard cap of 500 MB for other files.
+        title:
+          type: string
+          minLength: 1
+        tags:
+          $ref: "#/components/schemas/TagInput"
+      required:
+        - filename
+        - mimeType
+        - sizeBytes
+        - title
+    MediaInitUploadResponse:
+      type: object
+      description: Upload initialization response.
+      properties:
+        id:
+          type: string
+          format: uuid
+        uploadUrl:
+          type: string
+        storageKey:
+          type: string
+      required:
+        - id
+        - uploadUrl
+        - storageKey
+    MediaBatchInitRequestItem:
+      type: object
+      description: Single item for batch upload initialization.
+      properties:
+        filename:
+          type: string
+          minLength: 1
+        mimeType:
+          type: string
+          minLength: 1
+        sizeBytes:
+          type: integer
+          minimum: 1
+          description: Upload size limit is 50 MB for photos, 250 MB for documents, with a hard cap of 500 MB for other files.
+        title:
+          type: string
+          minLength: 1
+        tags:
+          $ref: "#/components/schemas/TagInput"
+      required:
+        - filename
+        - mimeType
+        - sizeBytes
+    MediaBatchInitRequest:
+      type: object
+      description: Batch upload initialization request.
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/MediaBatchInitRequestItem"
+      required:
+        - items
+    MediaBatchInitResponseItem:
+      type: object
+      description: Batch upload initialization result for one item.
+      properties:
+        id:
+          type: string
+          format: uuid
+        storageKey:
+          type: string
+        putUrl:
+          type: string
+      required:
+        - id
+        - storageKey
+        - putUrl
+    MediaBatchInitResponse:
+      type: object
+      description: Batch upload initialization response.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaBatchInitResponseItem"
+      required:
+        - items
+    MediaBatchFinalizeRequest:
+      type: object
+      description: Finalize multiple uploads after data is uploaded.
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            format: uuid
+      required:
+        - ids
+    MediaFinalizeResponse:
+      type: object
+      description: Finalize result with updated count.
+      properties:
+        ok:
+          type: boolean
+        count:
+          type: integer
+      required:
+        - ok
+        - count
+    MediaSummary:
+      type: object
+      description: Summary item returned by media list.
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        thumbState:
+          $ref: "#/components/schemas/MediaWorkerState"
+        textState:
+          $ref: "#/components/schemas/MediaWorkerState"
+        createdAt:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: string
+        mimeType:
+          type: string
+      required:
+        - id
+        - title
+        - thumbState
+        - textState
+        - createdAt
+        - tags
+        - mimeType
+    MediaListResponse:
+      type: object
+      description: Paginated media list response.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaSummary"
+        nextCursor:
+          type:
+            - string
+            - "null"
+        nextPage:
+          type:
+            - integer
+            - "null"
+      required:
+        - items
+        - nextCursor
+        - nextPage
+    MediaUpdateRequest:
+      type: object
+      description: Update request for media metadata.
+      properties:
+        title:
+          type: string
+          minLength: 1
+        tags:
+          $ref: "#/components/schemas/TagInput"
+      anyOf:
+        - required:
+            - title
+        - required:
+            - tags
+    MediaUpdate:
+      type: object
+      description: Updated media metadata.
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        filename:
+          type: string
+        sizeBytes:
+          type: integer
+        mimeType:
+          type: string
+        thumbState:
+          $ref: "#/components/schemas/MediaWorkerState"
+        textState:
+          $ref: "#/components/schemas/MediaWorkerState"
+        tags:
+          type: array
+          items:
+            type: string
+      required:
+        - id
+        - title
+        - filename
+        - sizeBytes
+        - mimeType
+        - thumbState
+        - textState
+        - tags
+    MediaUpdateResponse:
+      type: object
+      description: Media update response envelope.
+      properties:
+        media:
+          $ref: "#/components/schemas/MediaUpdate"
+      required:
+        - media
+    MediaDeleteResponse:
+      type: object
+      description: Delete acknowledgement response.
+      properties:
+        ok:
+          type: boolean
+      required:
+        - ok
+    MediaDownloadResponse:
+      type: object
+      description: Presigned download URL response.
+      properties:
+        url:
+          type: string
+      required:
+        - url
+    MediaTextChunk:
+      type: object
+      description: Chunk of extracted text.
+      properties:
+        text:
+          type: string
+        offset:
+          type: integer
+        limit:
+          type: integer
+        totalLength:
+          type: integer
+        hasMore:
+          type: boolean
+        textSource:
+          $ref: "#/components/schemas/TextSource"
+      required:
+        - text
+        - offset
+        - limit
+        - totalLength
+        - hasMore
+        - textSource
+    TextExtractionRequest:
+      type: object
+      description: Options for re-running text extraction.
+      properties:
+        language:
+          type: string
+          minLength: 2
+          maxLength: 12
+        rotation:
+          type: string
+          enum:
+            - "0"
+            - "90"
+            - "180"
+            - "270"
+        forceOcr:
+          type: boolean
+    OkResponse:
+      type: object
+      description: Generic ok response.
+      properties:
+        ok:
+          type: boolean
+      required:
+        - ok
+    ImageGps:
+      type: object
+      description: GPS coordinates extracted from image metadata.
+      properties:
+        latitude:
+          type: number
+        longitude:
+          type: number
+        altitude:
+          type:
+            - number
+            - "null"
+      required:
+        - latitude
+        - longitude
+    ImageMetadata:
+      type: object
+      description: Image metadata fields, when available.
+      properties:
+        make:
+          type:
+            - string
+            - "null"
+        model:
+          type:
+            - string
+            - "null"
+        lens:
+          type:
+            - string
+            - "null"
+        iso:
+          type:
+            - number
+            - "null"
+        exposureTime:
+          type:
+            - number
+            - "null"
+        fNumber:
+          type:
+            - number
+            - "null"
+        focalLengthMm:
+          type:
+            - number
+            - "null"
+        orientation:
+          type:
+            - number
+            - "null"
+        colorSpace:
+          type:
+            - string
+            - "null"
+        editedBy:
+          type:
+            - string
+            - "null"
+        capturedAt:
+          type:
+            - string
+            - "null"
+        width:
+          type:
+            - number
+            - "null"
+        height:
+          type:
+            - number
+            - "null"
+        bitDepth:
+          type:
+            - number
+            - "null"
+        hasAlpha:
+          type:
+            - boolean
+            - "null"
+        gps:
+          anyOf:
+            - $ref: "#/components/schemas/ImageGps"
+            - type: "null"
+    PdfMetadata:
+      type: object
+      description: PDF metadata fields, when available.
+      properties:
+        title:
+          type:
+            - string
+            - "null"
+        author:
+          type:
+            - string
+            - "null"
+        subject:
+          type:
+            - string
+            - "null"
+        producer:
+          type:
+            - string
+            - "null"
+        creator:
+          type:
+            - string
+            - "null"
+        pdfVersion:
+          type:
+            - string
+            - "null"
+        pageCount:
+          type:
+            - number
+            - "null"
+        encrypted:
+          type:
+            - boolean
+            - "null"
+        createdAt:
+          type:
+            - string
+            - "null"
+        modifiedAt:
+          type:
+            - string
+            - "null"
+    OfficeMetadata:
+      type: object
+      description: Office document metadata fields, when available.
+      properties:
+        application:
+          type:
+            - string
+            - "null"
+        appVersion:
+          type:
+            - string
+            - "null"
+        lastModifiedBy:
+          type:
+            - string
+            - "null"
+        revision:
+          type:
+            - number
+            - "null"
+        language:
+          type:
+            - string
+            - "null"
+        hasComments:
+          type:
+            - boolean
+            - "null"
+        hasTrackedChanges:
+          type:
+            - boolean
+            - "null"
+    TextStats:
+      type: object
+      description: Computed text statistics for extracted content.
+      properties:
+        totalChars:
+          type:
+            - number
+            - "null"
+        totalWords:
+          type:
+            - number
+            - "null"
+        pageCount:
+          type:
+            - number
+            - "null"
+        pagesWithText:
+          type:
+            - number
+            - "null"
+        avgCharsPerPage:
+          type:
+            - number
+            - "null"
+        avgWordsPerPage:
+          type:
+            - number
+            - "null"
+    MediaMetadata:
+      type: object
+      description: Derived metadata for media content.
+      properties:
+        image:
+          anyOf:
+            - $ref: "#/components/schemas/ImageMetadata"
+            - type: "null"
+        pdf:
+          anyOf:
+            - $ref: "#/components/schemas/PdfMetadata"
+            - type: "null"
+        office:
+          anyOf:
+            - $ref: "#/components/schemas/OfficeMetadata"
+            - type: "null"
+        text:
+          anyOf:
+            - $ref: "#/components/schemas/TextStats"
+            - type: "null"
+    MediaPermissions:
+      type: object
+      description: Permission flags for the current user.
+      properties:
+        canEdit:
+          type: boolean
+        canDelete:
+          type: boolean
+        canDownload:
+          type: boolean
+        canOcr:
+          type: boolean
+      required:
+        - canEdit
+        - canDelete
+        - canDownload
+        - canOcr
+    DocumentDetail:
+      type: object
+      description: Extracted text detail for a document.
+      properties:
+        rawText:
+          type: string
+        textSource:
+          $ref: "#/components/schemas/TextSource"
+        textTotalLength:
+          type: integer
+        textLanguage:
+          type:
+            - string
+            - "null"
+        textLanguageStatus:
+          $ref: "#/components/schemas/TextLanguageStatus"
+      required:
+        - rawText
+        - textSource
+        - textTotalLength
+        - textLanguage
+        - textLanguageStatus
+    MediaDetail:
+      type: object
+      description: Full media record with derived fields.
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+        title:
+          type: string
+        filename:
+          type: string
+        mimeType:
+          type: string
+        sizeBytes:
+          type: integer
+        storageKey:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: string
+        thumbState:
+          $ref: "#/components/schemas/MediaWorkerState"
+        thumbError:
+          type:
+            - string
+            - "null"
+        textState:
+          $ref: "#/components/schemas/MediaWorkerState"
+        thumbnailKey:
+          type:
+            - string
+            - "null"
+        hasText:
+          type: boolean
+        hasThumb:
+          type: boolean
+        textError:
+          type:
+            - string
+            - "null"
+        textAttemptsMade:
+          type:
+            - integer
+            - "null"
+        textAttemptsTotal:
+          type:
+            - integer
+            - "null"
+      required:
+        - id
+        - userId
+        - title
+        - filename
+        - mimeType
+        - sizeBytes
+        - storageKey
+        - createdAt
+        - updatedAt
+        - tags
+        - thumbState
+        - thumbError
+        - textState
+        - thumbnailKey
+        - hasText
+        - hasThumb
+        - textError
+        - textAttemptsMade
+        - textAttemptsTotal
+    MediaDetailResponse:
+      type: object
+      description: Media detail response envelope.
+      properties:
+        media:
+          $ref: "#/components/schemas/MediaDetail"
+        document:
+          anyOf:
+            - $ref: "#/components/schemas/DocumentDetail"
+            - type: "null"
+        metadata:
+          anyOf:
+            - $ref: "#/components/schemas/MediaMetadata"
+            - type: "null"
+        permissions:
+          $ref: "#/components/schemas/MediaPermissions"
+      required:
+        - media
+        - document
+        - metadata
+        - permissions
+    MediaTagCount:
+      type: object
+      description: Tag name and count for media tags list.
+      properties:
+        tag:
+          type: string
+        count:
+          type: integer
+      required:
+        - tag
+        - count
+    MediaTagsResponse:
+      type: object
+      description: Top tags response for media.
+      properties:
+        tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaTagCount"
+      required:
+        - tags
+    TagCount:
+      type: object
+      description: Tag name and count for catalog list.
+      properties:
+        name:
+          type: string
+        count:
+          type: integer
+      required:
+        - name
+        - count
+    TagsResponse:
+      type: object
+      description: Top tags response for the tag catalog.
+      properties:
+        tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/TagCount"
+      required:
+        - tags
+    TagCreateRequest:
+      type: object
+      description: Request to create or ensure a tag exists.
+      properties:
+        name:
+          type: string
+        tags:
+          $ref: "#/components/schemas/TagInput"
+      anyOf:
+        - required:
+            - name
+        - required:
+            - tags
+    TagCreateResponse:
+      type: object
+      description: Tag creation response.
+      properties:
+        tag:
+          type: string
+      required:
+        - tag
+    TagDeleteResponse:
+      type: object
+      description: Tag deletion response.
+      properties:
+        ok:
+          type: boolean
+        tag:
+          type: string
+      required:
+        - ok
+        - tag
+  examples:
+    ErrorUnauthorized:
+      value:
+        statusCode: 401
+        error: "Unauthorized"
+        message: "Unauthorized"
+    ErrorBadRequest:
+      value:
+        statusCode: 400
+        error: "Bad Request"
+        message: "Use either ?tag=one or ?tags=one,two"
+    ErrorNotFound:
+      value:
+        statusCode: 404
+        error: "Not Found"
+        message: "Not Found"
+    ErrorRateLimited:
+      value:
+        error: "rate_limited"
+        limit: 30
+        windowMs: 60000
+    ErrorInternalServer:
+      value:
+        statusCode: 500
+        error: "Internal Server Error"
+        message: "Internal Server Error"

@@ -71,6 +71,12 @@ export async function getMediaById (id: string): Promise<MediaDetailResponse> {
   return http<MediaDetailResponse>(`/media/${id}`)
 }
 
+export async function finalizeUpload (id: string): Promise<void> {
+  await http(`/media/${id}/finalize`, {
+    method: 'POST'
+  })
+}
+
 export async function getThumbnailUrl (id: string): Promise<string | null> {
   try {
     const r = await http<{ url: string }>(`/media/${id}/thumbnail`)
@@ -97,8 +103,13 @@ export async function pollReady (
 ): Promise<void> {
   for (let i = 0; i < attempts; i++) {
     const res = await getMediaById(id)
-    const media = res?.media ?? res
-    if (media?.thumbState === 'READY' && media?.textState === 'READY' && media?.thumbnailKey) return
+    const media = res.media ?? undefined
+    if (
+      media?.thumbState === 'READY' &&
+      media?.textState === 'READY' &&
+      media?.thumbnailKey
+    )
+      return
     await new Promise(r => setTimeout(r, ms))
   }
 }

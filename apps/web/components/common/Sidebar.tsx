@@ -30,8 +30,9 @@ export interface SavedView {
 }
 
 interface SidebarProps {
-  tags?: TagItem[];
-  savedViews?: SavedView[];
+  tags?: TagItem[] | null;
+  savedViews?: SavedView[] | null;
+  tagsError?: string | null;
   isLoading?: boolean;
   className?: string;
 }
@@ -72,7 +73,7 @@ function SidebarSection({ title, icon, children, defaultOpen = true }: SidebarSe
   );
 }
 
-export function Sidebar({ tags = [], savedViews = [], isLoading = false, className }: SidebarProps) {
+export function Sidebar({ tags, savedViews, tagsError, isLoading = false, className }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -239,7 +240,18 @@ export function Sidebar({ tags = [], savedViews = [], isLoading = false, classNa
                 </div>
               )}
 
-              {tags.length === 0 ? (
+              {!tags ? (
+                tagsError ? (
+                  <div className="px-3 py-2 text-sm text-destructive">
+                    {tagsError}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading tags...
+                  </div>
+                )
+              ) : tags.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">
                   No tags yet
                 </div>
@@ -322,7 +334,12 @@ export function Sidebar({ tags = [], savedViews = [], isLoading = false, classNa
                 + Add new album
               </Link>
 
-              {savedViews.length === 0 ? (
+              {!savedViews ? (
+                <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading saved albums...
+                </div>
+              ) : savedViews.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">
                   No saved albums
                 </div>

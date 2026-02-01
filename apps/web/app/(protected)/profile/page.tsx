@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Edit2, Save, X, MapPin, Globe, Mail, Calendar, Loader2 } from 'lucide-react';
 import { useAuth } from '@/components/contexts/AuthContext';
 
@@ -60,31 +60,33 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [formData, setFormData] = useState<ProfileFormData>(emptyForm);
 
-  useEffect(() => {
-    loadProfile();
-  }, []);
 
-  const syncAuthUser = (nextProfile: UserProfile) => {
-    if (status !== 'authenticated') return;
-    setUser({
-      id: nextProfile.id,
-      email: nextProfile.email,
-      name: nextProfile.name ?? undefined,
-      avatarUrl: nextProfile.avatarUrl ?? null,
-    });
-  };
 
-  const loadProfile = async () => {
+  const syncAuthUser = useCallback(
+    (nextProfile: UserProfile) => {
+      if (status !== "authenticated") return;
+      setUser({
+        id: nextProfile.id,
+        email: nextProfile.email,
+        name: nextProfile.name ?? undefined,
+        avatarUrl: nextProfile.avatarUrl ?? null,
+      });
+    },
+    [status, setUser],
+  );
+
+    const loadProfile = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch('/api/profile', {
-        method: 'GET',
-        credentials: 'include',
+
+      const res = await fetch("/api/profile", {
+        method: "GET",
+        credentials: "include",
       });
 
       if (!res.ok) {
-        const message = await readErrorMessage(res, 'Failed to load profile.');
+        const message = await readErrorMessage(res, "Failed to load profile.");
         setError(message);
         return;
       }
@@ -95,22 +97,27 @@ export default function ProfilePage() {
       if (nextProfile) {
         setProfile(nextProfile);
         setFormData({
-          name: nextProfile.name ?? '',
-          username: nextProfile.username ?? '',
-          bio: nextProfile.bio ?? '',
-          website: nextProfile.website ?? '',
-          location: nextProfile.location ?? '',
-          avatarUrl: nextProfile.avatarUrl ?? '',
+          name: nextProfile.name ?? "",
+          username: nextProfile.username ?? "",
+          bio: nextProfile.bio ?? "",
+          website: nextProfile.website ?? "",
+          location: nextProfile.location ?? "",
+          avatarUrl: nextProfile.avatarUrl ?? "",
         });
         syncAuthUser(nextProfile);
       }
     } catch (error) {
-      console.error('Error loading profile:', error);
-      setError('Error loading profile. Please try again.');
+      console.error("Error loading profile:", error);
+      setError("Error loading profile. Please try again.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [syncAuthUser]);
+
+
+  useEffect(() => {
+    void loadProfile();
+  }, [loadProfile]);
 
   const handleSave = async () => {
     if (!profile) return;

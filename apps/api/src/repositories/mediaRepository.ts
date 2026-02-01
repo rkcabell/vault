@@ -200,8 +200,16 @@ export class MediaRepository {
   async findForOcr (mediaId: string) {
     return this.prisma.media.findUnique({
       where: { id: mediaId },
-      select: { id: true, storageKey: true, mimeType: true },
+      select: { id: true, storageKey: true, mimeType: true, textState: true },
     });
+  }
+
+  async getTextState (mediaId: string) {
+    const media = await this.prisma.media.findUnique({
+      where: { id: mediaId },
+      select: { textState: true },
+    });
+    return media?.textState ?? null;
   }
 
   async setTextState (mediaId: string, state: "PENDING" | "READY" | "ERROR") {

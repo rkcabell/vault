@@ -49,6 +49,7 @@ function isTransientError (err: unknown) {
   );
 }
 
+
 export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) {
   const { mediaRepository, documentRepository, s3, bucket, enqueueOcr, logger, sleep } = deps;
   const { mediaId, storageKey, forceOcr, language, rotation } = data;
@@ -64,6 +65,11 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
 
   if (!media) {
     logger.warn({ ...logContext }, "media not found");
+    return;
+  }
+
+  if (media.textState === "ERROR" || media.textState === "FAILED") {
+    logger.info({ ...logContext }, "ocr cancelled before start");
     return;
   }
 
@@ -101,6 +107,12 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
         },
         "pdf extraction done",
       );
+
+      const latestState = await mediaRepository.getTextState(mediaId);
+      if (latestState === "ERROR" || latestState === "FAILED") {
+        logger.info({ ...logContext }, "ocr cancelled after pdf extraction");
+        return;
+      }
 
       await documentRepository.upsertDocument({
         mediaId,
@@ -141,6 +153,12 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
     language,
     rotation,
   }, deps.textDeps);
+
+  const latestState = await mediaRepository.getTextState(mediaId);
+  if (latestState === "ERROR" || latestState === "FAILED") {
+    logger.info({ ...logContext }, "ocr cancelled after processing");
+    return;
+  }
 
   await documentRepository.upsertDocument({
     mediaId,

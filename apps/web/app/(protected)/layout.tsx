@@ -3,7 +3,7 @@ import { AppShell } from "@/components/common/AppShell";
 
 export default function ProtectedLayout({ children }: { children: React.ReactNode }) {
   return (
-    <AppShell tags={[]} savedViews={[]}>
+    <AppShell tags={null} savedViews={[]}>
       {children}
     </AppShell>
   );
