@@ -18,7 +18,7 @@
     "generate": "prisma generate"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.1"
+    "@prisma/client": "^7.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.4",
