@@ -29,7 +29,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     }
   };
 
-  // POST media handler - init upload -> return presigned PUT + enqueue OCR job
+  // POST media handler - init upload -> return presigned PUT (processing enqueued on finalize)
   app.post("/", { preHandler: [requireAuth] }, async req => {
     const body = z
       .object({
@@ -82,6 +82,18 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     return uploadService.finalizeBatch(req.userId!, body.ids);
   });
+
+  // POST /media/:id/finalize - mark upload ready + enqueue processing
+  app.post<{ Params: { id: string } }>(
+    "/:id/finalize",
+    { preHandler: [requireAuth] },
+    async req => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+
+      return uploadService.finalizeBatch(userId, [id]);
+    },
+  );
 
   // GET /media - list my media
   app.get("/", { preHandler: [requireAuth] }, async req => {
@@ -252,6 +264,22 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         rotation: body.rotation,
         forceOcr: body.forceOcr ?? false,
       });
+
+      if (!result) return reply.notFound();
+
+      return reply.send(result);
+    },
+  );
+
+  // POST /media/:id/text/cancel - cancel text extraction
+  app.post<{ Params: { id: string } }>(
+    "/:id/text/cancel",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+
+      const result = await actionsService.cancelTextExtraction(userId, id);
 
       if (!result) return reply.notFound();
 

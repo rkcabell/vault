@@ -38,10 +38,11 @@ export async function processTextJob (
     forceOcr?: boolean;
     language?: string | null;
     rotation?: string | null;
+    onProgress?: (progress: { current: number; total?: number | null }) => void;
   },
   deps: ProcessTextJobDeps = {},
 ): Promise<ProcessTextResult> {
-  const { s3, bucket, key, mimeType, forceOcr, language, rotation } = args;
+  const { s3, bucket, key, mimeType, forceOcr, language, rotation, onProgress } = args;
   const getBuffer = deps.getObjectBuffer ?? getObjectBuffer;
   const runOcrmypdf = deps.ocrWithOcrmypdf ?? ocrWithOcrmypdf;
 
@@ -52,7 +53,7 @@ export async function processTextJob (
     const pdfBuffer = await getBuffer(s3, bucket, key);
     if (!pdfBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 
-    const extracted = await extractPdfText(pdfBuffer);
+    const extracted = await extractPdfText(pdfBuffer, onProgress ? { onProgress } : undefined);
 
     return {
       textSource: "NATIVE",
@@ -71,6 +72,7 @@ export async function processTextJob (
     mimeType,
     language: language ?? undefined,
     rotation: rotation ?? undefined,
+    onProgress,
   });
 
   let extracted;

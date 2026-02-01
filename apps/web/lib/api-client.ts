@@ -44,6 +44,14 @@ export async function getMedia (id: string) {
   return res.json()
 }
 
+export async function finalizeUpload (id: string) {
+  const res = await fetch(`${API_BASE}/api/media/${id}/finalize`, {
+    method: 'POST',
+    credentials: 'include'
+  })
+  if (!res.ok) throw new Error(`finalizeUpload failed (${res.status})`)
+}
+
 // Poll until thumb/text states are READY (or attempts exhausted)
 export async function pollReady (id: string, attempts = 12, delayMs = 1000) {
   for (let i = 0; i < attempts; i++) {

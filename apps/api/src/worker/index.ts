@@ -19,6 +19,12 @@ const BUCKET = requiredEnv("S3_BUCKET");
 
 const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
 const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
+const OCR_LOCK_DURATION_MS = parseEnvNumber("OCR_LOCK_DURATION_MS", 30 * 60 * 1000);
+const OCR_LOCK_RENEW_MS = parseEnvNumber(
+  "OCR_LOCK_RENEW_MS",
+  Math.max(30 * 1000, Math.floor(OCR_LOCK_DURATION_MS / 2)),
+);
+const OCR_STALLED_INTERVAL_MS = parseEnvNumber("OCR_STALLED_INTERVAL_MS", 60 * 1000);
 
 async function main () {
   const logger = createLogger("worker");
@@ -44,7 +50,13 @@ async function main () {
       logger: ocrLogger,
       queueName: OCR_QUEUE,
     }),
-    { connection, concurrency: 1 },
+    {
+      connection,
+      concurrency: 1,
+      lockDuration: OCR_LOCK_DURATION_MS,
+      lockRenewTime: OCR_LOCK_RENEW_MS,
+      stalledInterval: OCR_STALLED_INTERVAL_MS,
+    },
   );
 
   const thumbWorker = new Worker<ThumbJob>(
@@ -209,6 +221,13 @@ function requiredEnv (name: string): string {
   const v = process.env[name];
   if (!v) throw new MissingEnvError(name);
   return v;
+}
+
+function parseEnvNumber (name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 class MissingEnvError extends Error {

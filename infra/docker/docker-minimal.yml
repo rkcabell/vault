@@ -27,6 +27,15 @@ services:
     volumes:
       - minio:/data
 
+  jobs:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.jobs
+    depends_on:
+      - postgres
+      - redis
+      - minio
+
 volumes:
   pgdata:
   minio:

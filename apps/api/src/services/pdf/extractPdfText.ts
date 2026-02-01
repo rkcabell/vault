@@ -6,9 +6,13 @@ export type PdfTextPage = { pageNumber: number; text: string; numChars: number }
 /**
  * Extract text from a PDF buffer using pdf.js.
  */
-export async function extractPdfText (input: Uint8Array | Buffer) {
+export async function extractPdfText (
+  input: Uint8Array | Buffer,
+  opts?: { onProgress?: (progress: { current: number; total: number }) => void },
+) {
   const pdfjs = await loadPdfJs();
   const data = toPdfJsData(input);
+  const onProgress = opts?.onProgress;
 
   const loadingTask = pdfjs.getDocument({
     data,
@@ -22,6 +26,9 @@ export async function extractPdfText (input: Uint8Array | Buffer) {
     const pages: PdfTextPage[] = [];
     let totalChars = 0;
     let pagesWithText = 0;
+    if (onProgress) {
+      onProgress({ current: 0, total: doc.numPages });
+    }
 
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
       const page = await doc.getPage(pageNumber);
@@ -46,6 +53,9 @@ export async function extractPdfText (input: Uint8Array | Buffer) {
 
       totalChars += numChars;
       if (numChars >= MIN_PAGE_CHARS) pagesWithText += 1;
+      if (onProgress) {
+        onProgress({ current: pageNumber, total: doc.numPages });
+      }
     }
 
     const fullText = stripNulls(pages.map(p => p.text).join("\n\n")).trim();

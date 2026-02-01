@@ -1,6 +1,14 @@
-//File: apps/web/components/contexts/AuthContext.tsx
+// File: apps/web/components/contexts/AuthContext.tsx
 
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  ReactNode,
+} from 'react';
 import { useRouter } from 'next/navigation';
 
 interface User {
@@ -23,7 +31,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUserState] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
   const router = useRouter();
 
@@ -33,7 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Logout failed:', error);
     } finally {
-      setUser(null);
+      setUserState(null);
       setStatus('unauthenticated');
       router.push('/auth');
     }
@@ -47,11 +55,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (response.ok) {
         const userData = await response.json();
         const nextUser = userData?.user ?? userData;
+
         if (nextUser) {
-          setUser({ ...nextUser });
+          setUserState({ ...nextUser });
           setStatus('authenticated');
           return;
         }
+
         await logout();
         return;
       }
@@ -61,17 +71,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      setUser(null);
+      setUserState(null);
       setStatus('unauthenticated');
     } catch (error) {
       console.error('Auth refresh failed:', error);
-      setUser(null);
+      setUserState(null);
       setStatus('unauthenticated');
     }
   }, [logout]);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   useEffect(() => {
@@ -82,18 +92,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('focus', handleFocus);
   }, [status, refresh]);
 
-  const replaceUser = (nextUser: User | null) => {
-    setUser(nextUser ? { ...nextUser } : null);
-    if (!nextUser) {
-      setStatus('unauthenticated');
-    }
-  };
+  const replaceUser = useCallback((nextUser: User | null) => {
+    setUserState(nextUser ? { ...nextUser } : null);
+    if (!nextUser) setStatus('unauthenticated');
+  }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, status, logout, refresh, setUser: replaceUser }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo<AuthContextType>(
+    () => ({ user, status, logout, refresh, setUser: replaceUser }),
+    [user, status, logout, refresh, replaceUser]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

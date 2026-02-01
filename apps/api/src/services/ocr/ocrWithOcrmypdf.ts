@@ -3,18 +3,18 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import sharp from "sharp";
 import { PDFDocument } from "pdf-lib";
 
-const execFileAsync = promisify(execFile);
+const MAX_CAPTURE_BYTES = 50 * 1024;
 
 export type OcrmypdfArgs = {
   input: Buffer;
   mimeType?: string | null;
   language?: string | null;
   rotation?: string | number | null;
+  onProgress?: (progress: { current: number; total?: number | null }) => void;
 };
 
 export type OcrmypdfResult = {
@@ -34,39 +34,41 @@ export async function ocrWithOcrmypdf (args: OcrmypdfArgs): Promise<OcrmypdfResu
     const pdfBuffer = await toPdfBuffer(args.input, args.mimeType, args.rotation);
     await writeFile(inputPdfPath, pdfBuffer);
 
-    const cmdArgs = [
-      "--skip-text",
+    const totalPages = await getPdfPageCount(pdfBuffer);
+    const supportsProgress = typeof args.onProgress === "function";
+    const baseArgs = [
+      "--force-ocr",
       "--output-type",
       "pdf",
-      "--quiet",
       "--jobs",
       "4",
       ...(args.language ? ["-l", args.language] : []),
       inputPdfPath,
       outputPdfPath,
     ];
+    const cmdArgs = supportsProgress ? ["--progress-bar", ...baseArgs] : ["--quiet", ...baseArgs];
 
-    // Note: ocrmypdf can produce lots of output; maxBuffer protects Node.
-    await execFileAsync("ocrmypdf", cmdArgs, {
-      maxBuffer: 50 * 1024 * 1024,
-    });
+    const runResult = await runOcrmypdf(
+      cmdArgs,
+      supportsProgress ? args.onProgress : undefined,
+      totalPages,
+    );
+
+    if (runResult.code !== 0) {
+      const fallback =
+        supportsProgress && /progress-bar/i.test(runResult.stderr + runResult.stdout);
+      if (fallback) {
+        const retryResult = await runOcrmypdf(["--quiet", ...baseArgs], undefined, totalPages);
+        if (retryResult.code !== 0) {
+          throw buildOcrmypdfError(retryResult);
+        }
+      } else {
+        throw buildOcrmypdfError(runResult);
+      }
+    }
 
     const ocrPdf = await readFile(outputPdfPath);
     return { ocrPdf };
-  } catch (err) {
-    // Capture stderr when execFile fails (very useful for diagnosing ocrmypdf).
-    const e = err as any;
-    const baseMsg = err instanceof Error ? err.message : String(err);
-    const stderr = typeof e?.stderr === "string" && e.stderr.trim() ? e.stderr.trim() : null;
-    const stdout = typeof e?.stdout === "string" && e.stdout.trim() ? e.stdout.trim() : null;
-
-    const extra = [stderr ? `stderr: ${stderr}` : null, stdout ? `stdout: ${stdout}` : null]
-      .filter(Boolean)
-      .join("\n");
-
-    throw new Error(
-      extra ? `ocrmypdf failed: ${baseMsg}\n${extra}` : `ocrmypdf failed: ${baseMsg}`,
-    );
   } finally {
     try {
       await rm(workdir, { recursive: true, force: true });
@@ -102,6 +104,95 @@ function looksLikePdf (buf: Buffer): boolean {
     buf[3] === 0x46 && // F
     buf[4] === 0x2d // -
   );
+}
+
+async function getPdfPageCount (buffer: Buffer): Promise<number | null> {
+  try {
+    const doc = await PDFDocument.load(buffer);
+    return doc.getPageCount();
+  } catch {
+    return null;
+  }
+}
+
+type OcrmypdfRunResult = {
+  code: number;
+  stdout: string;
+  stderr: string;
+};
+
+async function runOcrmypdf (
+  cmdArgs: string[],
+  onProgress?: (progress: { current: number; total?: number | null }) => void,
+  totalPages?: number | null,
+): Promise<OcrmypdfRunResult> {
+  const progressParser = createProgressParser(onProgress, totalPages ?? null);
+  const child = spawn("ocrmypdf", cmdArgs, { stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+
+  const append = (buffer: string, chunk: Buffer) => {
+    const next = buffer + chunk.toString("utf8");
+    return next.length > MAX_CAPTURE_BYTES ? next.slice(-MAX_CAPTURE_BYTES) : next;
+  };
+
+  child.stdout.on("data", chunk => {
+    stdout = append(stdout, chunk as Buffer);
+    progressParser(chunk as Buffer);
+  });
+  child.stderr.on("data", chunk => {
+    stderr = append(stderr, chunk as Buffer);
+    progressParser(chunk as Buffer);
+  });
+
+  return new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", code => resolve({ code: code ?? 0, stdout, stderr }));
+  });
+}
+
+function createProgressParser (
+  onProgress?: (progress: { current: number; total?: number | null }) => void,
+  totalPages?: number | null,
+) {
+  let buffer = "";
+  let lastCurrent = -1;
+  let lastTotal = typeof totalPages === "number" ? totalPages : null;
+
+  if (onProgress && lastTotal !== null) {
+    onProgress({ current: 0, total: lastTotal });
+  }
+
+  return (chunk: Buffer) => {
+    if (!onProgress) return;
+    buffer += chunk.toString("utf8");
+    const parts = buffer.split(/\r?\n|\r/);
+    buffer = parts.pop() ?? "";
+
+    for (const line of parts) {
+      const match =
+        line.match(/page\s*(\d+)\s*(?:\/|of)\s*(\d+)/i) ?? line.match(/(\d+)\s*\/\s*(\d+)/);
+      if (!match) continue;
+
+      const current = Number.parseInt(match[1], 10);
+      const total = Number.parseInt(match[2], 10);
+      if (!Number.isFinite(current) || !Number.isFinite(total)) continue;
+      if (current === lastCurrent && total === lastTotal) continue;
+
+      lastCurrent = current;
+      lastTotal = total;
+      // console.info(`[ocrmypdf] progress ${current}/${total}`); //make this better long
+      onProgress({ current, total });
+    }
+  };
+}
+
+function buildOcrmypdfError (result: OcrmypdfRunResult): Error {
+  const baseMsg = `ocrmypdf failed (exit ${result.code})`;
+  const stderr = result.stderr.trim() ? `stderr: ${result.stderr.trim()}` : null;
+  const stdout = result.stdout.trim() ? `stdout: ${result.stdout.trim()}` : null;
+  const extra = [stderr, stdout].filter(Boolean).join("\n");
+  return new Error(extra ? `${baseMsg}\n${extra}` : baseMsg);
 }
 
 async function imageToPdf (buffer: Buffer, rotation?: string | number | null): Promise<Buffer> {
