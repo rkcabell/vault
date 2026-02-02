@@ -1,4 +1,4 @@
-// File: apps\web\middleware.ts
+// File: apps\web\proxy.ts
 import { NextResponse, type NextRequest } from 'next/server'
 
 // Public routes that do NOT require auth:
@@ -11,7 +11,7 @@ const PUBLIC_PREFIXES = [
   '/images'
 ]
 
-export function middleware (req: NextRequest) {
+export function proxy (req: NextRequest) {
   const { pathname } = req.nextUrl
 
   // Check for access token cookie
