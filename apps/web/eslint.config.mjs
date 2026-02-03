@@ -13,6 +13,8 @@ export default defineConfig([
   ]),
   {
     rules: {
+      strict: "off",
+      "@next/next/no-img-element": "off",
       "react-hooks/set-state-in-effect": "off",
       "@typescript-eslint/no-require-imports": "off",
     },

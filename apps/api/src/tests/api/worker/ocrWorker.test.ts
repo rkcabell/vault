@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { HeadObjectCommand } from "@aws-sdk/client-s3";
 import { s3 } from "@/plugins/s3Client.js";
 import { prisma } from "@vault/db";
-import { processOcrJob, OcrDeps } from "@/worker/ocrWorker.js";
+import { processOcrJob, type OcrDeps } from "@/worker/ocrWorker.js";
 
 function buildMinimalPdf (text: string): Buffer {
   const stream = `BT /F1 24 Tf 72 120 Td (${text}) Tj ET`;

@@ -7,7 +7,7 @@ import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from "@aws-sdk/
 import sharp from "sharp";
 import { s3 } from "@/plugins/s3Client.js";
 import { prisma } from "@vault/db";
-import { processThumb, ThumbDeps } from "@/worker/thumbWorker.js";
+import { processThumb, type ThumbDeps } from "@/worker/thumbWorker.js";
 
 process.env.NODE_ENV = "test";
 process.env.S3_BUCKET = "test-bucket";
@@ -103,7 +103,7 @@ test("processThumb uploads a thumbnail and updates the record", async () => {
     return {} as any;
   });
 
-  await processThumb(mockThumbDeps(),{
+  await processThumb(mockThumbDeps(), {
     type: "thumb",
     mediaId: "media-2",
     userId: "user-2",
