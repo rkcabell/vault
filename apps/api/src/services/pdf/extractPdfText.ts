@@ -1,5 +1,6 @@
 import { loadPdfJs } from "./loadPdfJs.js";
 import { MIN_PAGE_CHARS, shouldFallbackToOcr } from "./shouldFallbackToOcr.js";
+import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 
 export type PdfTextPage = { pageNumber: number; text: string; numChars: number };
 
@@ -14,10 +15,12 @@ export async function extractPdfText (
   const data = toPdfJsData(input);
   const onProgress = opts?.onProgress;
 
-  const loadingTask = pdfjs.getDocument({
+  const init: DocumentInitParameters & { disableWorker?: boolean } = {
     data,
     disableWorker: true,
-  });
+  };
+
+  const loadingTask = pdfjs.getDocument(init);
 
   const doc = await loadingTask.promise;
 
@@ -86,12 +89,11 @@ export async function extractPdfText (
 }
 
 /**
- * Postgres (and Prisma->Postgres) cannot store NUL (\u0000) in TEXT.
+ * Postgres (and Prisma->Postgres) cannot store NUL (\0) in TEXT.
  * pdf.js extraction can sometimes include embedded NULs due to font/encoding artifacts.
  */
 function stripNulls (s: string): string {
-  // Fast path: avoid regex work when possible
-  return s.includes("\u0000") ? s.replace(/\u0000/g, "") : s;
+  return s.includes("\0") ? s.replace(/\0/g, "") : s;
 }
 
 type TextItem = {
@@ -107,9 +109,7 @@ type Line = {
   height: number | null;
 };
 
-function buildTextWithParagraphs (
-  items: TextItem[],
-): string {
+function buildTextWithParagraphs (items: TextItem[]): string {
   const lines = buildLines(items);
   return mergeLinesIntoParagraphs(lines);
 }
@@ -170,9 +170,10 @@ function buildLines (
   return lines;
 }
 
-function getItemPosition (
-  item: { transform?: number[]; height?: number },
-): { y: number; height: number | null } | null {
+function getItemPosition (item: {
+  transform?: number[];
+  height?: number;
+}): { y: number; height: number | null } | null {
   const transform = item.transform;
   if (!transform || transform.length < 6) return null;
   const y = transform[5];

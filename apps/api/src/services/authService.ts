@@ -1,6 +1,6 @@
 import { createJwtAdapter, type JwtAdapter } from "../adapters/jwtAdapter.js";
 import { createPasswordHasher, type PasswordHasher } from "../adapters/passwordHasher.js";
-import { UserRepository } from "../repositories/userRepository.js";
+import { type UserRepository } from "../repositories/userRepository.js";
 
 export type AuthTokens = { access: string; refresh: string };
 export type AuthUser = { id: string; email: string; name?: string | null; username?: string | null };

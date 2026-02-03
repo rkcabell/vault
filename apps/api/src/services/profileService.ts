@@ -1,5 +1,5 @@
 import { normalizeNullable } from "../lib/strings/normalize.js";
-import { ProfileRepository } from "../repositories/profileRepository.js";
+import { type ProfileRepository } from "../repositories/profileRepository.js";
 
 export type ProfilePatch = {
   name?: string | null;

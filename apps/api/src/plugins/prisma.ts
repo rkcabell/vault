@@ -1,5 +1,5 @@
 import fp from "fastify-plugin";
-import { prisma, PrismaClient } from "@vault/db";
+import { prisma, type PrismaClient } from "@vault/db";
 
 declare module "fastify" {
   interface FastifyInstance {

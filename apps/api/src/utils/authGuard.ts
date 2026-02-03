@@ -1,3 +1,4 @@
+// File: apps/api/src/utils/authGuard.ts
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 declare module "fastify" {
@@ -7,10 +8,9 @@ declare module "fastify" {
 }
 
 function readCookie (req: FastifyRequest, name: string): string | null {
-  // If fastify-cookie is registered, req.cookies may exist
-  const anyReq = req as any;
-  if (anyReq.cookies && typeof anyReq.cookies[name] === "string") {
-    return anyReq.cookies[name] as string;
+  const cookies = req.cookies;
+  if (cookies && typeof cookies[name] === "string") {
+    return cookies[name];
   }
 
   // Fallback: parse cookie header manually
@@ -23,6 +23,7 @@ function readCookie (req: FastifyRequest, name: string): string | null {
     if (idx === -1) continue;
     const k = p.slice(0, idx).trim();
     if (k !== name) continue;
+
     const v = p.slice(idx + 1);
     try {
       return decodeURIComponent(v);
@@ -30,7 +31,17 @@ function readCookie (req: FastifyRequest, name: string): string | null {
       return v;
     }
   }
+
   return null;
+}
+
+function isJwtPayload (value: unknown): value is { sub: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "sub" in value &&
+    typeof (value as { sub?: unknown }).sub === "string"
+  );
 }
 
 export async function requireAuth (req: FastifyRequest, reply: FastifyReply) {
@@ -45,8 +56,9 @@ export async function requireAuth (req: FastifyRequest, reply: FastifyReply) {
   if (!token) return reply.unauthorized();
 
   try {
-    const payload = req.server.jwt.verifyAccess(token) as { sub: string };
-    (req as any).userId = payload.sub;
+    const payload: unknown = req.server.jwt.verifyAccess(token);
+    if (!isJwtPayload(payload)) return reply.unauthorized();
+    req.userId = payload.sub;
   } catch {
     return reply.unauthorized();
   }

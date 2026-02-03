@@ -16,12 +16,20 @@ export default [
   {
     files: ["src/**/*.{ts,tsx}"],
     rules: {
+      strict: "off",
+      "no-empty": "off",
       "@typescript-eslint/consistent-type-imports": "warn",
       //   "@typescript-eslint/no-misused-promises": [
       //     "error",
       //     { checksVoidReturn: { attributes: false } },
       //   ],
       // Add more rules here as you like
+    },
+  },
+  {
+    files: ["src/tests/**/*.{ts,tsx}", "src/**/*.test.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
     },
   },
 ];

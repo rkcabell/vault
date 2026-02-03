@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import type { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";
 import { configPlugin } from "./plugins/config.js";
@@ -35,7 +36,7 @@ async function main () {
 
   //Fastify instance
   await app.register(configPlugin); // loads & validates env into app.config
-  await app.register(cookie, { secret: app.config.JWT_SECRET,}); // registers cookie plugin
+  await app.register(cookie, { secret: app.config.JWT_SECRET }); // registers cookie plugin
   await app.register(cors, { origin: true }); // dev-friendly; lock down later
   await app.register(sensible); // adds handy utilities
   await app.register(healthRoutes, { prefix: "/health" }); // /healthz, /readyz
@@ -63,7 +64,7 @@ main().catch(err => {
   process.exit(1);
 });
 
-function registerShutdown(app: any) {
+function registerShutdown (app: FastifyInstance) {
   let isShuttingDown = false;
 
   const shutdown = async (signal: string) => {
