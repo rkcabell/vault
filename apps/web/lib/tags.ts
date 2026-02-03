@@ -106,7 +106,11 @@ export const TAG_RULES = { MAX_TAG_LENGTH, MAX_TAGS };
 
 export const TAGS_UPDATED_EVENT = "tags:updated";
 
-export function emitTagsUpdated () {
+export type TagsUpdatedDetail = {
+  deletedTag?: string;
+};
+
+export function emitTagsUpdated (detail?: TagsUpdatedDetail) {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new Event(TAGS_UPDATED_EVENT));
+  window.dispatchEvent(new CustomEvent<TagsUpdatedDetail | undefined>(TAGS_UPDATED_EVENT, { detail }));
 }

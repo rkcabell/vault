@@ -21,6 +21,7 @@ model User {
   updatedAt    DateTime @updatedAt
   media        Media[]
   tags         Tag[]
+  reminders    Reminder[]
 }
 
 model Media {
@@ -41,6 +42,7 @@ model Media {
   thumbnailKey String?
   document     Document?
   user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminders    Reminder[]
 
   @@index([tags], type: Gin)
 }
@@ -74,4 +76,36 @@ model Tag {
   user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, name])
+}
+
+model Reminder {
+  id             String         @id @default(uuid())
+  userId         String
+  title          String
+  note           String?
+  mediaId        String?
+  status         ReminderStatus @default(ACTIVE)
+  timezone       String
+  dueAt          DateTime
+  snoozedUntil   DateTime?
+  remindOffsetDays Int?
+  remindAt       DateTime
+  rrule          String?
+  nextDueAt      DateTime?
+  lastCompletedAt DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media          Media?         @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, remindAt])
+  @@index([userId, status, dueAt])
+  @@index([userId, status, nextDueAt])
+}
+
+enum ReminderStatus {
+  ACTIVE
+  COMPLETED
+  CANCELED
 }

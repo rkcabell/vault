@@ -30,7 +30,8 @@ services:
   jobs:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.jobs
+      dockerfile: infra/docker/Dockerfile
+      target: jobs
     depends_on:
       - postgres
       - redis

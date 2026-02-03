@@ -1,3 +1,4 @@
+// File: MediaRepository.ts
 import { Prisma, type PrismaClient } from "@prisma/client";
 
 export type MediaListFilters = {
@@ -13,7 +14,7 @@ export type MediaListFilters = {
 };
 
 export class MediaRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor (private readonly prisma: PrismaClient) {}
 
   async createMedia (data: Prisma.MediaUncheckedCreateInput) {
     return this.prisma.media.create({
@@ -38,7 +39,7 @@ export class MediaRepository {
   }
 
   async listMedia (filters: MediaListFilters) {
-    const { userId, queryText, tags, thumbState, textState, orderBy, take, cursor, skip } = filters;
+    const { userId, queryText, tags, thumbState, textState, orderBy, take, cursor } = filters;
 
     return this.prisma.media.findMany({
       where: {
@@ -57,7 +58,7 @@ export class MediaRepository {
       },
       orderBy,
       take,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : skip ? { skip } : {}),
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       select: {
         id: true,
         title: true,

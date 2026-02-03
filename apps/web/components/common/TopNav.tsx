@@ -25,7 +25,8 @@ interface TopNavProps {
 const navLinks = [
   { href: '/overview', label: 'Overview' },
   { href: '/library', label: 'Library' },
-  { href: '/albums', label: 'Albums' },
+  { href: '/bundles', label: 'Bundles' },
+  { href: '/reminders', label: 'Reminders' },
 ];
 
 export function TopNav({ onMenuClick }: TopNavProps) {
