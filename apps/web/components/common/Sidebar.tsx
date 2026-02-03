@@ -124,7 +124,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
         setTagError(msg);
         return;
       }
-      emitTagsUpdated();
+      emitTagsUpdated({ deletedTag: tag });
     } catch (err) {
       setTagError(err instanceof Error ? err.message : "Unable to delete tag.");
     } finally {
@@ -318,12 +318,12 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
           </SidebarSection>
 
           <SidebarSection
-            title="Saved Albums"
+            title="Saved Bundles"
             icon={<BookmarkCheck className="h-4 w-4" />}
           >
             <div className="space-y-2">
               <Link
-                href={'/albums/new' as Route}
+                href={'/bundles/new' as Route}
                 className={cn(
                   'flex items-center px-3 py-2 text-sm rounded-md',
                   'border border-dashed border-muted-foreground/40 text-primary',
@@ -331,17 +331,17 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
                 )}
               >
-                + Add new album
+                + Add new bundle
               </Link>
 
               {!savedViews ? (
                 <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading saved albums...
+                  Loading saved bundles...
                 </div>
               ) : savedViews.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">
-                  No saved albums
+                  No saved bundles
                 </div>
               ) : (
                 <div className="space-y-1">

@@ -67,7 +67,7 @@ function ManageTags() {
         return;
       }
       setTags(prev => prev.filter(t => t.name !== name));
-      emitTagsUpdated();
+      emitTagsUpdated({ deletedTag: name });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to delete tag.");
     } finally {

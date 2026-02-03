@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listMedia } from "@/lib/api.server";
 import { deriveOverallState } from "@/lib/media/status";
+import { OverviewRemindersCard } from "@/components/reminders/OverviewRemindersCard";
 
 export default async function OverviewPage() {
   const recent = (await listMedia({ q: "" })).slice(0, 9);
@@ -63,6 +64,8 @@ export default async function OverviewPage() {
           </div>
         )}
       </section>
+
+      <OverviewRemindersCard />
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Recent</h2>

@@ -1,0 +1,568 @@
+// File: reminders.ts
+import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
+import { requireAuth } from "../utils/authGuard.js";
+import { SOON_WINDOW_DAYS } from "../lib/reminders/constants.js";
+import {
+  REMINDER_BUCKET_ORDER,
+  computeRemindAt,
+  getEffectiveDueAt,
+  getReminderBucket,
+  normalizeTimezone,
+  type ReminderBucket,
+} from "../lib/reminders/time.js";
+import { ReminderRRuleError, advanceRecurringDue, validateRRule } from "../lib/reminders/recurrence.js";
+
+type ReminderStatusDb = "ACTIVE" | "COMPLETED" | "CANCELED";
+type ReminderStatusApi = "active" | "completed" | "canceled";
+
+type ReminderOverviewRow = {
+  id: string;
+  title: string;
+  note: string | null;
+  media: { id: string; title: string } | null;
+  effectiveDueAt: string;
+  remindAt: string;
+  snoozedUntil: string | null;
+  bucket: ReminderBucket;
+  isOverdue: boolean;
+};
+
+type ReminderOutput = {
+  id: string;
+  userId: string;
+  title: string;
+  note: string | null;
+  mediaId: string | null;
+  status: ReminderStatusApi;
+  timezone: string;
+  dueAt: string;
+  nextDueAt: string | null;
+  remindOffsetDays: number | null;
+  remindAt: string;
+  snoozedUntil: string | null;
+  rrule: string | null;
+  lastCompletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const paramsSchema = z.object({ id: z.string().uuid() }).strict();
+const dateSchema = z.coerce.date().refine(value => !Number.isNaN(value.getTime()), "Invalid datetime");
+
+const createReminderSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300),
+    note: z.string().trim().max(5000).nullable().optional(),
+    mediaId: z.string().uuid().nullable().optional(),
+    dueAt: dateSchema,
+    remindOffsetDays: z.number().int().min(0).nullable().optional(),
+    rrule: z.string().trim().min(1).max(1000).nullable().optional(),
+  })
+  .strict();
+
+const updateReminderSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300).optional(),
+    note: z.string().trim().max(5000).nullable().optional(),
+    mediaId: z.string().uuid().nullable().optional(),
+    dueAt: dateSchema.optional(),
+    remindOffsetDays: z.number().int().min(0).nullable().optional(),
+    rrule: z.string().trim().min(1).max(1000).nullable().optional(),
+  })
+  .strict()
+  .refine(
+    payload =>
+      payload.title !== undefined ||
+      payload.note !== undefined ||
+      payload.mediaId !== undefined ||
+      payload.dueAt !== undefined ||
+      payload.remindOffsetDays !== undefined ||
+      payload.rrule !== undefined,
+    { message: "Provide at least one field to update" },
+  );
+
+function toStatusApi(status: ReminderStatusDb): ReminderStatusApi {
+  if (status === "ACTIVE") return "active";
+  if (status === "COMPLETED") return "completed";
+  return "canceled";
+}
+
+function normalizeRRuleInput(rrule: string | null | undefined) {
+  const nextValue = rrule?.trim() ?? null;
+  return nextValue && nextValue.length > 0 ? nextValue : null;
+}
+
+function toOverviewRow(
+  reminder: {
+    id: string;
+    title: string;
+    note: string | null;
+    dueAt: Date;
+    nextDueAt: Date | null;
+    remindAt: Date;
+    snoozedUntil: Date | null;
+    timezone: string;
+    media: { id: string; title: string } | null;
+  },
+  now: Date,
+) {
+  const effectiveDueAt = getEffectiveDueAt(reminder.dueAt, reminder.nextDueAt);
+  const bucket = getReminderBucket(effectiveDueAt, reminder.timezone, now);
+
+  return {
+    id: reminder.id,
+    title: reminder.title,
+    note: reminder.note,
+    media: reminder.media,
+    effectiveDueAt: effectiveDueAt.toISOString(),
+    remindAt: reminder.remindAt.toISOString(),
+    snoozedUntil: reminder.snoozedUntil ? reminder.snoozedUntil.toISOString() : null,
+    bucket,
+    isOverdue: bucket === "overdue",
+  } satisfies ReminderOverviewRow;
+}
+
+function sortOverviewRows(rows: ReminderOverviewRow[]) {
+  const nowMs = Date.now();
+
+  rows.sort((left, right) => {
+    const leftSnoozed = left.snoozedUntil !== null && new Date(left.snoozedUntil).getTime() > nowMs;
+    const rightSnoozed = right.snoozedUntil !== null && new Date(right.snoozedUntil).getTime() > nowMs;
+    if (leftSnoozed !== rightSnoozed) return leftSnoozed ? 1 : -1;
+
+    const bucketSort = REMINDER_BUCKET_ORDER[left.bucket] - REMINDER_BUCKET_ORDER[right.bucket];
+    if (bucketSort !== 0) return bucketSort;
+    return new Date(left.effectiveDueAt).getTime() - new Date(right.effectiveDueAt).getTime();
+  });
+}
+
+function toReminderOutput(reminder: {
+  id: string;
+  userId: string;
+  title: string;
+  note: string | null;
+  mediaId: string | null;
+  status: ReminderStatusDb;
+  timezone: string;
+  dueAt: Date;
+  nextDueAt: Date | null;
+  remindOffsetDays: number | null;
+  remindAt: Date;
+  snoozedUntil: Date | null;
+  rrule: string | null;
+  lastCompletedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    id: reminder.id,
+    userId: reminder.userId,
+    title: reminder.title,
+    note: reminder.note,
+    mediaId: reminder.mediaId,
+    status: toStatusApi(reminder.status),
+    timezone: reminder.timezone,
+    dueAt: reminder.dueAt.toISOString(),
+    nextDueAt: reminder.nextDueAt ? reminder.nextDueAt.toISOString() : null,
+    remindOffsetDays: reminder.remindOffsetDays,
+    remindAt: reminder.remindAt.toISOString(),
+    snoozedUntil: reminder.snoozedUntil ? reminder.snoozedUntil.toISOString() : null,
+    rrule: reminder.rrule,
+    lastCompletedAt: reminder.lastCompletedAt ? reminder.lastCompletedAt.toISOString() : null,
+    createdAt: reminder.createdAt.toISOString(),
+    updatedAt: reminder.updatedAt.toISOString(),
+  } satisfies ReminderOutput;
+}
+
+async function assertMediaOwnership(
+  app: {
+    prisma: {
+      media: {
+        findFirst: (args: {
+          where: { id: string; userId: string };
+          select: { id: true };
+        }) => Promise<{ id: string } | null>;
+      };
+    };
+    httpErrors: { badRequest: (message: string) => Error };
+  },
+  userId: string,
+  mediaId: string | null,
+) {
+  if (!mediaId) return;
+  const media = await app.prisma.media.findFirst({
+    where: { id: mediaId, userId },
+    select: { id: true },
+  });
+  if (!media) throw app.httpErrors.badRequest("mediaId does not belong to the authenticated user");
+}
+
+export const remindersRoutes: FastifyPluginAsync = async app => {
+  app.get("/summary", { preHandler: [requireAuth] }, async req => {
+    const userId = req.userId!;
+    const now = new Date();
+
+    const [totalActive, visibleReminders] = await Promise.all([
+      app.prisma.reminder.count({
+        where: { userId, status: "ACTIVE" },
+      }),
+      app.prisma.reminder.findMany({
+        where: {
+          userId,
+          status: "ACTIVE",
+          remindAt: { lte: now },
+          OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }],
+        },
+        select: {
+          dueAt: true,
+          nextDueAt: true,
+          timezone: true,
+        },
+      }),
+    ]);
+
+    const counts = {
+      visibleNow: visibleReminders.length,
+      overdue: 0,
+      dueToday: 0,
+      dueSoon: 0,
+    };
+
+    for (const reminder of visibleReminders) {
+      const effectiveDueAt = getEffectiveDueAt(reminder.dueAt, reminder.nextDueAt);
+      const bucket = getReminderBucket(effectiveDueAt, reminder.timezone, now);
+      if (bucket === "overdue") counts.overdue += 1;
+      else if (bucket === "today") counts.dueToday += 1;
+      else if (bucket === "soon") counts.dueSoon += 1;
+    }
+
+    return {
+      ...counts,
+      totalActive,
+      soonWindowDays: SOON_WINDOW_DAYS,
+    };
+  });
+
+  app.get("/", { preHandler: [requireAuth] }, async req => {
+    const userId = req.userId!;
+    const query = z
+      .object({
+        status: z.enum(["active", "completed", "canceled"]).default("active"),
+        view: z.enum(["overview", "all"]).default("overview"),
+        limit: z.coerce.number().int().min(1).max(100).default(5),
+      })
+      .parse(req.query);
+
+    if (query.status !== "active") {
+      throw app.httpErrors.badRequest("Overview reminders endpoint requires status=active");
+    }
+
+    if (query.view !== "overview") {
+      throw app.httpErrors.badRequest("view=all is not implemented in this milestone");
+    }
+
+    const now = new Date();
+
+    // Over-fetch a bounded amount so we can sort accurately without loading all rows.
+    // (limit max is 100, so 20x bounded at 500 keeps this cheap)
+    const prefetch = Math.min(query.limit * 20, 500);
+
+    // 1) Fetch visible-now reminders only (DB-side), then sort + take limit.
+    const visibleReminders = await app.prisma.reminder.findMany({
+      where: {
+        userId,
+        status: "ACTIVE",
+        remindAt: { lte: now },
+        OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }],
+      },
+      take: prefetch,
+      select: {
+        id: true,
+        title: true,
+        note: true,
+        dueAt: true,
+        nextDueAt: true,
+        remindAt: true,
+        snoozedUntil: true,
+        timezone: true,
+        media: {
+          select: {
+            id: true,
+            title: true,
+          },
+        },
+      },
+    });
+
+    const visibleRows = visibleReminders.map(reminder => toOverviewRow(reminder, now));
+    sortOverviewRows(visibleRows);
+
+    if (visibleRows.length >= query.limit) {
+      return { items: visibleRows.slice(0, query.limit) };
+    }
+
+    // 2) Backfill with hidden reminders (DB-side) so the overview can reach the requested limit.
+    // Hidden means: not visible now => remindAt > now OR snoozedUntil > now
+    const remaining = query.limit - visibleRows.length;
+
+    const hiddenReminders = await app.prisma.reminder.findMany({
+      where: {
+        userId,
+        status: "ACTIVE",
+        OR: [{ remindAt: { gt: now } }, { snoozedUntil: { gt: now } }],
+      },
+      take: prefetch,
+      select: {
+        id: true,
+        title: true,
+        note: true,
+        dueAt: true,
+        nextDueAt: true,
+        remindAt: true,
+        snoozedUntil: true,
+        timezone: true,
+        media: {
+          select: {
+            id: true,
+            title: true,
+          },
+        },
+      },
+    });
+
+    const fallbackRows = hiddenReminders.map(reminder => toOverviewRow(reminder, now));
+    sortOverviewRows(fallbackRows);
+
+    return { items: [...visibleRows, ...fallbackRows.slice(0, remaining)] };
+  });
+
+  app.post("/", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const body = createReminderSchema.parse(req.body ?? {});
+    const now = new Date();
+
+    if (body.dueAt.getTime() <= now.getTime()) {
+      throw app.httpErrors.badRequest("Due datetime must be in the future");
+    }
+
+    const rrule = normalizeRRuleInput(body.rrule);
+    if (rrule) {
+      try {
+        validateRRule(rrule);
+      } catch (error) {
+        if (error instanceof ReminderRRuleError) throw app.httpErrors.badRequest(error.message);
+        throw error;
+      }
+    }
+
+    const timezoneHeader = req.headers["x-timezone"];
+    const timezoneValue = Array.isArray(timezoneHeader) ? timezoneHeader[0] : timezoneHeader;
+    const timezone = normalizeTimezone(timezoneValue);
+
+    await assertMediaOwnership(app, userId, body.mediaId ?? null);
+
+    const dueAt = body.dueAt;
+    const nextDueAt = rrule ? dueAt : null;
+    const remindOffsetDays = body.remindOffsetDays ?? null;
+    const remindAt = computeRemindAt(dueAt, nextDueAt, remindOffsetDays);
+
+    const reminder = await app.prisma.reminder.create({
+      data: {
+        userId,
+        title: body.title,
+        note: body.note ?? null,
+        mediaId: body.mediaId ?? null,
+        status: "ACTIVE",
+        timezone,
+        dueAt,
+        remindOffsetDays,
+        remindAt,
+        rrule,
+        nextDueAt,
+      },
+    });
+
+    return reply.code(201).send({ reminder: toReminderOutput(reminder) });
+  });
+
+  app.patch<{ Params: { id: string } }>("/:id", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const { id } = paramsSchema.parse(req.params);
+    const rawBody = (req.body ?? {}) as Record<string, unknown>;
+    const body = updateReminderSchema.parse(rawBody);
+
+    const reminder = await app.prisma.reminder.findFirst({
+      where: { id, userId },
+      select: {
+        id: true,
+        dueAt: true,
+        nextDueAt: true,
+        remindAt: true,
+        remindOffsetDays: true,
+        rrule: true,
+      },
+    });
+
+    if (!reminder) return reply.notFound();
+
+    const hasDueAt = Object.prototype.hasOwnProperty.call(rawBody, "dueAt");
+    const hasRemindOffsetDays = Object.prototype.hasOwnProperty.call(rawBody, "remindOffsetDays");
+    const hasRRule = Object.prototype.hasOwnProperty.call(rawBody, "rrule");
+    const hasMediaId = Object.prototype.hasOwnProperty.call(rawBody, "mediaId");
+    const hasNote = Object.prototype.hasOwnProperty.call(rawBody, "note");
+    const hasTitle = Object.prototype.hasOwnProperty.call(rawBody, "title");
+
+    const nextDueAtBase = hasDueAt ? body.dueAt! : reminder.dueAt;
+    const nextRemindOffsetDays = hasRemindOffsetDays
+      ? (body.remindOffsetDays ?? null)
+      : reminder.remindOffsetDays;
+    const nextRRule = hasRRule ? normalizeRRuleInput(body.rrule) : reminder.rrule;
+
+    if (nextRRule) {
+      try {
+        validateRRule(nextRRule);
+      } catch (error) {
+        if (error instanceof ReminderRRuleError) throw app.httpErrors.badRequest(error.message);
+        throw error;
+      }
+    }
+
+    let nextDueAt: Date | null = reminder.nextDueAt;
+    if (!nextRRule) {
+      nextDueAt = null;
+    } else if (hasDueAt || hasRRule || !nextDueAt) {
+      nextDueAt = nextDueAtBase;
+    }
+
+    if (hasMediaId) {
+      await assertMediaOwnership(app, userId, body.mediaId ?? null);
+    }
+
+    const timingChanged = hasDueAt || hasRemindOffsetDays || hasRRule;
+    const nextRemindAt = timingChanged
+      ? computeRemindAt(nextDueAtBase, nextDueAt, nextRemindOffsetDays)
+      : reminder.remindAt;
+
+    const updated = await app.prisma.reminder.update({
+      where: { id },
+      data: {
+        ...(hasTitle ? { title: body.title } : {}),
+        ...(hasNote ? { note: body.note ?? null } : {}),
+        ...(hasMediaId ? { mediaId: body.mediaId ?? null } : {}),
+        ...(hasDueAt ? { dueAt: nextDueAtBase } : {}),
+        ...(hasRemindOffsetDays ? { remindOffsetDays: nextRemindOffsetDays } : {}),
+        ...(hasRRule ? { rrule: nextRRule } : {}),
+        ...(timingChanged ? { nextDueAt } : {}),
+        ...(timingChanged ? { remindAt: nextRemindAt } : {}),
+      },
+    });
+
+    return reply.send({ reminder: toReminderOutput(updated) });
+  });
+
+  app.post<{ Params: { id: string } }>(
+    "/:id/complete",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+      const now = new Date();
+
+      const reminder = await app.prisma.reminder.findFirst({
+        where: { id, userId },
+        select: {
+          id: true,
+          status: true,
+          dueAt: true,
+          nextDueAt: true,
+          remindOffsetDays: true,
+          rrule: true,
+        },
+      });
+
+      if (!reminder) return reply.notFound();
+      if (reminder.status !== "ACTIVE") {
+        throw app.httpErrors.badRequest("Only active reminders can be completed");
+      }
+
+      if (!reminder.rrule) {
+        await app.prisma.reminder.update({
+          where: { id },
+          data: {
+            status: "COMPLETED",
+            lastCompletedAt: now,
+          },
+        });
+        return reply.send({ ok: true });
+      }
+
+      try {
+        const currentDue = reminder.nextDueAt ?? reminder.dueAt;
+        const nextDueAt = advanceRecurringDue(currentDue, reminder.rrule);
+        const remindAt = computeRemindAt(reminder.dueAt, nextDueAt, reminder.remindOffsetDays);
+
+        await app.prisma.reminder.update({
+          where: { id },
+          data: {
+            status: "ACTIVE",
+            lastCompletedAt: now,
+            nextDueAt,
+            remindAt,
+            snoozedUntil: null,
+          },
+        });
+      } catch (error) {
+        if (error instanceof ReminderRRuleError) throw app.httpErrors.badRequest(error.message);
+        throw error;
+      }
+
+      return reply.send({ ok: true });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>("/:id/snooze", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const { id } = paramsSchema.parse(req.params);
+    const body = z.object({ until: dateSchema }).strict().parse(req.body ?? {});
+    const now = new Date();
+
+    if (body.until.getTime() <= now.getTime()) {
+      throw app.httpErrors.badRequest("Snooze time must be in the future");
+    }
+
+    const reminder = await app.prisma.reminder.findFirst({
+      where: { id, userId },
+      select: { id: true, status: true },
+    });
+    if (!reminder) return reply.notFound();
+    if (reminder.status !== "ACTIVE") {
+      throw app.httpErrors.badRequest("Only active reminders can be snoozed");
+    }
+
+    await app.prisma.reminder.update({
+      where: { id },
+      data: { snoozedUntil: body.until },
+    });
+
+    return reply.send({ ok: true });
+  });
+
+  app.post<{ Params: { id: string } }>("/:id/cancel", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const { id } = paramsSchema.parse(req.params);
+
+    const reminder = await app.prisma.reminder.findFirst({
+      where: { id, userId },
+      select: { id: true },
+    });
+    if (!reminder) return reply.notFound();
+
+    await app.prisma.reminder.update({
+      where: { id },
+      data: { status: "CANCELED" },
+    });
+
+    return reply.send({ ok: true });
+  });
+};
