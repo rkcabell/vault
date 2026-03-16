@@ -12,7 +12,7 @@ function buildMinimalPdf (text: string): Buffer {
   const objects = [
     "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
     "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
-    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
+    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
     `4 0 obj\n<< /Length ${stream.length} >>\nstream\n${stream}\nendstream\nendobj\n`,
     "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
   ];
@@ -51,7 +51,7 @@ process.env.OCR_QUEUE = "ocr_queue";
 
 const originalSend = s3.send.bind(s3);
 const originalFindUnique = prisma.media.findUnique.bind(prisma.media);
-const originalUpdate = prisma.media.update.bind(prisma.media);
+const originalUpdateMany = prisma.media.updateMany.bind(prisma.media);
 const originalUpsert = prisma.document.upsert.bind(prisma.document);
 
 function mockS3Send (fn: (cmd: any) => any) {
@@ -63,7 +63,7 @@ function mockMediaFindUnique (result: any) {
 }
 
 function mockMediaUpdate (fn: (args: any) => any) {
-  (prisma.media as any).update = async (args: any) => fn(args);
+  (prisma.media as any).updateMany = async (args: any) => fn(args);
 }
 
 function mockDocumentUpsert (fn: (args: any) => any) {
@@ -86,7 +86,7 @@ function mockOcrDeps (): OcrDeps {
 afterEach(() => {
   (s3 as any).send = originalSend;
   (prisma.media as any).findUnique = originalFindUnique;
-  (prisma.media as any).update = originalUpdate;
+  (prisma.media as any).updateMany = originalUpdateMany;
   (prisma.document as any).upsert = originalUpsert;
 });
 
@@ -114,13 +114,13 @@ test("processOcrJob writes OCR text for non-PDF media", async () => {
   let upsertArgs: unknown = null;
   mockDocumentUpsert(args => {
     upsertArgs = args;
-    return {} as any;
+    return { count: 1 };
   });
 
   let updateArgs: unknown = null;
   mockMediaUpdate(args => {
     updateArgs = args;
-    return {} as any;
+    return { count: 1 };
   });
 
   await processOcrJob(mockOcrDeps(), { mediaId: "media-1" });
@@ -140,5 +140,5 @@ test("processOcrJob throws when source is not ready", async () => {
   mockMediaUpdate(() => ({} as any));
   mockDocumentUpsert(() => ({} as any));
 
-  await assert.rejects(processOcrJob(mockOcrDeps(), { mediaId: "media-2" }), /SOURCE_NOT_READY/);
+  await assert.rejects(processOcrJob(mockOcrDeps(), { mediaId: "media-2" }), /Source not ready/);
 });

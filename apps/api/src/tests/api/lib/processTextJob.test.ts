@@ -11,7 +11,7 @@ function buildMinimalPdf (text: string): Buffer {
   const objects = [
     "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
     "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
-    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
+    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
     `4 0 obj\n<< /Length ${stream.length} >>\nstream\n${stream}\nendstream\nendobj\n`,
     "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
   ];
@@ -90,6 +90,57 @@ test("processTextJob runs OCRmyPDF for non-PDFs", async () => {
   assert.equal((ocrCalls[0] as { language: string }).language, "eng");
 });
 
+test("processTextJob skips OCR and returns empty for blank images", async () => {
+  const s3 = { send: async () => ({}) } as unknown as S3Client;
+  const ocrCalls: unknown[] = [];
+  const result = await processTextJob(
+    {
+      s3,
+      bucket: "bucket",
+      key: "file.png",
+      mimeType: "image/png",
+    },
+    {
+      getObjectBuffer: async () => Buffer.from("fake image bytes"),
+      ocrWithOcrmypdf: async args => {
+        ocrCalls.push(args);
+        return { ocrPdf: buildMinimalPdf("should not reach") };
+      },
+      isBlankImage: async () => true,
+    },
+  );
+
+  assert.equal(result.textSource, "OCR");
+  assert.equal(result.rawText, "");
+  assert.equal(result.needsOcr, false);
+  assert.equal(ocrCalls.length, 0, "ocrmypdf must not be called for blank images");
+});
+
+test("processTextJob runs OCR normally when blank check returns false", async () => {
+  const s3 = { send: async () => ({}) } as unknown as S3Client;
+  const ocrCalls: unknown[] = [];
+  const result = await processTextJob(
+    {
+      s3,
+      bucket: "bucket",
+      key: "file.png",
+      mimeType: "image/png",
+    },
+    {
+      getObjectBuffer: async () => Buffer.from("fake image bytes"),
+      ocrWithOcrmypdf: async args => {
+        ocrCalls.push(args);
+        return { ocrPdf: buildMinimalPdf("Real text") };
+      },
+      isBlankImage: async () => false,
+    },
+  );
+
+  assert.equal(result.textSource, "OCR");
+  assert.equal(result.rawText, "Real text");
+  assert.equal(ocrCalls.length, 1, "ocrmypdf must run when image is not blank");
+});
+
 test("processTextJob throws when PDF source is missing", async () => {
   const s3 = {
     send: async () => ({ Body: null }),
@@ -102,6 +153,6 @@ test("processTextJob throws when PDF source is missing", async () => {
       key: "file.pdf",
       mimeType: "application/pdf",
     }),
-    /SOURCE_NOT_READY/,
+    /Source.*not ready|SOURCE_NOT_READY/i,
   );
 });

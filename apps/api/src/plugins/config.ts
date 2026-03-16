@@ -5,6 +5,7 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().positive().default(8000),
+  CORS_ORIGIN: z.string().default("http://localhost:3000"),
 
   // Stubs for later steps (add real values when wiring DB/MinIO/Redis)
   POSTGRES_URL: z.string().url().optional(),

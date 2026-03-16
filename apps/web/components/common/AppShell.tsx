@@ -6,6 +6,7 @@ import { TopNav } from "./TopNav";
 import { Sidebar, type TagItem, type SavedView } from "./Sidebar";
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { TAGS_UPDATED_EVENT } from "@/lib/tags";
+import { BUNDLES_UPDATED_EVENT } from "@/lib/bundles";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -27,6 +28,8 @@ export function AppShell({
   const [isFetchingTags, setIsFetchingTags] = useState(false);
   const [tagsError, setTagsError] = useState<string | null>(null);
   const tagsAbortRef = useRef<AbortController | null>(null);
+  const [sidebarBundles, setSidebarBundles] = useState<SavedView[] | null>(savedViews);
+  const bundlesAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setSidebarTags(tags);
@@ -82,6 +85,38 @@ export function AppShell({
     };
   }, [fetchSidebarTags]);
 
+  const fetchSidebarBundles = useCallback(async () => {
+    bundlesAbortRef.current?.abort();
+    const controller = new AbortController();
+    bundlesAbortRef.current = controller;
+    try {
+      const res = await fetch("/api/bundles", {
+        credentials: "include",
+        signal: controller.signal,
+      });
+      if (!res.ok) return;
+      const data = (await res.json().catch(() => null)) as
+        | { bundles?: { id: string; name: string; itemCount: number }[] }
+        | null;
+      if (!data?.bundles || bundlesAbortRef.current !== controller) return;
+      setSidebarBundles(
+        data.bundles.map(b => ({ id: b.id, name: b.name, count: b.itemCount })),
+      );
+    } catch {
+      // aborted or error — sidebar just stays empty
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchSidebarBundles().catch(() => {});
+    const handler = () => { void fetchSidebarBundles().catch(() => {}); };
+    window.addEventListener(BUNDLES_UPDATED_EVENT, handler);
+    return () => {
+      window.removeEventListener(BUNDLES_UPDATED_EVENT, handler);
+      bundlesAbortRef.current?.abort();
+    };
+  }, [fetchSidebarBundles]);
+
   return (
     <div className="flex h-screen flex-col">
       <TopNav onMenuClick={() => setMobileMenuOpen(true)} />
@@ -93,7 +128,7 @@ export function AppShell({
               <Suspense fallback={null}>
                 <Sidebar
                   tags={sidebarTags}
-                  savedViews={savedViews}
+                  savedViews={sidebarBundles}
                   tagsError={tagsError}
                   isLoading={isLoadingSidebar || isFetchingTags}
                 />
@@ -105,7 +140,7 @@ export function AppShell({
                 <Suspense fallback={null}>
                   <Sidebar
                     tags={sidebarTags}
-                    savedViews={savedViews}
+                    savedViews={sidebarBundles}
                     tagsError={tagsError}
                     isLoading={isLoadingSidebar || isFetchingTags}
                   />

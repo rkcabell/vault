@@ -24,12 +24,14 @@ export class MediaRepository {
   }
 
   async createBatch (items: Prisma.MediaCreateManyInput[]) {
-    await this.prisma.$transaction(async tx => {
-      await tx.media.createMany({ data: items });
-    });
+    await this.prisma.media.createMany({ data: items });
   }
 
   async markSourcesReady (userId: string, ids: string[]) {
+    // Raw SQL is required here: Prisma's updateMany does not support RETURNING,
+    // and the returned rows (id + storageKey) are used by finalizeBatch to enqueue
+    // OCR and thumbnail jobs. Switching to updateMany would silently drop those
+    // values and break job enqueueing without a type error.
     return this.prisma.$queryRaw<{ id: string; storageKey: string }[]>`
       UPDATE "Media"
       SET "sourceState" = 'READY'
@@ -93,28 +95,23 @@ export class MediaRepository {
     });
   }
 
-  async updateTitle (id: string, title: string) {
-    return this.updateMetadata(id, { title });
-  }
-
   async updateMetadata (id: string, data: { title?: string; tags?: string[] }) {
-    return this.prisma.media.update({
-      where: { id },
-      data: {
-        ...(data.title !== undefined ? { title: data.title } : {}),
-        ...(data.tags !== undefined ? { tags: data.tags } : {}),
-      },
-      select: {
-        id: true,
-        title: true,
-        filename: true,
-        sizeBytes: true,
-        mimeType: true,
-        thumbState: true,
-        textState: true,
-        tags: true,
-      },
-    });
+    const update = {
+      ...(data.title !== undefined ? { title: data.title } : {}),
+      ...(data.tags !== undefined ? { tags: data.tags } : {}),
+    };
+    const select = {
+      id: true,
+      title: true,
+      filename: true,
+      sizeBytes: true,
+      mimeType: true,
+      thumbState: true,
+      textState: true,
+      tags: true,
+    };
+
+    return this.prisma.media.update({ where: { id }, data: update, select });
   }
 
   async findStorageKey (userId: string, id: string) {
@@ -141,11 +138,15 @@ export class MediaRepository {
     });
   }
 
-  async setTextStatePending (id: string) {
-    await this.prisma.media.update({
-      where: { id },
+  async setTextStatePending (id: string): Promise<boolean> {
+    // Re-run trigger: allowed from READY or ERROR (and idempotently from PENDING).
+    // NOT allowed if somehow the record ends up in an unknown state — but all three
+    // normal states are listed here, so that case doesn't arise in practice.
+    const result = await this.prisma.media.updateMany({
+      where: { id, textState: { in: ["PENDING", "READY", "ERROR"] } },
       data: { textState: "PENDING" },
     });
+    return result.count > 0;
   }
 
   async findDetail (userId: string, id: string) {
@@ -173,6 +174,9 @@ export class MediaRepository {
             pages: true,
           },
         },
+        extractedMetadata: {
+          select: { data: true },
+        },
       },
     });
   }
@@ -184,24 +188,37 @@ export class MediaRepository {
     });
   }
 
-  async setThumbReady (mediaId: string, thumbnailKey: string) {
-    await this.prisma.media.update({
-      where: { id: mediaId },
+  async setThumbReady (mediaId: string, thumbnailKey: string): Promise<boolean> {
+    // Guard: only transition from PENDING. Prevents a late-arriving worker from
+    // overwriting a FAILED state with READY (e.g., retry completing after exhaustion).
+    const result = await this.prisma.media.updateMany({
+      where: { id: mediaId, thumbState: "PENDING" },
       data: { thumbnailKey, thumbState: "READY", thumbError: null },
     });
+    return result.count > 0;
   }
 
-  async setThumbFailed (mediaId: string, error: string) {
-    await this.prisma.media.update({
+  async resetThumbState (mediaId: string): Promise<boolean> {
+    const result = await this.prisma.media.updateMany({
       where: { id: mediaId },
+      data: { thumbnailKey: null, thumbState: "PENDING", thumbError: null },
+    });
+    return result.count > 0;
+  }
+
+  async setThumbFailed (mediaId: string, error: string): Promise<boolean> {
+    // Guard: only transition from PENDING. Prevents retrograde READY → FAILED writes.
+    const result = await this.prisma.media.updateMany({
+      where: { id: mediaId, thumbState: "PENDING" },
       data: { thumbState: "FAILED", thumbError: error },
     });
+    return result.count > 0;
   }
 
   async findForOcr (mediaId: string) {
     return this.prisma.media.findUnique({
       where: { id: mediaId },
-      select: { id: true, storageKey: true, mimeType: true, textState: true },
+      select: { id: true, storageKey: true, mimeType: true, textState: true, sizeBytes: true },
     });
   }
 
@@ -213,66 +230,71 @@ export class MediaRepository {
     return media?.textState ?? null;
   }
 
-  async setTextState (mediaId: string, state: "PENDING" | "READY" | "ERROR") {
-    await this.prisma.media.update({
-      where: { id: mediaId },
+  async setTextState (mediaId: string, state: "PENDING" | "READY" | "ERROR"): Promise<boolean> {
+    // Guard: worker-initiated writes (including PDF intermediate PENDING→PENDING re-queues)
+    // are only allowed from PENDING. This prevents a late worker from overwriting a cancel
+    // or stall-detection ERROR with READY.
+    const result = await this.prisma.media.updateMany({
+      where: { id: mediaId, textState: "PENDING" },
       data: { textState: state },
     });
+    return result.count > 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stall detection helpers
+  // ---------------------------------------------------------------------------
+
+  /** Returns media whose thumbState or textState has been stuck at PENDING since before staleBefore. */
+  async findStalledMedia (staleBefore: Date) {
+    return this.prisma.media.findMany({
+      where: {
+        OR: [
+          { thumbState: "PENDING", updatedAt: { lt: staleBefore } },
+          { textState: "PENDING", updatedAt: { lt: staleBefore } },
+        ],
+      },
+      select: { id: true, thumbState: true, textState: true },
+    });
+  }
+
+  /** Marks thumbState PENDING → FAILED for a batch of media ids. Returns the number updated. */
+  async markThumbStalled (mediaIds: string[], error: string): Promise<number> {
+    const result = await this.prisma.media.updateMany({
+      where: { id: { in: mediaIds }, thumbState: "PENDING" },
+      data: { thumbState: "FAILED", thumbError: error },
+    });
+    return result.count;
+  }
+
+  /** Marks textState PENDING → ERROR for a batch of media ids. Returns the number updated. */
+  async markTextStalled (mediaIds: string[]): Promise<number> {
+    const result = await this.prisma.media.updateMany({
+      where: { id: { in: mediaIds }, textState: "PENDING" },
+      data: { textState: "ERROR" },
+    });
+    return result.count;
   }
 
   async listTopTags (userId: string, limit: number) {
     return this.prisma.$queryRaw<{ tag: string; count: number }[]>`
-      WITH media_counts AS (
-        SELECT tag, COUNT(*)::int AS count
-        FROM (
-          SELECT unnest("tags") AS tag
-          FROM "Media"
-          WHERE "userId" = ${userId}
-        ) t
-        GROUP BY tag
-      ),
-      catalog AS (
-        SELECT "name" AS tag, 0::int AS count
-        FROM "Tag"
+      SELECT tag, COUNT(*)::int AS count
+      FROM (
+        SELECT unnest("tags") AS tag
+        FROM "Media"
         WHERE "userId" = ${userId}
-      ),
-      combined AS (
-        SELECT tag, count FROM media_counts
-        UNION
-        SELECT c.tag, c.count FROM catalog c WHERE NOT EXISTS (
-          SELECT 1 FROM media_counts mc WHERE mc.tag = c.tag
-        )
-      )
-      SELECT tag, count
-      FROM combined
+      ) t
+      GROUP BY tag
       ORDER BY count DESC, tag ASC
       LIMIT ${limit}
     `;
   }
 
-  async ensureTag (userId: string, tag: string) {
-    await this.prisma.tag.upsert({
-      where: { userId_name: { userId, name: tag } },
-      update: {},
-      create: { userId, name: tag },
-    });
-  }
-
-  async ensureTags (userId: string, tags: string[]) {
-    if (!tags.length) return;
-    await Promise.all(tags.map(tag => this.ensureTag(userId, tag)));
-  }
-
   async deleteTag (userId: string, tag: string) {
-    await this.prisma.$transaction([
-      this.prisma.$executeRaw`
-        UPDATE "Media"
-        SET "tags" = array_remove("tags", ${tag})
-        WHERE "userId" = ${userId} AND ${tag} = ANY("tags")
-      `,
-      this.prisma.tag.deleteMany({
-        where: { userId, name: tag },
-      }),
-    ]);
+    await this.prisma.$executeRaw`
+      UPDATE "Media"
+      SET "tags" = array_remove("tags", ${tag})
+      WHERE "userId" = ${userId} AND ${tag} = ANY("tags")
+    `;
   }
 }

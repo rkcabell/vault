@@ -3,8 +3,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
+
+const DevPurgeButton =
+  process.env.NODE_ENV === "development"
+    ? dynamic(() => import("@/components/dev/DevPurgeButton"))
+    : null;
 import { Container, PageHeader } from "@/components/common";
 import { MediaCard, MediaCardSkeleton, type MediaItem } from "@/components/media";
+import { BulkActionBar } from "@/components/media/BulkActionBar";
+import { BulkTagDialog } from "@/components/media/BulkTagDialog";
+import { BulkBundleDialog } from "@/components/media/BulkBundleDialog";
 import { Button } from "@/components/ui/Button";
 import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown } from "lucide-react";
 import { useUpload } from "@/components/contexts/UploadContext";
@@ -24,7 +33,7 @@ const PAGE_SIZE = 24;
 const DENSITY_OPTIONS = [3, 4, 5, 6] as const;
 // Sort menu definitions.
 const SORT_OPTIONS = [
-  { value: "createdAt_desc", label: "Recent" },
+  { value: "createdAt_desc", label: "Newest" },
   { value: "createdAt_asc", label: "Oldest" },
   { value: "title_asc", label: "Name A-Z" },
   { value: "title_desc", label: "Name Z-A" },
@@ -83,15 +92,29 @@ export default function LibraryPageInner() {
   const deletedIdsRef = useRef<Set<string>>(new Set());
   const fetchIdRef = useRef(0);
 
+  // Select mode.
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
+  const [isBundleDialogOpen, setIsBundleDialogOpen] = useState(false);
+
   // Refresh control.
   const [refreshToken, setRefreshToken] = useState(0);
   const [hasHandledRefreshParam, setHasHandledRefreshParam] = useState(false);
 
   // View + density controls.
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [gridCols, setGridCols] = useState<DensityValue>(3);
+  const [gridCols, setGridCols] = useState<DensityValue>(5);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("library:gridCols");
+      const parsed = Number(saved);
+      if ((DENSITY_OPTIONS as readonly number[]).includes(parsed)) {
+        setGridCols(parsed as DensityValue);
+      }
+    } catch { /* ignore */ }
+  }, []);
   const [isCompactList, setIsCompactList] = useState(false);
-  const [isPurging, setIsPurging] = useState(false);
 
   // Drag/drop overlay state (robust against child enter/leave flicker)
   const [isDragging, setIsDragging] = useState(false);
@@ -102,13 +125,14 @@ export default function LibraryPageInner() {
   const q = searchParams.get("q")?.trim() ?? "";
   const tagsParam = searchParams.get("tags")?.trim() ?? "";
   const singleTag = searchParams.get("tag")?.trim() ?? "";
-  const tags = useMemo(() => {
-    const list = tagsParam
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
-    if (list.length > 0) return list;
-    return singleTag ? [singleTag] : [];
+  const tag = useMemo(() => {
+    if (singleTag) return singleTag;
+    return (
+      tagsParam
+        .split(",")
+        .map((t) => t.trim())
+        .find(Boolean) ?? ""
+    );
   }, [singleTag, tagsParam]);
   const thumbState = searchParams.get("thumbState")?.trim() ?? "";
   const textState = searchParams.get("textState")?.trim() ?? "";
@@ -117,14 +141,14 @@ export default function LibraryPageInner() {
     ? (sortParam as SortValue)
     : DEFAULT_SORT;
   const sortLabel =
-    SORT_OPTIONS.find((option) => option.value === sort)?.label ?? "Recent";
+    SORT_OPTIONS.find((option) => option.value === sort)?.label ?? "Newest";
 
   // Layout class helpers.
   const gridClassByCols: Record<3 | 4 | 5 | 6, string> = {
-    3: "grid-cols-1 md:grid-cols-2 lg:grid-cols-3",
-    4: "grid-cols-1 md:grid-cols-2 lg:grid-cols-4",
-    5: "grid-cols-1 md:grid-cols-2 lg:grid-cols-5",
-    6: "grid-cols-1 md:grid-cols-2 lg:grid-cols-6",
+    3: "grid-cols-1 sm:grid-cols-2 md:grid-cols-3",
+    4: "grid-cols-2 sm:grid-cols-3 md:grid-cols-4",
+    5: "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5",
+    6: "grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6",
   };
 
   const layoutClass =
@@ -140,13 +164,13 @@ export default function LibraryPageInner() {
       params.set("limit", String(PAGE_SIZE));
       params.set("sort", sort);
       if (q) params.set("q", q);
-      if (tags.length) params.set("tags", tags.join(","));
+      if (tag) params.set("tags", tag);
       if (thumbState) params.set("thumbState", thumbState);
       if (textState) params.set("textState", textState);
       if (cursor) params.set("cursor", cursor);
       return params.toString();
     },
-    [q, sort, tags, textState, thumbState]
+    [q, sort, tag, textState, thumbState]
   );
 
   const handleSortChange = useCallback(
@@ -160,49 +184,6 @@ export default function LibraryPageInner() {
     [router, searchParams],
   );
 
-  const handleDevPurge = useCallback(async () => {
-    if (isPurging) return;
-    const confirmed = window.confirm(
-      "Delete all uploaded files for this account? This cannot be undone.",
-    );
-    if (!confirmed) return;
-    setIsPurging(true);
-    try {
-      let cursor: string | null = null;
-      let ids: string[] = [];
-      do {
-        const params = new URLSearchParams(buildQuery(cursor ?? undefined));
-        params.set("limit", "100");
-        const qs = params.toString();
-        const res = await fetch(`/api/media?${qs}`, {
-          method: "GET",
-          credentials: "include",
-        });
-        if (!res.ok) {
-          const msg = await readErrorMessage(res);
-          setError(msg);
-          return;
-        }
-        const data = (await res.json()) as MediaListResponse;
-        ids = (data.items ?? []).map((item) => item.id);
-        cursor = data.nextCursor ?? null;
-        for (const id of ids) {
-          await fetch(`/api/media/${id}`, {
-            method: "DELETE",
-            credentials: "include",
-          });
-        }
-      } while (cursor);
-      setMediaItems([]);
-      setNextCursor(null);
-      setError(null);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to delete media.";
-      setError(message);
-    } finally {
-      setIsPurging(false);
-    }
-  }, [buildQuery, isPurging]);
 
   const hydrateItems = useCallback((list: MediaListItem[]) => {
     return list.map((item) => {
@@ -301,24 +282,42 @@ export default function LibraryPageInner() {
   useEffect(() => {
     if (!hasHandledRefreshParam) return;
     fetchMedia();
-  }, [fetchMedia, hasHandledRefreshParam, q, refreshToken, sort, tags, textState, thumbState]);
+  }, [fetchMedia, hasHandledRefreshParam, q, refreshToken, sort, tag, textState, thumbState]);
 
-  // Poll while anything is pending
-  const hasPending = useMemo(
-    () =>
-      mediaItems.some(
-        (item) => item.thumbState === "PENDING" || item.textState === "PENDING"
-      ),
-    [mediaItems]
-  );
-
+  // SSE: receive job-state updates pushed from the server instead of polling
   useEffect(() => {
-    if (!hasPending) return;
-    const intervalId = setInterval(() => {
+    const es = new EventSource("/api/media/events");
+
+    // Once the SSE connection is fully established on the server, do a silent
+    // re-fetch to catch any items that finished processing in the window between
+    // the initial fetchMedia call and the SSE listener being registered.
+    es.onopen = () => {
       fetchMedia({ silent: true });
-    }, 5000);
-    return () => clearInterval(intervalId);
-  }, [fetchMedia, hasPending]);
+    };
+
+    es.onmessage = (e: MessageEvent<string>) => {
+      try {
+        const { mediaId, field, value } = JSON.parse(e.data) as {
+          mediaId?: string;
+          field?: "textState" | "thumbState";
+          value?: string;
+        };
+        if (!mediaId || !field || !value) return;
+        setMediaItems((prev) =>
+          prev.map((item) => (item.id === mediaId ? { ...item, [field]: value } : item))
+        );
+      } catch {
+        // ignore malformed frames
+      }
+    };
+
+    // On reconnect after a gap, re-fetch the full list to catch any missed updates
+    es.onerror = () => {
+      fetchMedia({ silent: true });
+    };
+
+    return () => es.close();
+  }, [fetchMedia]);
 
   const handleUploadClick = useCallback(() => {
     router.push("/upload");
@@ -374,6 +373,17 @@ export default function LibraryPageInner() {
     [deletingIds, fetchMedia]
   );
 
+  const handleDownload = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/media/${id}/download`, { credentials: "include" });
+      if (!res.ok) return;
+      const { url } = await res.json() as { url: string };
+      window.open(url, "_blank");
+    } catch {
+      // silent — download is best-effort
+    }
+  }, []);
+
   const handleRename = useCallback(
     async (id: string, nextTitle: string) => {
       if (deletingIds.has(id)) return;
@@ -411,6 +421,68 @@ export default function LibraryPageInner() {
     },
     [deletingIds]
   );
+
+  // Select mode handlers.
+  const toggleSelectMode = useCallback(() => {
+    setIsSelectMode(prev => !prev);
+    setSelectedIds(new Set());
+  }, []);
+
+  const handleSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleBulkDelete = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const confirmed = window.confirm(`Delete ${ids.length} item(s)? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setDeletingIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.add(id));
+      return next;
+    });
+
+    const results = await Promise.allSettled(
+      ids.map(id =>
+        fetch(`/api/media/${id}`, { method: 'DELETE', credentials: 'include' })
+      )
+    );
+
+    const deleted: string[] = [];
+    results.forEach((result, i) => {
+      if (result.status === 'fulfilled' && result.value.ok) {
+        deleted.push(ids[i]);
+        deletedIdsRef.current.add(ids[i]);
+      }
+    });
+
+    setMediaItems(prev => prev.filter(item => !deleted.includes(item.id)));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      deleted.forEach(id => next.delete(id));
+      return next;
+    });
+    setDeletingIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.delete(id));
+      return next;
+    });
+
+    if (deleted.length > 0) {
+      fetchMedia({ silent: true });
+      if (deleted.length === ids.length) {
+        setIsSelectMode(false);
+        setSelectedIds(new Set());
+      }
+    }
+  }, [selectedIds, fetchMedia]);
 
   // Drag & drop handlers (no window/global pattern)
   const onDragEnter = useCallback((e: React.DragEvent) => {
@@ -459,27 +531,49 @@ export default function LibraryPageInner() {
         actions={
           <>
             <Button
-              variant="outline"
+              variant={isSelectMode ? "default" : "outline"}
               size="sm"
-              onClick={() => setViewMode(viewMode === "grid" ? "list" : "grid")}
+              onClick={toggleSelectMode}
             >
-              {viewMode === "grid" ? (
-                <>
-                  <LayoutList className="mr-2 h-4 w-4" />
-                  List View
-                </>
-              ) : (
-                <>
-                  <LayoutGrid className="mr-2 h-4 w-4" />
-                  Grid View
-                </>
-              )}
+              {isSelectMode ? "Cancel" : "Select"}
             </Button>
 
-            <Button size="sm" onClick={handleUploadClick}>
-              <Plus className="mr-2 h-4 w-4" />
-              Upload Media
-            </Button>
+            {isSelectMode && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedIds(new Set(mediaItems.map(m => m.id)))}
+              >
+                Select All
+              </Button>
+            )}
+
+            {!isSelectMode && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setViewMode(viewMode === "grid" ? "list" : "grid")}
+                >
+                  {viewMode === "grid" ? (
+                    <>
+                      <LayoutList className="mr-2 h-4 w-4" suppressHydrationWarning />
+                      List View
+                    </>
+                  ) : (
+                    <>
+                      <LayoutGrid className="mr-2 h-4 w-4" suppressHydrationWarning />
+                      Grid View
+                    </>
+                  )}
+                </Button>
+
+                <Button size="sm" onClick={handleUploadClick}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Upload Media
+                </Button>
+              </>
+            )}
           </>
         }
       />
@@ -512,15 +606,12 @@ export default function LibraryPageInner() {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {process.env.NODE_ENV === "development" && viewMode === "grid" && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleDevPurge}
-              disabled={isPurging}
-            >
-              {isPurging ? "Deleting..." : "Delete All (Dev)"}
-            </Button>
+          {DevPurgeButton && viewMode === "grid" && (
+            <DevPurgeButton
+              buildQuery={buildQuery}
+              onSuccess={() => { setMediaItems([]); setNextCursor(null); setError(null); }}
+              onError={setError}
+            />
           )}
 
           {viewMode === "list" && (
@@ -543,7 +634,10 @@ export default function LibraryPageInner() {
                 <button
                   key={count}
                   type="button"
-                  onClick={() => setGridCols(count)}
+                  onClick={() => {
+                    setGridCols(count);
+                    try { localStorage.setItem("library:gridCols", String(count)); } catch { /* ignore */ }
+                  }}
                   aria-pressed={isActive}
                   aria-label={`${count} columns`}
                   className={cn(
@@ -602,10 +696,13 @@ export default function LibraryPageInner() {
                 variant={viewMode}
                 density={isCompactList ? "compact" : "comfortable"}
                 loading={index < EAGER_THUMB_COUNT ? "eager" : "lazy"}
-                onDownload={(id) => console.log("Download:", id)}
-                onDelete={handleDelete}
-                onRename={handleRename}
+                onDownload={isSelectMode ? undefined : (id) => void handleDownload(id)}
+                onDelete={isSelectMode ? undefined : handleDelete}
+                onRename={isSelectMode ? undefined : handleRename}
                 isDeleting={deletingIds.has(media.id)}
+                isSelectMode={isSelectMode}
+                isSelected={selectedIds.has(media.id)}
+                onSelect={handleSelect}
               />
             ))}
           </div>
@@ -633,6 +730,44 @@ export default function LibraryPageInner() {
           </div>
         )}
       </div>
+      {/* Bulk action bar */}
+      {isSelectMode && selectedIds.size > 0 && (
+        <BulkActionBar
+          count={selectedIds.size}
+          onDelete={() => void handleBulkDelete()}
+          onTag={() => setIsTagDialogOpen(true)}
+          onAddToBundle={() => setIsBundleDialogOpen(true)}
+          onClear={() => setSelectedIds(new Set())}
+        />
+      )}
+
+      {/* Bulk tag dialog */}
+      <BulkTagDialog
+        open={isTagDialogOpen}
+        onOpenChange={setIsTagDialogOpen}
+        selectedItems={mediaItems.filter(m => selectedIds.has(m.id))}
+        onDone={(updatedItems) => {
+          setMediaItems(prev =>
+            prev.map(item => {
+              const updated = updatedItems.find(u => u.id === item.id);
+              return updated ?? item;
+            })
+          );
+          setIsSelectMode(false);
+          setSelectedIds(new Set());
+        }}
+      />
+
+      {/* Bulk bundle dialog */}
+      <BulkBundleDialog
+        open={isBundleDialogOpen}
+        onOpenChange={setIsBundleDialogOpen}
+        selectedIds={Array.from(selectedIds)}
+        onDone={() => {
+          setIsSelectMode(false);
+          setSelectedIds(new Set());
+        }}
+      />
     </Container>
   );
 }

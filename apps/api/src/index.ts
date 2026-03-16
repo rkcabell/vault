@@ -13,6 +13,8 @@ import mediaServicesPlugin from "./plugins/mediaServices.js";
 import { mediaRoutes } from "./routes/media.js";
 import { tagsRoutes } from "./routes/tags.js";
 import { remindersRoutes } from "./routes/reminders.js";
+import { bundlesRoutes } from "./routes/bundles.js";
+import queueEventsPlugin from "./plugins/queueEvents.js";
 import redisPlugin from "./plugins/redis.js";
 import rateLimitPlugin from "./plugins/rateLimit.js";
 import dotenv from "dotenv";
@@ -37,7 +39,7 @@ async function main () {
   //Fastify instance
   await app.register(configPlugin); // loads & validates env into app.config
   await app.register(cookie, { secret: app.config.JWT_SECRET }); // registers cookie plugin
-  await app.register(cors, { origin: true }); // dev-friendly; lock down later
+  await app.register(cors, { origin: app.config.CORS_ORIGIN, credentials: true });
   await app.register(sensible); // adds handy utilities
   await app.register(healthRoutes, { prefix: "/health" }); // /healthz, /readyz
   await app.register(prismaPlugin); // registers a PrismaClient (DB)
@@ -46,9 +48,11 @@ async function main () {
   await app.register(profileRoutes, { prefix: "/api/profile" });
   await app.register(s3Plugin); // aws bucket storage
   await app.register(mediaServicesPlugin); // media services + queues wiring
+  await app.register(queueEventsPlugin); // shared QueueEvents + jobEvents emitter for SSE
   await app.register(mediaRoutes, { prefix: "/api/media" });
   await app.register(tagsRoutes, { prefix: "/api/tags" });
   await app.register(remindersRoutes, { prefix: "/api/reminders" });
+  await app.register(bundlesRoutes, { prefix: "/api/bundles" });
   await app.register(redisPlugin); // Redis for queue/rate-limit groundwork
   await app.register(rateLimitPlugin); // Redis rate limit
 

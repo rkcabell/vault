@@ -16,10 +16,10 @@ process.env.THUMB_QUEUE = "thumb:queue";
 
 const originalSend = s3.send.bind(s3);
 const originalFindUnique = prisma.media.findUnique.bind(prisma.media);
-const originalUpdate = prisma.media.update.bind(prisma.media);
+const originalUpdateMany = prisma.media.updateMany.bind(prisma.media);
 
 function mockUpdate (fn: (args: any) => any) {
-  (prisma.media as any).update = async (args: any) => fn(args);
+  (prisma.media as any).updateMany = async (args: any) => fn(args);
 }
 
 function mockFindUnique (result: any) {
@@ -41,7 +41,7 @@ function mockThumbDeps (): ThumbDeps {
 afterEach(() => {
   (s3 as any).send = originalSend;
   (prisma.media as any).findUnique = originalFindUnique;
-  (prisma.media as any).update = originalUpdate;
+  (prisma.media as any).updateMany = originalUpdateMany;
 });
 
 test("processThumb marks READY when thumbnail already exists", async () => {
@@ -52,7 +52,7 @@ test("processThumb marks READY when thumbnail already exists", async () => {
   let updateArgs: unknown = null;
   mockUpdate((args: any) => {
     updateArgs = args;
-    return {} as any;
+    return { count: 1 };
   });
 
   mockS3Send(() => {
@@ -69,6 +69,7 @@ test("processThumb marks READY when thumbnail already exists", async () => {
   });
 
   assert.deepEqual((updateArgs as { data: unknown }).data, {
+    thumbnailKey: outKey,
     thumbState: "READY",
     thumbError: null,
   });
@@ -100,7 +101,7 @@ test("processThumb uploads a thumbnail and updates the record", async () => {
   let updateArgs: unknown = null;
   mockUpdate((args: any) => {
     updateArgs = args;
-    return {} as any;
+    return { count: 1 };
   });
 
   await processThumb(mockThumbDeps(), {
@@ -139,7 +140,7 @@ test("processThumb marks FAILED when input cannot be decoded", async () => {
   let updateArgs: unknown = null;
   mockUpdate((args: any) => {
     updateArgs = args;
-    return {} as any;
+    return { count: 1 };
   });
 
   await processThumb(mockThumbDeps(), {

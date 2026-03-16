@@ -7,6 +7,20 @@ import { UserRepository } from "../repositories/userRepository.js";
 import { createPasswordHasher } from "../adapters/passwordHasher.js";
 import { createJwtAdapter } from "../adapters/jwtAdapter.js";
 
+function parseAuthBody(body: unknown) {
+  const schema = z.object({
+    email: z.string().email(),
+    password: z.string().min(8),
+  });
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    const field = result.error.issues[0]?.path[0];
+    if (field === "email") return { error: "Invalid email address" } as const;
+    return { error: "Password must be at least 8 characters" } as const;
+  }
+  return { data: result.data };
+}
+
 export const authRoutes: FastifyPluginAsync = async app => {
   const authService = createAuthService({
     userRepository: new UserRepository(app.prisma),
@@ -44,11 +58,9 @@ export const authRoutes: FastifyPluginAsync = async app => {
     async (req, reply) => {
       if (reply.sent) return;
 
-      const schema = z.object({
-        email: z.string().email(),
-        password: z.string().min(8),
-      });
-      const data = schema.parse(req.body);
+      const parsed = parseAuthBody(req.body);
+      if ("error" in parsed) return reply.badRequest(parsed.error);
+      const data = parsed.data;
 
       try {
         const { user, tokens } = await authService.register(data.email, data.password);
@@ -74,15 +86,8 @@ export const authRoutes: FastifyPluginAsync = async app => {
     async (req, reply) => {
       if (reply.sent) return;
 
-      const schema = z.object({
-        email: z.string().email(),
-        password: z.string().min(8),
-      });
-
-      const parsed = schema.safeParse(req.body);
-      if (!parsed.success) {
-        return reply.badRequest("Invalid email or password format");
-      }
+      const parsed = parseAuthBody(req.body);
+      if ("error" in parsed) return reply.badRequest(parsed.error);
       const data = parsed.data;
 
       // 10 login attempts/min per email (fine-grained)

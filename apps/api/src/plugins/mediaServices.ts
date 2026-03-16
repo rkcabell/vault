@@ -57,6 +57,7 @@ export default fp(
         s3Adapter,
         bucket: app.config.S3_BUCKET,
         ocrQueue,
+        thumbQueue,
       }),
     };
 

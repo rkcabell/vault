@@ -20,6 +20,7 @@ export type OcrDeps = {
   queueName?: string;
   sleep?: OcrProcessingDeps["sleep"];
   textDeps?: OcrProcessingDeps["textDeps"];
+  publishJobUpdate?: OcrProcessingDeps["publishJobUpdate"];
 };
 
 export async function processOcrJob (deps: OcrDeps, data: OcrJobData) {
@@ -34,6 +35,7 @@ export async function processOcrJob (deps: OcrDeps, data: OcrJobData) {
     queueName: deps.queueName ?? process.env.OCR_QUEUE ?? "ocr_queue",
     sleep: deps.sleep,
     textDeps: deps.textDeps,
+    publishJobUpdate: deps.publishJobUpdate,
   };
   return processOcrJobInternal(serviceDeps, data);
 }

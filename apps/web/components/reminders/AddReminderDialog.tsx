@@ -54,6 +54,7 @@ function inferMeridiem(localValue: string): "AM" | "PM" {
 export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminderDialogProps) {
   const createReminder = useCreateReminder();
   const [title, setTitle] = useState("");
+  const [note, setNote] = useState("");
   const [dueAtLocal, setDueAtLocal] = useState("");
   const [dueMeridiem, setDueMeridiem] = useState<"AM" | "PM">("AM");
   const [remindOffsetDays, setRemindOffsetDays] = useState("");
@@ -61,6 +62,7 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
 
   const resetForm = () => {
     setTitle("");
+    setNote("");
     setDueAtLocal("");
     setDueMeridiem("AM");
     setRemindOffsetDays("");
@@ -107,9 +109,12 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
 
     setFormError(null);
 
+    const trimmedNote = note.trim();
+
     try {
       await createReminder.mutateAsync({
         title: trimmedTitle,
+        ...(trimmedNote.length > 0 ? { note: trimmedNote } : {}),
         dueAt,
         ...(parsedOffset !== undefined ? { remindOffsetDays: parsedOffset } : {}),
       });
@@ -141,6 +146,21 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
                 placeholder="Renew insurance"
                 required
                 disabled={createReminder.isPending}
+              />
+            </div>
+
+            <div className="reminder-form-group">
+              <Label htmlFor="reminder-note">Note (optional)</Label>
+              <textarea
+                id="reminder-note"
+                value={note}
+                onChange={event => setNote(event.target.value)}
+                placeholder="Add a note..."
+                maxLength={5000}
+                rows={3}
+                disabled={createReminder.isPending}
+                className="reminder-note-input"
+                aria-label="Note"
               />
             </div>
 

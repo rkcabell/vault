@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat /c/Users/Rynan/Desktop/Vault/vault/apps/web/app/\\\\\\(public\\\\\\)/shared/[token]/page.tsx)",
+      "Read(//^export function Sidebar/,/^}$/**)",
+      "Bash(git -C \"/c/Users/Rynan/Desktop/Vault/vault\" diff apps/web/components/common/TopNav.tsx)",
+      "Bash(find c:/Users/Rynan/Desktop/Vault/vault/apps/web/app -name search -o -name search.tsx -o -name page.tsx -path */search/*)",
+      "Bash(find c:/Users/Rynan/Desktop/Vault/vault/apps/web/app -path */search* -name *.tsx)",
+      "Bash(grep -l \"Dialog\\\\|Modal\" c:UsersRynanDesktopVaultvaultappswebcomponents/**/*.tsx)",
+      "Bash(npx prisma:*)",
+      "Bash(find \"c:\\\\Users\\\\Rynan\\\\Desktop\\\\Vault\\\\vault\\\\apps\\\\web\\\\app\\\\\\(protected\\)\\\\media\" -name \"*.tsx\")"
+    ]
+  }
+}

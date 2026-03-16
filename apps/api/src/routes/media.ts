@@ -5,6 +5,7 @@ import { requireAuth } from "../utils/authGuard.js";
 import { MEDIA_SORT_OPTIONS } from "../services/media/mediaQueryService.js";
 import { getUploadSizeError } from "../lib/media/uploadLimits.js";
 import { normalizeTags, TagValidationError } from "../lib/tags/normalizeTags.js";
+import type { JobUpdateEvent } from "../plugins/queueEvents.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() }).strict();
 const SORT_OPTIONS = MEDIA_SORT_OPTIONS;
@@ -160,6 +161,42 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     return { tags };
   });
 
+  // GET /media/events - Server-Sent Events stream for job state updates (thumb + text)
+  app.get("/events", { preHandler: [requireAuth] }, (req, reply) => {
+    const userId = req.userId!;
+
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.flushHeaders();
+
+    // Hand off — Fastify will not attempt to send a response after this
+    reply.hijack();
+
+    const send = (data: object) => {
+      if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Keep-alive ping every 25 s so proxies/load-balancers don't close idle streams
+    const ping = setInterval(() => {
+      if (!reply.raw.writableEnded) reply.raw.write(": ping\n\n");
+    }, 25_000);
+
+    const listener = (event: JobUpdateEvent) => {
+      if (event.userId === userId) {
+        send({ mediaId: event.mediaId, field: event.field, value: event.value });
+      }
+    };
+
+    app.jobEvents.on("update", listener);
+
+    req.raw.once("close", () => {
+      clearInterval(ping);
+      app.jobEvents.off("update", listener);
+      if (!reply.raw.writableEnded) reply.raw.end();
+    });
+  });
+
   // DELETE /media/:id - delete my media
   app.delete<{ Params: { id: string } }>(
     "/:id",
@@ -298,6 +335,21 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     return reply.send(media);
   });
+
+  // POST /media/:id/thumbnail/regenerate - force-requeue thumbnail generation
+  app.post<{ Params: { id: string } }>(
+    "/:id/thumbnail/regenerate",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+
+      const result = await actionsService.regenerateThumbnail(userId, id);
+      if (!result) return reply.notFound();
+
+      return reply.send(result);
+    },
+  );
 
   // GET /media/:id/thumbnail - stream thumbnail bytes or fallback
   app.get("/:id/thumbnail", { preHandler: [requireAuth] }, async (req, reply) => {

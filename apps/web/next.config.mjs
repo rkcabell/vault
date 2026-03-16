@@ -3,6 +3,7 @@
 const nextConfig = {
   reactStrictMode: true,
   typedRoutes: true,
+  transpilePackages: ["@vault/types"],
 
   async rewrites() {
     const apiBase = process.env.API_BASE_URL ?? "http://127.0.0.1:8000";

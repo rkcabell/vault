@@ -1,10 +1,17 @@
 // apps/api/eslint.config.js
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
+import globals from "globals";
 
 export default [
   // Ignore build + deps
   { ignores: ["dist/**", "node_modules/**"] },
+
+  // Node.js globals for scripts
+  {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: { globals: globals.node },
+  },
 
   // Base JS rules
   js.configs.recommended,

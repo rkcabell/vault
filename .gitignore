@@ -73,6 +73,14 @@ desktop.ini
 *.swo
 
 ################################################################################
+# Claude Code
+################################################################################
+# Local permission overrides — machine-specific, never commit
+.claude/settings.local.json
+# Project-level settings may contain machine-specific absolute paths
+.claude/settings.json
+
+################################################################################
 # Docker / local volumes
 ################################################################################
 # Compose overrides often contain machine-specific paths or creds

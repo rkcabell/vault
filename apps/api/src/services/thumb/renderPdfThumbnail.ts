@@ -4,10 +4,10 @@ import { loadPdfJs } from "../pdf/loadPdfJs.js";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 
 function toPdfJsData (input: Uint8Array | Buffer): Uint8Array {
-  if (Buffer.isBuffer(input)) {
-    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
-  }
-  return input;
+  // Copy into a fresh ArrayBuffer — pdf.js may transfer (detach) the buffer it
+  // receives, so a view into Node.js's shared pool would cause
+  // "Unable to deserialize cloned data" on subsequent access.
+  return new Uint8Array(input);
 }
 
 type CanvasGlobals = {

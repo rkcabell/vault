@@ -98,39 +98,6 @@ async function batchFinalize(ids: string[]): Promise<void> {
   }
 }
 
-/**
- * Upload with progress via XHR (fetch PUT cannot reliably report upload progress).
- * Important: Content-Type MUST match what you used when signing the presigned URL.
- */
-function putWithProgress(args: {
-  url: string;
-  file: File;
-  contentType: string;
-  onProgress: (pct: number) => void;
-}): Promise<void> {
-  const { url, file, contentType, onProgress } = args;
-
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url, true);
-
-    xhr.setRequestHeader("Content-Type", contentType);
-
-    xhr.upload.onprogress = (evt) => {
-      if (!evt.lengthComputable) return;
-      const pct = Math.round((evt.loaded / evt.total) * 100);
-      onProgress(pct);
-    };
-
-    xhr.onerror = () => reject(new Error("Network error during upload."));
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error(`Upload failed (${xhr.status}).`));
-    };
-
-    xhr.send(file);
-  });
-}
 
 type FailedUpload = { id: string; message: string };
 type CompletedUpload = { fileId: string; mediaId: string };
@@ -200,7 +167,7 @@ function exitToLibrary(clearFiles: () => void, navigate: () => void) {
 
 export default function UploadPage() {
   const router = useRouter();
-  const { files, addFiles, removeFile, clearFiles, updateFileProgress, updateFileStatus } =
+  const { files, addFiles, removeFile, clearFiles, updateFileStatus } =
     useUpload();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -266,18 +233,16 @@ export default function UploadPage() {
 
   const uploadOne = async (plan: UploadPlan) => {
     updateFileStatus(plan.fileId, "uploading");
-    updateFileProgress(plan.fileId, 0);
 
-    // PUT file to storage with progress
-    await putWithProgress({
-      url: plan.init.putUrl,
-      file: plan.file,
-      contentType: plan.contentType,
-      onProgress: (pct) => updateFileProgress(plan.fileId, pct),
+    const res = await fetch(plan.init.putUrl, {
+      method: "PUT",
+      headers: { "Content-Type": plan.contentType },
+      body: plan.file,
     });
 
+    if (!res.ok) throw new Error(`Upload failed (${res.status}).`);
+
     updateFileStatus(plan.fileId, "completed");
-    updateFileProgress(plan.fileId, 100);
   };
 
   const handleUpload = async () => {
@@ -469,20 +434,6 @@ export default function UploadPage() {
                             </Button>
                           </div>
                         </div>
-
-                        {uploadFile.status === "uploading" && (
-                          <div className="space-y-1">
-                            <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
-                              <div
-                                className="h-full bg-primary transition-all duration-300"
-                                style={{ width: `${uploadFile.progress}%` }}
-                              />
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              {uploadFile.progress}% uploaded
-                            </p>
-                          </div>
-                        )}
 
                         {uploadFile.status === "error" && (
                           <p className="text-sm text-destructive">

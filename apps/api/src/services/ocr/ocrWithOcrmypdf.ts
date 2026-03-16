@@ -15,6 +15,7 @@ export type OcrmypdfArgs = {
   language?: string | null;
   rotation?: string | number | null;
   onProgress?: (progress: { current: number; total?: number | null }) => void;
+  abortSignal?: AbortSignal;
 };
 
 export type OcrmypdfResult = {
@@ -52,13 +53,14 @@ export async function ocrWithOcrmypdf (args: OcrmypdfArgs): Promise<OcrmypdfResu
       cmdArgs,
       supportsProgress ? args.onProgress : undefined,
       totalPages,
+      args.abortSignal,
     );
 
     if (runResult.code !== 0) {
       const fallback =
         supportsProgress && /progress-bar/i.test(runResult.stderr + runResult.stdout);
       if (fallback) {
-        const retryResult = await runOcrmypdf(["--quiet", ...baseArgs], undefined, totalPages);
+        const retryResult = await runOcrmypdf(["--quiet", ...baseArgs], undefined, totalPages, args.abortSignal);
         if (retryResult.code !== 0) {
           throw buildOcrmypdfError(retryResult);
         }
@@ -125,9 +127,10 @@ async function runOcrmypdf (
   cmdArgs: string[],
   onProgress?: (progress: { current: number; total?: number | null }) => void,
   totalPages?: number | null,
+  abortSignal?: AbortSignal,
 ): Promise<OcrmypdfRunResult> {
   const progressParser = createProgressParser(onProgress, totalPages ?? null);
-  const child = spawn("ocrmypdf", cmdArgs, { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn("ocrmypdf", cmdArgs, { stdio: ["ignore", "pipe", "pipe"], signal: abortSignal });
   let stdout = "";
   let stderr = "";
 

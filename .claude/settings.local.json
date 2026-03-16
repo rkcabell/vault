@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/Rynan/Desktop/Vault/vault/apps/web/components -type f -name *card* -o -name *Card*)"
+    ]
+  }
+}

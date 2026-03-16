@@ -1,29 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type {
+  ReminderStatus,
+  ReminderBucket,
+  ReminderOverviewRow,
+  RemindersSummary,
+  CreateReminderInput,
+  UpdateReminderInput,
+} from "@vault/types";
 
-export type ReminderStatus = "active" | "completed" | "canceled";
-export type ReminderBucket = "overdue" | "today" | "soon" | "later";
-
-export type ReminderOverviewRow = {
-  id: string;
-  title: string;
-  note: string | null;
-  media: { id: string; title: string } | null;
-  effectiveDueAt: string;
-  remindAt: string;
-  snoozedUntil: string | null;
-  bucket: ReminderBucket;
-  isOverdue: boolean;
-};
-
-export type RemindersSummary = {
-  visibleNow: number;
-  overdue: number;
-  dueToday: number;
-  dueSoon: number;
-  totalActive: number;
-  soonWindowDays: number;
+export type {
+  ReminderStatus,
+  ReminderBucket,
+  ReminderOverviewRow,
+  RemindersSummary,
 };
 
 type QueryKey = readonly unknown[];
@@ -202,6 +193,7 @@ function overviewKey(limit: number) {
 function invalidateReminderQueries() {
   invalidateByPrefix(REMINDERS_SUMMARY_KEY);
   invalidateByPrefix(["reminders", "overview"]);
+  invalidateByPrefix(["reminders", "all-active"]);
 }
 
 type MutationState<TArgs, TData> = {
@@ -257,14 +249,20 @@ export function useOverviewReminders(limit: number) {
   return useCachedQuery(key, fetchOverview);
 }
 
-export type CreateReminderInput = {
-  title: string;
-  note?: string | null;
-  mediaId?: string | null;
-  dueAt: string;
-  remindOffsetDays?: number | null;
-  rrule?: string | null;
-};
+export function useAllActiveReminders() {
+  const key = useMemo(() => ["reminders", "all-active"] as const, []);
+  const fetchAll = useCallback(
+    () =>
+      requestJson<{ items: ReminderOverviewRow[] }>(
+        "/api/reminders?status=active&view=all&limit=100",
+        { method: "GET" },
+      ),
+    [],
+  );
+  return useCachedQuery(key, fetchAll);
+}
+
+export type { CreateReminderInput };
 
 export function useCreateReminder() {
   return useReminderMutation(async (payload: CreateReminderInput) => {
@@ -279,15 +277,7 @@ export function useCreateReminder() {
   });
 }
 
-export type UpdateReminderInput = {
-  id: string;
-  title?: string;
-  note?: string | null;
-  mediaId?: string | null;
-  dueAt?: string;
-  remindOffsetDays?: number | null;
-  rrule?: string | null;
-};
+export type { UpdateReminderInput };
 
 export function useUpdateReminder() {
   return useReminderMutation(async ({ id, ...payload }: UpdateReminderInput) => {

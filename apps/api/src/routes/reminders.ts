@@ -26,6 +26,7 @@ type ReminderOverviewRow = {
   snoozedUntil: string | null;
   bucket: ReminderBucket;
   isOverdue: boolean;
+  remindOffsetDays: number | null;
 };
 
 type ReminderOutput = {
@@ -103,6 +104,7 @@ function toOverviewRow(
     remindAt: Date;
     snoozedUntil: Date | null;
     timezone: string;
+    remindOffsetDays: number | null;
     media: { id: string; title: string } | null;
   },
   now: Date,
@@ -120,6 +122,7 @@ function toOverviewRow(
     snoozedUntil: reminder.snoozedUntil ? reminder.snoozedUntil.toISOString() : null,
     bucket,
     isOverdue: bucket === "overdue",
+    remindOffsetDays: reminder.remindOffsetDays,
   } satisfies ReminderOverviewRow;
 }
 
@@ -255,14 +258,43 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
       .parse(req.query);
 
     if (query.status !== "active") {
-      throw app.httpErrors.badRequest("Overview reminders endpoint requires status=active");
-    }
-
-    if (query.view !== "overview") {
-      throw app.httpErrors.badRequest("view=all is not implemented in this milestone");
+      throw app.httpErrors.badRequest("Only status=active is supported");
     }
 
     const now = new Date();
+
+    const reminderSelect = {
+      id: true,
+      title: true,
+      note: true,
+      dueAt: true,
+      nextDueAt: true,
+      remindAt: true,
+      snoozedUntil: true,
+      timezone: true,
+      remindOffsetDays: true,
+      media: {
+        select: {
+          id: true,
+          title: true,
+        },
+      },
+    } as const;
+
+    if (query.view === "all") {
+      // Return all active reminders regardless of remindAt visibility
+      const allReminders = await app.prisma.reminder.findMany({
+        where: { userId, status: "ACTIVE" },
+        take: query.limit,
+        orderBy: { dueAt: "asc" },
+        select: reminderSelect,
+      });
+      const rows = allReminders.map(reminder => toOverviewRow(reminder, now));
+      sortOverviewRows(rows);
+      return { items: rows };
+    }
+
+    // view=overview: visible-now reminders with backfill
 
     // Over-fetch a bounded amount so we can sort accurately without loading all rows.
     // (limit max is 100, so 20x bounded at 500 keeps this cheap)
@@ -277,22 +309,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
         OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }],
       },
       take: prefetch,
-      select: {
-        id: true,
-        title: true,
-        note: true,
-        dueAt: true,
-        nextDueAt: true,
-        remindAt: true,
-        snoozedUntil: true,
-        timezone: true,
-        media: {
-          select: {
-            id: true,
-            title: true,
-          },
-        },
-      },
+      select: reminderSelect,
     });
 
     const visibleRows = visibleReminders.map(reminder => toOverviewRow(reminder, now));
@@ -313,22 +330,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
         OR: [{ remindAt: { gt: now } }, { snoozedUntil: { gt: now } }],
       },
       take: prefetch,
-      select: {
-        id: true,
-        title: true,
-        note: true,
-        dueAt: true,
-        nextDueAt: true,
-        remindAt: true,
-        snoozedUntil: true,
-        timezone: true,
-        media: {
-          select: {
-            id: true,
-            title: true,
-          },
-        },
-      },
+      select: reminderSelect,
     });
 
     const fallbackRows = hiddenReminders.map(reminder => toOverviewRow(reminder, now));
