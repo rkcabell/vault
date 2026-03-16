@@ -5,7 +5,6 @@ import { createContext, useContext, useState, ReactNode } from 'react';
 export interface UploadFile {
   id: string;
   file: File;
-  progress: number;
   status: 'pending' | 'uploading' | 'completed' | 'error';
   error?: string;
 }
@@ -15,7 +14,6 @@ interface UploadContextType {
   addFiles: (files: File[], opts?: { status?: UploadFile['status']; error?: string }) => void;
   removeFile: (id: string) => void;
   clearFiles: () => void;
-  updateFileProgress: (id: string, progress: number) => void;
   updateFileStatus: (id: string, status: UploadFile['status'], error?: string) => void;
 }
 
@@ -28,7 +26,6 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     const uploadFiles: UploadFile[] = newFiles.map((file) => ({
       id: `${file.name}-${Date.now()}-${Math.random()}`,
       file,
-      progress: 0,
       status: opts?.status ?? 'pending',
       error: opts?.error,
     }));
@@ -41,12 +38,6 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
   const clearFiles = () => {
     setFiles([]);
-  };
-
-  const updateFileProgress = (id: string, progress: number) => {
-    setFiles((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, progress } : f))
-    );
   };
 
   const updateFileStatus = (id: string, status: UploadFile['status'], error?: string) => {
@@ -62,7 +53,6 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         addFiles,
         removeFile,
         clearFiles,
-        updateFileProgress,
         updateFileStatus,
       }}
     >

@@ -16,6 +16,7 @@ import {
 } from '@/ui/DropdownMenu';
 import { Input } from '@/ui/Input';
 import { useAuth } from '@/components/contexts/AuthContext';
+import { useRemindersSummary } from '@/lib/reminders';
 import { ThemeToggle } from './ThemeToggle';
 
 interface TopNavProps {
@@ -32,6 +33,8 @@ const navLinks = [
 export function TopNav({ onMenuClick }: TopNavProps) {
   const pathname = usePathname();
   const { user, logout, status } = useAuth();
+  const remindersSummary = useRemindersSummary();
+  const overdueCount = remindersSummary.data?.overdue ?? 0;
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -119,7 +122,7 @@ export function TopNav({ onMenuClick }: TopNavProps) {
               onClick={handleLogout}
               className="cursor-pointer text-destructive focus:text-destructive"
             >
-              <LogOut className="mr-2 h-4 w-4" />
+              <LogOut className="mr-2 h-4 w-4" suppressHydrationWarning />
               Logout
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -144,10 +147,10 @@ export function TopNav({ onMenuClick }: TopNavProps) {
           onClick={onMenuClick}
           aria-label="Toggle menu"
         >
-          <Menu className="h-5 w-5" />
+          <Menu className="h-5 w-5" suppressHydrationWarning />
         </Button>
 
-        <Link href="/" className="flex items-center gap-2 font-semibold text-lg">
+        <Link href={(status === 'authenticated' ? '/overview' : '/') as Route} className="flex items-center gap-2 font-semibold text-lg">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
              {"V"}
           </div>
@@ -160,7 +163,7 @@ export function TopNav({ onMenuClick }: TopNavProps) {
               key={link.href}
               href={link.href as Route}
               className={cn(
-                'px-3 py-2 text-sm font-medium rounded-md transition-colors',
+                'relative px-3 py-2 text-sm font-medium rounded-md transition-colors',
                 'hover:bg-accent hover:text-accent-foreground',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 pathname === link.href
@@ -169,6 +172,9 @@ export function TopNav({ onMenuClick }: TopNavProps) {
               )}
             >
               {link.label}
+              {link.href === '/reminders' && overdueCount > 0 && (
+                <span className="nav-overdue-badge">{overdueCount}</span>
+              )}
             </Link>
           ))}
         </div>

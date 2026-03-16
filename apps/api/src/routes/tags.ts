@@ -21,35 +21,6 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
     };
   });
 
-  app.post("/", { preHandler: [requireAuth] }, async req => {
-    const body = z
-      .object({
-        name: z.string().optional(),
-        tags: z.unknown().optional(),
-      })
-      .parse(req.body ?? {});
-
-    const source = body.name ?? body.tags;
-    if (source === undefined) {
-      throw app.httpErrors.badRequest("Provide a tag name or tags array");
-    }
-
-    let tags: string[];
-    try {
-      tags = normalizeTags(source);
-    } catch (err) {
-      if (err instanceof TagValidationError) throw app.httpErrors.badRequest(err.message);
-      throw err;
-    }
-
-    if (tags.length === 0) throw app.httpErrors.badRequest("Tag is empty");
-
-    const tag = tags[0];
-    await repository.ensureTag(req.userId!, tag);
-
-    return { tag };
-  });
-
   app.delete("/:tag", { preHandler: [requireAuth] }, async req => {
     const Params = z.object({ tag: z.string() });
     const { tag: rawTag } = Params.parse(req.params);

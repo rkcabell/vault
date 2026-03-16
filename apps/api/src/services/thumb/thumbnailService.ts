@@ -2,12 +2,14 @@ import { GetObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/clie
 import sharp from "sharp";
 import type { Logger } from "pino";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
+import type { MediaMetadataRepository } from "../../repositories/mediaMetadataRepository.js";
 import { waitUntilObjectExists } from "../../adapters/s3ObjectProbe.js";
 import { streamToBuffer } from "../../lib/streams/toBuffer.js";
 import { looksLikeMp4, looksLikePdf, looksLikePng } from "../../lib/fileSignatures.js";
 import { renderPdfThumbnail } from "./renderPdfThumbnail.js";
 import { renderVideoThumbnail } from "./renderVideoThumbnail.js";
 import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
+import { extractMetadataFromBuffer } from "../media/metadata/extractMediaMetadata.js";
 
 export type ThumbJob = {
   type: "thumb";
@@ -20,10 +22,12 @@ export type ThumbJob = {
 
 export type ThumbDeps = {
   prismaMedia: MediaRepository;
+  metadataRepository?: MediaMetadataRepository;
   s3: S3Client;
   bucket: string;
   logger: Logger;
   queueName: string;
+  publishJobUpdate?: (update: { userId: string; mediaId: string; field: "thumbState"; value: "READY" | "FAILED" }) => void;
 };
 
 const THUMB_ERROR_FALLBACK = "thumbnail_failed";
@@ -68,6 +72,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   if (existing?.thumbnailKey === outKey) {
     if (existing.thumbState !== "READY") {
       await prismaMedia.setThumbReady(job.mediaId, outKey);
+      deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "READY" });
     }
     return;
   }
@@ -80,6 +85,16 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
 
   let inputForSharp: Buffer = original;
   const mimeType = existing?.mimeType ?? "";
+
+  // Extract and persist file metadata from the buffer we already have.
+  // Non-fatal: a metadata failure must never fail the thumbnail job.
+  if (deps.metadataRepository && mimeType) {
+    extractMetadataFromBuffer(original, mimeType)
+      .then(meta => {
+        if (meta) return deps.metadataRepository!.upsert(job.mediaId, meta);
+      })
+      .catch(err => logger.warn({ err, mediaId: job.mediaId }, "metadata extraction failed"));
+  }
   const isVideo = mimeType.startsWith("video/") || looksLikeMp4(original);
   const isPdf = mimeType.includes("pdf") || looksLikePdf(original);
 
@@ -96,6 +111,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
     } catch (err) {
       const reason = sanitizeThumbError(err);
       await prismaMedia.setThumbFailed(job.mediaId, reason);
+      deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
       logger.error(
         { ...logContext, reason, errorCode: reason, durationMs: Date.now() - startedAt, err },
         "failed to render video thumbnail",
@@ -115,6 +131,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
     } catch (err) {
       const reason = sanitizeThumbError(err);
       await prismaMedia.setThumbFailed(job.mediaId, reason);
+      deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
       logger.error(
         { ...logContext, reason, errorCode: reason, durationMs: Date.now() - startedAt, err },
         "failed to render PDF thumbnail",
@@ -134,6 +151,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   } catch (err) {
     const reason = sanitizeThumbError(err);
     await prismaMedia.setThumbFailed(job.mediaId, reason);
+    deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
     logger.error(
       { ...logContext, reason, errorCode: reason, durationMs: Date.now() - startedAt, err },
       "failed to render thumbnail",
@@ -152,6 +170,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   );
 
   await prismaMedia.setThumbReady(job.mediaId, outKey);
+  deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "READY" });
 }
 
 export function createThumbProcessor (deps: ThumbDeps) {

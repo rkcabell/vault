@@ -30,6 +30,7 @@ export type OcrProcessingDeps = {
   queueName: string;
   sleep?: (ms: number) => Promise<unknown>;
   textDeps?: ProcessTextJobDeps;
+  publishJobUpdate?: (update: { userId: string; mediaId: string; field: "textState"; value: "READY" | "ERROR" }) => void;
 };
 
 function isTransientError (err: unknown) {
@@ -74,7 +75,13 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
   }
 
   const key = storageKey ?? media.storageKey;
-  logger.info({ ...logContext, key, mimeType: media.mimeType }, "media loaded");
+  const timeoutMs = computeOcrTimeout(media.sizeBytes ?? 0);
+  logger.info({ ...logContext, key, mimeType: media.mimeType, timeoutMs }, "media loaded");
+
+  const abortController = new AbortController();
+  const abortTimer = setTimeout(() => abortController.abort(), timeoutMs);
+
+  try {
 
   const exists = await waitUntilObjectExists(s3, bucket, key, {
     maxTries: 8,
@@ -96,7 +103,8 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
         mimeType: media.mimeType,
         language,
         rotation,
-      }, deps.textDeps);
+        abortSignal: abortController.signal,
+      }, { ...deps.textDeps, logger });
 
       logger.info(
         {
@@ -108,12 +116,6 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
         "pdf extraction done",
       );
 
-      const latestState = await mediaRepository.getTextState(mediaId);
-      if (latestState === "ERROR" || latestState === "FAILED") {
-        logger.info({ ...logContext }, "ocr cancelled after pdf extraction");
-        return;
-      }
-
       await documentRepository.upsertDocument({
         mediaId,
         rawText: extracted.rawText,
@@ -121,11 +123,19 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
         textSource: extracted.textSource,
       });
 
-      await mediaRepository.setTextState(mediaId, extracted.needsOcr ? "PENDING" : "READY");
+      const stateSet = await mediaRepository.setTextState(mediaId, extracted.needsOcr ? "PENDING" : "READY");
+      if (!stateSet) {
+        logger.info({ ...logContext }, "ocr cancelled after pdf extraction");
+        return;
+      }
+
+      if (!extracted.needsOcr && data.userId) {
+        deps.publishJobUpdate?.({ userId: data.userId, mediaId, field: "textState", value: "READY" });
+      }
 
       if (extracted.needsOcr) {
         await enqueueOcr(
-          { mediaId, storageKey: key, forceOcr: true, language, rotation },
+          { mediaId, storageKey: key, forceOcr: true, language, rotation, userId: data.userId, title: data.title },
           { attempts: 1 },
         );
         logger.info({ ...logContext }, "queued OCR fallback");
@@ -152,13 +162,8 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
     forceOcr: true,
     language,
     rotation,
-  }, deps.textDeps);
-
-  const latestState = await mediaRepository.getTextState(mediaId);
-  if (latestState === "ERROR" || latestState === "FAILED") {
-    logger.info({ ...logContext }, "ocr cancelled after processing");
-    return;
-  }
+    abortSignal: abortController.signal,
+  }, { ...deps.textDeps, logger });
 
   await documentRepository.upsertDocument({
     mediaId,
@@ -167,9 +172,21 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
     textSource: ocrResult.textSource,
   });
 
-  await mediaRepository.setTextState(mediaId, "READY");
+  const stateSet = await mediaRepository.setTextState(mediaId, "READY");
+  if (!stateSet) {
+    logger.info({ ...logContext }, "ocr cancelled after processing");
+    return;
+  }
+
+  if (data.userId) {
+    deps.publishJobUpdate?.({ userId: data.userId, mediaId, field: "textState", value: "READY" });
+  }
 
   logger.info({ ...logContext, key }, "processed OCR");
+
+  } finally {
+    clearTimeout(abortTimer);
+  }
 }
 
 export function createOcrProcessor (deps: OcrProcessingDeps) {
@@ -210,3 +227,26 @@ export function createOcrProcessor (deps: OcrProcessingDeps) {
 }
 
 export { isTransientError };
+
+/**
+ * Timeout = 60s base + 30s per MB, capped at 10 minutes.
+ *
+ * Rationale:
+ *   - 60s covers fixed overhead (process startup, S3 download, pdf.js).
+ *   - ocrmypdf processes roughly 1 MB (≈2 scanned pages) in ~15s at normal load;
+ *     30s/MB gives a 2× safety margin.
+ *   - 10 min cap prevents runaway locks on unexpectedly large or corrupt files.
+ *
+ * Example timeouts:
+ *   64 KB  → ~62s    (small image)
+ *   1 MB   → ~90s
+ *   5 MB   → ~210s
+ *   20 MB+ → 600s    (cap)
+ */
+export function computeOcrTimeout (sizeBytes: number): number {
+  const BASE_MS = 60_000;
+  const PER_MB_MS = 30_000;
+  const MAX_MS = 10 * 60_000;
+  const sizeMb = sizeBytes / (1024 * 1024);
+  return Math.min(MAX_MS, Math.round(BASE_MS + sizeMb * PER_MB_MS));
+}

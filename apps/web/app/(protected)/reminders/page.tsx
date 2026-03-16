@@ -1,3 +1,5 @@
-export default async function Page() {
-  return <div className="p-6">/reminders — Reminders list placeholder</div>;
+import { RemindersPageInner } from "./RemindersPageInner";
+
+export default function Page() {
+  return <RemindersPageInner />;
 }

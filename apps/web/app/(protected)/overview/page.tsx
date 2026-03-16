@@ -54,7 +54,7 @@ export default async function OverviewPage() {
                 className="overview-card rounded-2xl border p-4 hover:bg-neutral-50 dark:hover:bg-neutral-900"
               >
                 <div className="truncate text-sm font-medium">
-                  {m.title || m.filename || m.id}
+                  {m.title || m.id}
                 </div>
                 <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
                   {deriveOverallState(m.thumbState, m.textState)}
@@ -77,7 +77,7 @@ export default async function OverviewPage() {
               className="overview-card rounded-2xl border p-4 hover:bg-neutral-50 dark:hover:bg-neutral-900"
             >
               <div className="truncate text-sm font-medium">
-                {m.title || m.filename || m.id}
+                {m.title || m.id}
               </div>
               <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
                 {m.mimeType ?? "file"}

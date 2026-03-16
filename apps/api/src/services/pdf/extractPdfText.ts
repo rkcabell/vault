@@ -24,6 +24,10 @@ export async function extractPdfText (
 
   const doc = await loadingTask.promise;
 
+  // After this many consecutive leading blank pages (0 chars) we know
+  // shouldFallbackToOcr will return true, so there is no point scanning further.
+  const EARLY_EXIT_BLANK_PAGES = 3;
+
   let destroyed = false;
   try {
     const pages: PdfTextPage[] = [];
@@ -58,6 +62,12 @@ export async function extractPdfText (
       if (numChars >= MIN_PAGE_CHARS) pagesWithText += 1;
       if (onProgress) {
         onProgress({ current: pageNumber, total: doc.numPages });
+      }
+
+      // Early exit: if the first N pages are all blank, needsOcr will be true
+      // regardless of remaining pages — no need to scan the rest.
+      if (pageNumber >= EARLY_EXIT_BLANK_PAGES && totalChars === 0) {
+        break;
       }
     }
 
@@ -243,8 +253,8 @@ function getBaselineLineGap (lines: Line[]): number | null {
 }
 
 function toPdfJsData (input: Uint8Array | Buffer): Uint8Array {
-  if (Buffer.isBuffer(input)) {
-    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
-  }
-  return input;
+  // Copy into a fresh ArrayBuffer — pdf.js may transfer (detach) the buffer it
+  // receives, so a view into Node.js's shared pool would cause
+  // "Unable to deserialize cloned data" on subsequent access.
+  return new Uint8Array(input);
 }

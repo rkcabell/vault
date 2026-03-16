@@ -1,5 +1,11 @@
 /* apps/web/app/(public)/auth/AuthPage.module.css */
 
+.themeToggle {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+}
+
 .container {
     display: flex;
     min-height: 100vh;
@@ -97,10 +103,23 @@
     cursor: not-allowed;
 }
 
+/* Suppress browser-native password reveal button (Edge/Chrome) */
+.input::-ms-reveal,
+.input::-ms-clear {
+    display: none;
+}
+
 .fieldError {
     color: #ef4444;
     font-size: 0.8rem;
     margin-top: 0.35rem;
+}
+
+.fieldHint {
+    color: #999;
+    font-size: 0.8rem;
+    margin-top: 0.35rem;
+    margin-bottom: 0;
 }
 
 .togglePassword {
@@ -185,68 +204,85 @@
     align-items: center;
 }
 
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-    .container {
-        background-color: #0a0a0a;
-        color: #fff;
-    }
+/* Dark mode — driven by html.dark class set by next-themes (not OS media query).
+   :global() is required so CSS Modules doesn't scope the .dark class name. */
+:global(html.dark) .container,
+:global([data-theme="dark"]) .container {
+    background-color: #0a0a0a;
+    color: #fff;
+}
 
-    .card {
-        background-color: #171717;
-        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
-        border: 1px solid #333;
-    }
+:global(html.dark) .card,
+:global([data-theme="dark"]) .card {
+    background-color: #171717;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+    border: 1px solid #333;
+}
 
-    .subtitle {
-        color: #a1a1aa;
-    }
+:global(html.dark) .subtitle,
+:global([data-theme="dark"]) .subtitle {
+    color: #a1a1aa;
+}
 
-    .label {
-        color: #e5e5e5;
-    }
+:global(html.dark) .label,
+:global([data-theme="dark"]) .label {
+    color: #e5e5e5;
+}
 
-    .input {
-        background: #262626;
-        border-color: #404040;
-        color: #fff;
-    }
+:global(html.dark) .input,
+:global([data-theme="dark"]) .input {
+    background: #262626;
+    border-color: #404040;
+    color: #fff;
+}
 
-    .input:focus {
-        border-color: #fff;
-        background: #262626;
-    }
+:global(html.dark) .input:focus,
+:global([data-theme="dark"]) .input:focus {
+    border-color: #fff;
+    background: #262626;
+}
 
-    .inputError {
-        border-color: #ef4444;
-        background: #450a0a;
-    }
+:global(html.dark) .inputError,
+:global([data-theme="dark"]) .inputError {
+    border-color: #ef4444;
+    background: #450a0a;
+}
 
-    .togglePassword {
-        color: #a1a1aa;
-    }
+:global(html.dark) .togglePassword,
+:global([data-theme="dark"]) .togglePassword {
+    color: #a1a1aa;
+}
 
-    .togglePassword:hover {
-        color: #000;
-    }
+:global(html.dark) .togglePassword:hover,
+:global([data-theme="dark"]) .togglePassword:hover {
+    color: #fff;
+}
 
-    .submitBtn {
-        background: #fff;
-        color: #000;
-    }
+:global(html.dark) .submitBtn,
+:global([data-theme="dark"]) .submitBtn {
+    background: #fff;
+    color: #000;
+}
 
-    .secondaryBtn {
-        color: #fff;
-        border-color: #404040;
-    }
+:global(html.dark) .secondaryBtn,
+:global([data-theme="dark"]) .secondaryBtn {
+    color: #fff;
+    border-color: #404040;
+}
 
-    .secondaryBtn:hover:not(:disabled) {
-        background: #262626;
-    }
+:global(html.dark) .secondaryBtn:hover:not(:disabled),
+:global([data-theme="dark"]) .secondaryBtn:hover:not(:disabled) {
+    background: #262626;
+}
 
-    .alert {
-        background: #450a0a;
-        border-color: #7f1d1d;
-        color: #fca5a5;
-    }
+:global(html.dark) .alert,
+:global([data-theme="dark"]) .alert {
+    background: #450a0a;
+    border-color: #7f1d1d;
+    color: #fca5a5;
+}
+
+:global(html.dark) .fieldHint,
+:global([data-theme="dark"]) .fieldHint {
+    color: #666;
 }

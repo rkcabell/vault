@@ -1,18 +1,20 @@
 // File: apps/api/src/worker/index.ts
 import "dotenv/config";
 
-import IORedis from "ioredis";
 import { Queue, Worker } from "bullmq";
+import IORedis from "ioredis";
 
 import { prisma } from "@vault/db";
 import { s3 } from "../plugins/s3Client.js";
-import { createOcrProcessor, isTransientError, type OcrJobData } from "./ocrWorker.js";
+import { createOcrProcessor, type OcrJobData } from "./ocrWorker.js";
 import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumbWorker.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
+import { MediaMetadataRepository } from "../repositories/mediaMetadataRepository.js";
 import { DocumentRepository } from "../repositories/documentRepository.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
 import { TextJobError } from "../lib/text/processTextJob.js";
+import { markStalledJobs } from "../services/stallDetectionService.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const BUCKET = requiredEnv("S3_BUCKET");
@@ -25,13 +27,24 @@ const OCR_LOCK_RENEW_MS = parseEnvNumber(
   Math.max(30 * 1000, Math.floor(OCR_LOCK_DURATION_MS / 2)),
 );
 const OCR_STALLED_INTERVAL_MS = parseEnvNumber("OCR_STALLED_INTERVAL_MS", 60 * 1000);
+const STALL_CHECK_INTERVAL_MS = parseEnvNumber("STALL_CHECK_INTERVAL_MS", 10 * 60 * 1000);
 
 async function main () {
   const logger = createLogger("worker");
   const connection = buildRedisConnection(REDIS_URL);
-  const ioredis = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
+
+  // Dedicated publish-only client — does not block the BullMQ connection
+  const publisher = new IORedis(REDIS_URL);
+  publisher.on("error", err => logger.warn({ err }, "publisher redis error"));
+
+  const publishJobUpdate = (update: { userId: string; mediaId: string; field: string; value: string }) => {
+    publisher
+      .publish(`media-events:${update.userId}`, JSON.stringify({ mediaId: update.mediaId, field: update.field, value: update.value }))
+      .catch(err => logger.warn({ err }, "failed to publish job update"));
+  };
 
   const mediaRepository = new MediaRepository(prisma);
+  const metadataRepository = new MediaMetadataRepository(prisma);
   const documentRepository = new DocumentRepository(prisma);
 
   const ocrLogger = logger.child({ queue: OCR_QUEUE, jobName: "ocr" });
@@ -49,10 +62,11 @@ async function main () {
       enqueueOcr: async (data, opts) => ocrQueue.add("ocr", data, opts),
       logger: ocrLogger,
       queueName: OCR_QUEUE,
+      publishJobUpdate,
     }),
     {
       connection,
-      concurrency: 1,
+      concurrency: 4,
       lockDuration: OCR_LOCK_DURATION_MS,
       lockRenewTime: OCR_LOCK_RENEW_MS,
       stalledInterval: OCR_STALLED_INTERVAL_MS,
@@ -63,16 +77,28 @@ async function main () {
     THUMB_QUEUE,
     createThumbProcessor({
       prismaMedia: mediaRepository,
+      metadataRepository,
       s3,
       bucket: BUCKET,
       logger: thumbLogger,
       queueName: THUMB_QUEUE,
+      publishJobUpdate,
     }),
-    { connection, concurrency: 1 },
+    { connection, concurrency: 4 },
   );
 
   ocrWorker.on("ready", () => ocrLogger.info({ queue: OCR_QUEUE }, "worker ready"));
   thumbWorker.on("ready", () => thumbLogger.info({ queue: THUMB_QUEUE }, "worker ready"));
+
+  // Run stall detection once on startup (catches records left over from a previous crash),
+  // then on a recurring interval.
+  const stallLogger = logger.child({ component: "stall-detection" });
+  const runStallCheck = () =>
+    markStalledJobs(mediaRepository, stallLogger).catch(err =>
+      stallLogger.error({ err }, "stall detection failed"),
+    );
+  void runStallCheck();
+  const stallInterval = setInterval(runStallCheck, STALL_CHECK_INTERVAL_MS);
 
   ocrWorker.on("failed", async (job, err) => {
     const errorCode =
@@ -83,11 +109,16 @@ async function main () {
           : "UNKNOWN_ERROR";
     const attempts = job?.opts?.attempts ?? 1;
     const isFinal = job ? (job.attemptsMade ?? 0) >= attempts : true;
-    const transient = isTransientError(err);
 
-    if (job?.data?.mediaId && isFinal && !transient) {
+    // Mark ERROR on all final failures, including transient ones (e.g. repeated network
+    // timeouts). Without this, a job that exhausts all retries on transient errors stays
+    // at PENDING indefinitely — exactly the stall case stall detection is meant to catch.
+    if (job?.data?.mediaId && isFinal) {
       try {
         await mediaRepository.setTextState(job.data.mediaId, "ERROR");
+        if (job.data.userId) {
+          publishJobUpdate({ userId: job.data.userId, mediaId: job.data.mediaId, field: "textState", value: "ERROR" });
+        }
         ocrLogger.error(
           {
             jobName: "ocr",
@@ -142,6 +173,7 @@ async function main () {
     if (job?.data?.mediaId && isFinal) {
       try {
         await mediaRepository.setThumbFailed(job.data.mediaId, reason);
+        publishJobUpdate({ userId: job.data.userId, mediaId: job.data.mediaId, field: "thumbState", value: "FAILED" });
       } catch (updateErr) {
         thumbLogger.error(
           {
@@ -202,9 +234,10 @@ async function main () {
 
   const shutdown = async () => {
     logger.info("worker shutting down...");
+    clearInterval(stallInterval);
     await Promise.all([ocrWorker.close(), thumbWorker.close()]);
     await ocrQueue.close();
-    await ioredis.quit();
+    await publisher.quit();
   };
 
   process.on("SIGINT", () => void shutdown());

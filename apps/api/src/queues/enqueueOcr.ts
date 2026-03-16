@@ -24,7 +24,7 @@ export async function enqueueOcrBulk (queue: Queue<OcrJobData>, items: OcrBulkIt
         userId: item.userId,
         storageKey: item.storageKey,
       },
-      opts: UPLOAD_OCR_JOB_OPTIONS,
+      opts: { ...UPLOAD_OCR_JOB_OPTIONS, jobId: `ocr-${item.mediaId}` },
     })),
   );
 }

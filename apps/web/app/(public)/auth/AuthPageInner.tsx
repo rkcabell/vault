@@ -3,7 +3,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/components/contexts/AuthContext";
+import { ThemeToggle } from "@/components/common/ThemeToggle";
 import styles from "./authpage.module.css";
 
 export default function AuthPage() {
@@ -106,6 +108,7 @@ export default function AuthPage() {
 
   return (
     <div className={styles.container}>
+      <div className={styles.themeToggle}><ThemeToggle /></div>
       <div className={styles.card}>
         <div className={styles.textCenter}>
           <h1 className={styles.title}>{isRegister ? "Create Account" : "Sign In"}</h1>
@@ -167,10 +170,13 @@ export default function AuthPage() {
                 aria-label={showPassword ? "Hide password" : "Show password"}
               // ...
               >
-                {showPassword ? "Hide" : "Show"}
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-            {fieldErrors.password && <div className={styles.fieldError}>{fieldErrors.password}</div>}
+            {fieldErrors.password
+              ? <div className={styles.fieldError}>{fieldErrors.password}</div>
+              : isRegister && <p className={styles.fieldHint}>Must be at least 8 characters.</p>
+            }
           </div>
 
           <button type="submit" className={styles.submitBtn} disabled={loading}>

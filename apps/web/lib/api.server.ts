@@ -1,24 +1,11 @@
 ﻿// apps/web/lib/api.ts
 import { cookies } from 'next/headers'
-import type { MediaDetailResponse, MediaWorkerState } from './media/types'
+import type { MediaDetailResponse, MediaListItem, MediaListResponse, DownloadResponse, BundleListItem, BundleDetail, BundlesListResponse } from '@vault/types'
 
 const API_BASE =
   typeof window === 'undefined'
     ? (process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000') + '/api'
     : '/api'
-
-export type MediaListItem = {
-  id: string
-  title?: string | null
-  filename?: string | null
-  mimeType?: string | null
-  sizeBytes?: number | null
-  createdAt?: string
-  thumbState?: MediaWorkerState | null
-  textState?: MediaWorkerState | null
-  tags?: string[]
-  thumbnailKey?: string | null
-}
 
 async function http<T> (path: string, init?: RequestInit): Promise<T> {
   const isServer = typeof window === 'undefined'
@@ -54,7 +41,8 @@ export async function searchMedia (
   const qs = new URLSearchParams()
   if (q) qs.set('q', q)
   if (tags.length) qs.set('tags', tags.join(','))
-  return http<MediaListItem[]>(`/media?${qs.toString()}`)
+  const r = await http<MediaListResponse>(`/media?${qs.toString()}`)
+  return r.items
 }
 
 export async function initUpload (
@@ -79,7 +67,7 @@ export async function finalizeUpload (id: string): Promise<void> {
 
 export async function getThumbnailUrl (id: string): Promise<string | null> {
   try {
-    const r = await http<{ url: string }>(`/media/${id}/thumbnail`)
+    const r = await http<DownloadResponse>(`/media/${id}/thumbnail`)
     return r.url
   } catch {
     return null
@@ -94,6 +82,16 @@ export async function listMedia (
 
   const r = await http<{ items: MediaListItem[] }>(`/media?${qs.toString()}`)
   return r.items
+}
+
+export async function listBundles (): Promise<BundleListItem[]> {
+  const r = await http<BundlesListResponse>('/bundles')
+  return r.bundles
+}
+
+export async function getBundleById (id: string): Promise<BundleDetail> {
+  const r = await http<{ bundle: BundleDetail }>(`/bundles/${id}`)
+  return r.bundle
 }
 
 export async function pollReady (

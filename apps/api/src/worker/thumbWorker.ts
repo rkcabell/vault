@@ -16,6 +16,7 @@ export type ThumbDeps = {
   bucket: string;
   logger?: ServiceThumbDeps["logger"];
   queueName?: string;
+  publishJobUpdate?: ServiceThumbDeps["publishJobUpdate"];
 };
 
 export async function processThumb (deps: ThumbDeps, job: ThumbJob) {
@@ -26,6 +27,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob) {
     bucket: deps.bucket,
     logger,
     queueName: deps.queueName ?? process.env.THUMB_QUEUE ?? "thumb_queue",
+    publishJobUpdate: deps.publishJobUpdate,
   };
   return processThumbInternal(serviceDeps, job);
 }
