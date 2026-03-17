@@ -100,10 +100,10 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   // Non-fatal: a metadata failure must never fail the thumbnail job.
   if (deps.metadataRepository && mimeType) {
     extractMetadataFromBuffer(original, mimeType)
-      .then(meta => {
+      .then((meta) => {
         if (meta) return deps.metadataRepository!.upsert(job.mediaId, meta);
       })
-      .catch(err => logger.warn({ err, mediaId: job.mediaId }, "metadata extraction failed"));
+      .catch((err: unknown) => logger.warn({ err, mediaId: job.mediaId }, "metadata extraction failed"));
   }
   const isHeic =
     mimeType.includes("heic") ||
