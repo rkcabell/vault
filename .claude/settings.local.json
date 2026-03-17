@@ -9,7 +9,9 @@
       "Bash(node --import tsx/esm --test src/tests/api/lib/segmentText.test.ts)",
       "Bash(wc -l c:/Users/Rynan/Desktop/Vault/vault/apps/api/src/tests/api/lib/*.test.ts c:/Users/Rynan/Desktop/Vault/vault/apps/api/src/tests/api/lib/reminders/*.test.ts c:/Users/Rynan/Desktop/Vault/vault/apps/api/src/tests/api/services/*.test.ts c:/Users/Rynan/Desktop/Vault/vault/apps/api/src/tests/api/services/pdf/*.test.ts c:/Users/Rynan/Desktop/Vault/vault/apps/api/src/tests/api/worker/*.test.ts c:/Users/Rynan/Desktop/Vault/vault/apps/web/lib/media/status.test.ts)",
       "Bash(bash -n \"c:\\\\Users\\\\Rynan\\\\Desktop\\\\Vault\\\\vault\\\\scripts\\\\setup.sh\")",
-      "Bash(npx --yes @redocly/cli lint docs/api/openapi.yml --format=summary)"
+      "Bash(npx --yes @redocly/cli lint docs/api/openapi.yml --format=summary)",
+      "Bash(gh run:*)",
+      "Bash(where gh:*)"
     ]
   }
 }
