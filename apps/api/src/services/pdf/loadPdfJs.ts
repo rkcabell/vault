@@ -1,9 +1,11 @@
 // File: apps/api/src/services/pdf/loadPdfJs.ts
 import { createRequire } from "node:module";
+import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import type * as PdfJs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 let pdfjsPromise: Promise<typeof PdfJs> | null = null;
+let resolvedStandardFontDataUrl: string | null | undefined = undefined;
 
 function tryResolveWorkerSrc (): string | null {
   const require = createRequire(import.meta.url);
@@ -25,6 +27,24 @@ function tryResolveWorkerSrc (): string | null {
   }
 
   return null;
+}
+
+function tryResolveStandardFontDataUrl (): string | null {
+  const require = createRequire(import.meta.url);
+  try {
+    // Resolve any file inside standard_fonts to get the directory path.
+    const marker = require.resolve("pdfjs-dist/standard_fonts/FoxitFixed.pfb");
+    return pathToFileURL(dirname(marker)).toString() + "/";
+  } catch {
+    return null;
+  }
+}
+
+export function getStandardFontDataUrl (): string | null {
+  if (resolvedStandardFontDataUrl === undefined) {
+    resolvedStandardFontDataUrl = tryResolveStandardFontDataUrl();
+  }
+  return resolvedStandardFontDataUrl;
 }
 
 export async function loadPdfJs (): Promise<typeof PdfJs> {

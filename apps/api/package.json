@@ -8,7 +8,7 @@
     "worker:dev": "tsx watch src/worker/index.ts",
     "worker": "node dist/worker/index.js",
     "start": "node dist/index.js",
-    "build": "tsc -p . --extendedDiagnostics",
+    "build": "tsc -p . --extendedDiagnostics && node -e \"require('fs').copyFileSync('src/lib/fileTransport.mjs','dist/lib/fileTransport.mjs')\"",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -17,7 +17,11 @@
     "test": "node scripts/run-tests.mjs src/tests",
     "test:api": "node scripts/run-tests.mjs src/tests/api",
     "test:worker": "node scripts/run-tests.mjs src/tests/api/worker",
-    "test:web": "node scripts/run-tests.mjs src/tests/web"
+    "test:web": "node scripts/run-tests.mjs src/tests/web",
+    "test:html": "node scripts/run-tests-html.mjs src/tests",
+    "test:html:api": "node scripts/run-tests-html.mjs src/tests/api",
+    "log": "tsx scripts/logtail.ts",
+    "log:watch": "tsx scripts/logtail.ts --watch"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.893.0",
@@ -31,6 +35,7 @@
     "dotenv": "^17.2.3",
     "fastify": "^4.28.1",
     "fastify-plugin": "^4.5.1",
+    "heic-convert": "^2.1.0",
     "ioredis": "^5.9.1",
     "jsonwebtoken": "^9.0.2",
     "next": "16.1.6",

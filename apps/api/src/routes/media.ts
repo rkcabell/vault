@@ -44,7 +44,9 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     assertUploadWithinLimit(body);
 
-    return uploadService.initUpload(req.userId!, { ...body, tags: parseTags(body.tags) });
+    const result = await uploadService.initUpload(req.userId!, { ...body, tags: parseTags(body.tags) });
+    req.log.info({ filename: body.filename, mimeType: body.mimeType, sizeBytes: body.sizeBytes }, "upload init");
+    return result;
   });
 
   // POST /media/batch-init - init uploads in one DB transaction
@@ -70,7 +72,9 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     const items = body.items.map(item => ({ ...item, tags: parseTags(item.tags) }));
 
-    return uploadService.initBatchUploads(req.userId!, items);
+    const result = await uploadService.initBatchUploads(req.userId!, items);
+    req.log.info({ count: body.items.length }, "batch upload init");
+    return result;
   });
 
   // POST /media/batch-finalize - mark uploads ready + enqueue processing
@@ -81,7 +85,9 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       })
       .parse(req.body);
 
-    return uploadService.finalizeBatch(req.userId!, body.ids);
+    const result = await uploadService.finalizeBatch(req.userId!, body.ids);
+    req.log.info({ count: body.ids.length }, "batch upload finalized");
+    return result;
   });
 
   // POST /media/:id/finalize - mark upload ready + enqueue processing
@@ -92,7 +98,9 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       const userId = req.userId!;
       const { id } = paramsSchema.parse(req.params);
 
-      return uploadService.finalizeBatch(userId, [id]);
+      const result = await uploadService.finalizeBatch(userId, [id]);
+      req.log.info({ mediaId: id }, "upload finalized");
+      return result;
     },
   );
 
@@ -209,6 +217,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
       if (!result) return reply.notFound();
 
+      req.log.info({ mediaId: id }, "media deleted");
       return reply.send(result);
     },
   );

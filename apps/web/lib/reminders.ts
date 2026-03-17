@@ -5,7 +5,9 @@ import type {
   ReminderStatus,
   ReminderBucket,
   ReminderOverviewRow,
+  ReminderCompletedRow,
   RemindersSummary,
+  CompletedRemindersResponse,
   CreateReminderInput,
   UpdateReminderInput,
 } from "@vault/types";
@@ -14,6 +16,7 @@ export type {
   ReminderStatus,
   ReminderBucket,
   ReminderOverviewRow,
+  ReminderCompletedRow,
   RemindersSummary,
 };
 
@@ -190,9 +193,14 @@ function overviewKey(limit: number) {
   return ["reminders", "overview", { limit }] as const;
 }
 
+function completedKey(limit: number) {
+  return ["reminders", "completed", { limit }] as const;
+}
+
 function invalidateReminderQueries() {
   invalidateByPrefix(REMINDERS_SUMMARY_KEY);
   invalidateByPrefix(["reminders", "overview"]);
+  invalidateByPrefix(["reminders", "completed"]);
   invalidateByPrefix(["reminders", "all-active"]);
 }
 
@@ -260,6 +268,19 @@ export function useAllActiveReminders() {
     [],
   );
   return useCachedQuery(key, fetchAll);
+}
+
+export function useCompletedReminders(limit: number) {
+  const key = useMemo(() => completedKey(limit), [limit]);
+  const fetchCompleted = useCallback(
+    () =>
+      requestJson<CompletedRemindersResponse>(
+        `/api/reminders?status=completed&view=all&limit=${encodeURIComponent(String(limit))}`,
+        { method: "GET" },
+      ),
+    [limit],
+  );
+  return useCachedQuery(key, fetchCompleted);
 }
 
 export type { CreateReminderInput };

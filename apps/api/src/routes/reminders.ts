@@ -29,6 +29,15 @@ type ReminderOverviewRow = {
   remindOffsetDays: number | null;
 };
 
+type ReminderCompletedRow = {
+  id: string;
+  title: string;
+  note: string | null;
+  media: { id: string; title: string } | null;
+  lastCompletedAt: string;
+  dueAt: string;
+};
+
 type ReminderOutput = {
   id: string;
   userId: string;
@@ -178,6 +187,25 @@ function toReminderOutput(reminder: {
   } satisfies ReminderOutput;
 }
 
+function toCompletedRow(reminder: {
+  id: string;
+  title: string;
+  note: string | null;
+  dueAt: Date;
+  lastCompletedAt: Date | null;
+  updatedAt: Date;
+  media: { id: string; title: string } | null;
+}) {
+  return {
+    id: reminder.id,
+    title: reminder.title,
+    note: reminder.note,
+    media: reminder.media,
+    lastCompletedAt: (reminder.lastCompletedAt ?? reminder.updatedAt).toISOString(),
+    dueAt: reminder.dueAt.toISOString(),
+  } satisfies ReminderCompletedRow;
+}
+
 async function assertMediaOwnership(
   app: {
     prisma: {
@@ -257,8 +285,36 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
       })
       .parse(req.query);
 
-    if (query.status !== "active") {
-      throw app.httpErrors.badRequest("Only status=active is supported");
+    if (query.status === "canceled") {
+      throw app.httpErrors.badRequest("status=canceled is not supported");
+    }
+
+    if (query.status === "completed") {
+      if (query.view !== "all") {
+        throw app.httpErrors.badRequest("Only view=all is supported for status=completed");
+      }
+
+      const completedReminders = await app.prisma.reminder.findMany({
+        where: { userId, status: "COMPLETED" },
+        take: query.limit,
+        orderBy: [{ lastCompletedAt: "desc" }, { updatedAt: "desc" }],
+        select: {
+          id: true,
+          title: true,
+          note: true,
+          dueAt: true,
+          lastCompletedAt: true,
+          updatedAt: true,
+          media: {
+            select: {
+              id: true,
+              title: true,
+            },
+          },
+        },
+      });
+
+      return { items: completedReminders.map(toCompletedRow) };
     }
 
     const now = new Date();

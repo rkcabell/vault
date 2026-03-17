@@ -5,9 +5,10 @@ import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { MediaMetadataRepository } from "../../repositories/mediaMetadataRepository.js";
 import { waitUntilObjectExists } from "../../adapters/s3ObjectProbe.js";
 import { streamToBuffer } from "../../lib/streams/toBuffer.js";
-import { looksLikeMp4, looksLikePdf, looksLikePng } from "../../lib/fileSignatures.js";
+import { looksLikeHeic, looksLikeMp4, looksLikePdf, looksLikePng } from "../../lib/fileSignatures.js";
 import { renderPdfThumbnail } from "./renderPdfThumbnail.js";
 import { renderVideoThumbnail } from "./renderVideoThumbnail.js";
+import { renderHeicThumbnail } from "./renderHeicThumbnail.js";
 import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
 import { extractMetadataFromBuffer } from "../media/metadata/extractMediaMetadata.js";
 
@@ -53,6 +54,15 @@ async function getObjectToBuffer (s3: S3Client, bucket: string, key: string): Pr
   }
 }
 
+async function renderWebp(input: Buffer, size: number): Promise<Buffer> {
+  return sharp(input, { failOn: "none" })
+    .rotate()
+    .resize(size, size, { fit: "inside", withoutEnlargement: true })
+    .webp({ quality: 82 })
+    .toBuffer();
+}
+
+
 export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<void> {
   const { prismaMedia, s3, bucket, logger } = deps;
   const startedAt = Date.now();
@@ -90,12 +100,16 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   // Non-fatal: a metadata failure must never fail the thumbnail job.
   if (deps.metadataRepository && mimeType) {
     extractMetadataFromBuffer(original, mimeType)
-      .then(meta => {
+      .then((meta) => {
         if (meta) return deps.metadataRepository!.upsert(job.mediaId, meta);
       })
-      .catch(err => logger.warn({ err, mediaId: job.mediaId }, "metadata extraction failed"));
+      .catch((err: unknown) => logger.warn({ err, mediaId: job.mediaId }, "metadata extraction failed"));
   }
-  const isVideo = mimeType.startsWith("video/") || looksLikeMp4(original);
+  const isHeic =
+    mimeType.includes("heic") ||
+    mimeType.includes("heif") ||
+    looksLikeHeic(original);
+  const isVideo = mimeType.startsWith("video/") || (looksLikeMp4(original) && !isHeic);
   const isPdf = mimeType.includes("pdf") || looksLikePdf(original);
 
   if (isVideo) {
@@ -138,16 +152,32 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
       );
       return;
     }
+  } else if (isHeic) {
+    try {
+      inputForSharp = await renderHeicThumbnail({
+        image: original,
+        targetWidth: Math.min(1600, Math.max(800, size * 3)),
+      });
+
+      if (!looksLikePng(inputForSharp)) {
+        throw new Error("HEIC_RENDER_DID_NOT_RETURN_PNG");
+      }
+    } catch (err) {
+      const reason = sanitizeThumbError(err);
+      await prismaMedia.setThumbFailed(job.mediaId, reason);
+      deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
+      logger.error(
+        { ...logContext, reason, errorCode: reason, durationMs: Date.now() - startedAt, err },
+        "failed to render HEIC thumbnail",
+      );
+      return;
+    }
   }
 
   let webp: Buffer;
 
   try {
-    webp = await sharp(inputForSharp, { failOn: "none" })
-      .rotate()
-      .resize(size, size, { fit: "inside", withoutEnlargement: true })
-      .webp({ quality: 82 })
-      .toBuffer();
+    webp = await renderWebp(inputForSharp, size);
   } catch (err) {
     const reason = sanitizeThumbError(err);
     await prismaMedia.setThumbFailed(job.mediaId, reason);

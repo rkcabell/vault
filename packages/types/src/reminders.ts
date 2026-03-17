@@ -28,6 +28,16 @@ export const ReminderOverviewRowSchema = z.object({
 });
 export type ReminderOverviewRow = z.infer<typeof ReminderOverviewRowSchema>;
 
+export const ReminderCompletedRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  note: z.string().nullable(),
+  media: z.object({ id: z.string(), title: z.string() }).nullable(),
+  lastCompletedAt: z.string(),
+  dueAt: z.string(),
+});
+export type ReminderCompletedRow = z.infer<typeof ReminderCompletedRowSchema>;
+
 export const RemindersSummarySchema = z.object({
   visibleNow: z.number(),
   overdue: z.number(),
@@ -62,6 +72,11 @@ export const OverviewResponseSchema = z.object({
   items: z.array(ReminderOverviewRowSchema),
 });
 export type OverviewResponse = z.infer<typeof OverviewResponseSchema>;
+
+export const CompletedRemindersResponseSchema = z.object({
+  items: z.array(ReminderCompletedRowSchema),
+});
+export type CompletedRemindersResponse = z.infer<typeof CompletedRemindersResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Request input types  (used by the web client when calling the API)
