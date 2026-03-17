@@ -10,8 +10,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-packages:
+    name: Build shared packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared packages
+        run: npm run build --workspace=packages/db --workspace=packages/types
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-dist
+          path: packages/db/dist
+          retention-days: 1
+
   ci:
     name: ${{ matrix.workspace }}
+    needs: build-packages
     runs-on: ubuntu-latest
 
     strategy:
@@ -32,14 +57,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Restore shared package builds
+        uses: actions/download-artifact@v4
+        with:
+          name: packages-dist
+          path: packages/db/dist
+
       - name: Lint
         run: npm -w ${{ matrix.workspace }} run lint --if-present
 
       - name: Typecheck
         run: npm -w ${{ matrix.workspace }} run typecheck --if-present
-        
+
       - name: Build
         run: npm -w ${{ matrix.workspace }} run build --if-present
 
-      - name: Unit tests
-        run: npm -w ${{ matrix.workspace }} test --if-present
+      - name: Test
+        run: npm -w ${{ matrix.workspace }} run test --if-present

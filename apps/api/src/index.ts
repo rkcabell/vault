@@ -1,3 +1,4 @@
+//File: apps/api/src/index.ts
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
@@ -20,21 +21,38 @@ import rateLimitPlugin from "./plugins/rateLimit.js";
 import dotenv from "dotenv";
 import path from "node:path";
 import cookie from "@fastify/cookie";
-import { createLogger } from "./lib/logger.js";
+import { createLogger, LOG_FORMATTERS, buildTransportTargets } from "./lib/logger.js";
+import { initLogFile } from "./lib/logFileManager.js";
 
 dotenv.config({
   path: process.env.DOTENV_CONFIG_PATH ?? path.join(process.cwd(), ".env"),
 });
 
+initLogFile();
+
 async function main () {
+  const level = process.env.LOG_LEVEL ?? "info";
+
   const app = Fastify({
-    logger:
-      process.env.NODE_ENV === "production"
-        ? { level: "info" }
-        : { level: "info", transport: { target: "pino-pretty", options: { colorize: true } } },
+    disableRequestLogging: true,
+    logger: {
+      level,
+      base: { name: "api" },
+      formatters: LOG_FORMATTERS,
+      transport: { targets: buildTransportTargets(level) },
+    },
   });
 
   registerShutdown(app);
+
+  app.addHook("onResponse", (req, reply, done) => {
+    if (reply.statusCode >= 500) {
+      app.log.error({ method: req.method, url: req.url, status: reply.statusCode }, "server error");
+    } else if (reply.statusCode >= 400) {
+      app.log.warn({ method: req.method, url: req.url, status: reply.statusCode }, "client error");
+    }
+    done();
+  });
 
   //Fastify instance
   await app.register(configPlugin); // loads & validates env into app.config

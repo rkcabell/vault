@@ -1,4 +1,4 @@
-import { loadPdfJs } from "./loadPdfJs.js";
+import { loadPdfJs, getStandardFontDataUrl } from "./loadPdfJs.js";
 import { MIN_PAGE_CHARS, shouldFallbackToOcr } from "./shouldFallbackToOcr.js";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 
@@ -15,9 +15,11 @@ export async function extractPdfText (
   const data = toPdfJsData(input);
   const onProgress = opts?.onProgress;
 
+  const standardFontDataUrl = getStandardFontDataUrl();
   const init: DocumentInitParameters & { disableWorker?: boolean } = {
     data,
     disableWorker: true,
+    ...(standardFontDataUrl ? { standardFontDataUrl } : {}),
   };
 
   const loadingTask = pdfjs.getDocument(init);

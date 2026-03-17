@@ -29,6 +29,7 @@ export type OcrProcessingDeps = {
   logger: Logger;
   queueName: string;
   sleep?: (ms: number) => Promise<unknown>;
+  timeoutMs?: number;
   textDeps?: ProcessTextJobDeps;
   publishJobUpdate?: (update: { userId: string; mediaId: string; field: "textState"; value: "READY" | "ERROR" }) => void;
 };
@@ -75,7 +76,7 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
   }
 
   const key = storageKey ?? media.storageKey;
-  const timeoutMs = computeOcrTimeout(media.sizeBytes ?? 0);
+  const timeoutMs = deps.timeoutMs ?? computeOcrTimeout(media.sizeBytes ?? 0);
   logger.info({ ...logContext, key, mimeType: media.mimeType, timeoutMs }, "media loaded");
 
   const abortController = new AbortController();

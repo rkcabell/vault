@@ -3,6 +3,7 @@ import type { S3Client } from "@aws-sdk/client-s3";
 import { extractPdfText, type PdfTextPage } from "@/services/pdf/extractPdfText.js";
 import { ocrWithOcrmypdf } from "@/services/ocr/ocrWithOcrmypdf.js";
 import { getObjectBuffer } from "../../adapters/s3/getObjectBuffer.js";
+import { looksLikeHeic } from "../../lib/fileSignatures.js";
 
 export type TextSource = "NATIVE" | "OCR";
 export type TextJobErrorCode = "SOURCE_NOT_READY" | "TIMEOUT";
@@ -139,11 +140,19 @@ function isAbortError (err: unknown): boolean {
 /**
  * Returns true if the image buffer is near-uniformly white (blank paper/scan).
  * Uses conservative thresholds so documents with even faint text pass through to OCR.
+ * Pre-converts HEIC to PNG since sharp lacks libheif support.
  */
 async function isBlankImage (buffer: Buffer): Promise<boolean> {
   try {
     const sharp = (await import("sharp")).default;
-    const stats = await sharp(buffer).stats();
+    let input = buffer;
+
+    if (looksLikeHeic(buffer)) {
+      const { default: convert } = await import("heic-convert");
+      input = Buffer.from(await convert({ buffer, format: "PNG" }));
+    }
+
+    const stats = await sharp(input).stats();
     return stats.channels.every(ch => ch.mean > 248 && ch.stdev < 15);
   } catch {
     return false;

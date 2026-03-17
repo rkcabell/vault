@@ -8,7 +8,7 @@
   "scripts": {
     "build": "npm run -ws build",
     "lint": "npm run lint --workspace=api --workspace=web",
-    "test:api": "npm -w @vault/db run build && npm -w api run build && node --test apps/api/dist/tests",
+    "test:api": "npm -w @vault/db run build && npm -w api run test:api",
     "web:dev": "npm run --workspace web dev",
     "web:build": "npm run --workspace web build",
     "api:dev": "npm run --workspace api dev",

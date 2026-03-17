@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { AddReminderDialog } from "@/components/reminders/AddReminderDialog";
@@ -11,11 +11,15 @@ import {
   useSnoozeReminder,
   useCancelReminder,
   useRemindersSummary,
+  useCompletedReminders,
   type ReminderOverviewRow,
+  type ReminderCompletedRow,
   type ReminderBucket,
 } from "@/lib/reminders";
 
 const SNOOZE_DURATION_MS = 24 * 60 * 60 * 1000;
+const COMPLETED_LIMIT = 20;
+const COMPLETED_VISIBILITY_STORAGE_KEY = "reminders.page.completed.visible";
 
 const BUCKET_LABELS: Record<ReminderBucket, string> = {
   overdue: "Overdue",
@@ -46,6 +50,28 @@ function formatDueLabel(reminder: ReminderOverviewRow, nowMs: number) {
   if (reminder.bucket === "today") return `${snoozedPrefix}Today at ${timeLabel}`;
   if (reminder.bucket === "soon") return `${snoozedPrefix}${dateLabel}`;
   return `${snoozedPrefix}${dateLabel}`;
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  const dateLabel = date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const timeLabel = date.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${dateLabel} ${timeLabel}`;
+}
+
+function formatCompletedLabel(reminder: ReminderCompletedRow) {
+  return `Completed ${formatDateTime(reminder.lastCompletedAt)}`;
+}
+
+function formatOriginalDueLabel(reminder: ReminderCompletedRow) {
+  return `Due ${formatDateTime(reminder.dueAt)}`;
 }
 
 type BucketGroup = {
@@ -158,6 +184,43 @@ function ReminderRow({
   );
 }
 
+function CompletedRemindersList() {
+  const completedReminders = useCompletedReminders(COMPLETED_LIMIT);
+  const rows = completedReminders.data?.items ?? [];
+
+  if (completedReminders.loading) {
+    return <p className="reminders-loading-text">Loading completed reminders...</p>;
+  }
+
+  if (completedReminders.error) {
+    return <p className="reminders-error-text">Failed to load completed reminders.</p>;
+  }
+
+  if (rows.length === 0) {
+    return <p className="reminders-empty-text">No completed reminders yet.</p>;
+  }
+
+  return (
+    <div className="reminders-bucket-rows reminders-completed-rows">
+      {rows.map(row => (
+        <div key={row.id} className="reminders-full-row reminders-full-row--completed">
+          <div className="reminders-full-row-top">
+            <p className="reminders-row-title">{row.title}</p>
+            <span className="reminders-completed-at">{formatCompletedLabel(row)}</span>
+          </div>
+          <div className="reminders-full-row-meta">
+            <span className="reminders-row-due reminders-row-due--default">
+              {formatOriginalDueLabel(row)}
+            </span>
+            {row.media ? <span className="reminders-row-media">- {row.media.title}</span> : null}
+          </div>
+          {row.note ? <p className="reminders-full-row-note">{row.note}</p> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function RemindersPageInner() {
   const reminders = useAllActiveReminders();
   const summary = useRemindersSummary();
@@ -168,6 +231,30 @@ export function RemindersPageInner() {
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<ReminderOverviewRow | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [completedPreferenceReady, setCompletedPreferenceReady] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(COMPLETED_VISIBILITY_STORAGE_KEY);
+      if (stored !== null) {
+        setShowCompleted(stored === "true");
+      }
+    } catch {
+      // Ignore read failures and keep default collapsed state.
+    } finally {
+      setCompletedPreferenceReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!completedPreferenceReady) return;
+    try {
+      window.localStorage.setItem(COMPLETED_VISIBILITY_STORAGE_KEY, String(showCompleted));
+    } catch {
+      // Ignore write failures; toggle still works for current session.
+    }
+  }, [completedPreferenceReady, showCompleted]);
 
   const actionsDisabled =
     completeReminder.isPending || snoozeReminder.isPending || cancelReminder.isPending;
@@ -275,6 +362,21 @@ export function RemindersPageInner() {
           ))}
         </div>
       )}
+
+      <section className="reminders-completed-section">
+        <div className="reminders-completed-header">
+          <h2 className="reminders-completed-title">Completed reminders</h2>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setShowCompleted(current => !current)}
+          >
+            {showCompleted ? "Hide completed" : "Show completed"}
+          </Button>
+        </div>
+
+        {showCompleted ? <CompletedRemindersList /> : null}
+      </section>
 
       {completeReminder.error || snoozeReminder.error || cancelReminder.error ? (
         <p className="reminders-error-text">

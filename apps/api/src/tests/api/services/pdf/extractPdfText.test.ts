@@ -44,7 +44,6 @@ function buildMinimalPdf (text: string): Buffer {
 /** Build a multi-page PDF where every page has an empty content stream (no text). */
 function buildBlankPdf (numPages: number): Buffer {
   const chunks: string[] = [];
-  const offsets: number[] = [];
   let offset = 0;
 
   const push = (s: string) => {

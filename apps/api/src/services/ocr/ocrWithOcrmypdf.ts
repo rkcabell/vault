@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import sharp from "sharp";
 import { PDFDocument } from "pdf-lib";
+import convert from "heic-convert";
+import { looksLikeHeic } from "../../lib/fileSignatures.js";
 
 const MAX_CAPTURE_BYTES = 50 * 1024;
 
@@ -91,8 +93,17 @@ async function toPdfBuffer (
   if (looksLikePdf(input)) return input;
   if (mimeType && mimeType.toLowerCase().includes("pdf")) {
     // MIME says pdf but bytes don't; treat as image anyway to avoid misrouting.
-    // (You can log this mismatch at the call-site if desired.)
   }
+
+  const isHeic =
+    looksLikeHeic(input) ||
+    (!!mimeType && (mimeType.includes("heic") || mimeType.includes("heif")));
+
+  if (isHeic) {
+    const pngBuffer = await convert({ buffer: input, format: "PNG" });
+    return imageToPdf(Buffer.from(pngBuffer), rotation);
+  }
+
   return imageToPdf(input, rotation);
 }
 

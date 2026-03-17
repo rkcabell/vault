@@ -1,6 +1,8 @@
 // File: apps/api/src/services/thumbnails/renderPdfThumbnail.ts
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { createCanvas, Path2D, DOMMatrix, ImageData } from "@napi-rs/canvas";
-import { loadPdfJs } from "../pdf/loadPdfJs.js";
+import { loadPdfJs, getStandardFontDataUrl } from "../pdf/loadPdfJs.js";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 
 function toPdfJsData (input: Uint8Array | Buffer): Uint8Array {
@@ -39,6 +41,16 @@ export async function renderPdfThumbnail (args: {
   const init: DocumentInitParameters & { disableWorker?: boolean } = {
     data,
     disableWorker: true,
+    StandardFontDataFactory: class {
+      private baseUrl: string;
+      constructor({ baseUrl }: { baseUrl?: string | null }) {
+        this.baseUrl = baseUrl ?? "";
+      }
+      fetch({ filename }: { filename: string }): Promise<Uint8Array> {
+        return readFile(fileURLToPath(this.baseUrl + filename));
+      }
+    },
+    standardFontDataUrl: getStandardFontDataUrl() ?? undefined,
   };
 
   const loadingTask = pdfjs.getDocument(init);

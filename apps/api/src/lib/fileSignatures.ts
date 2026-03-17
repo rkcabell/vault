@@ -21,3 +21,22 @@ export function looksLikeMp4 (buf: Buffer): boolean {
   if (buf.length < 12) return false;
   return buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70;
 }
+
+export function looksLikeHeic (buf: Buffer): boolean {
+  // ISO BMFF container with "ftyp" box and HEIF-family major brand.
+  if (buf.length < 12) return false;
+  const hasFtyp = buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70;
+  if (!hasFtyp) return false;
+
+  const brand = buf.subarray(8, 12).toString("ascii").toLowerCase();
+  return (
+    brand === "heic" ||
+    brand === "heix" ||
+    brand === "hevc" ||
+    brand === "hevx" ||
+    brand === "heim" ||
+    brand === "heis" ||
+    brand === "mif1" ||
+    brand === "msf1"
+  );
+}

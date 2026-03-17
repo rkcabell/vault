@@ -20,6 +20,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     });
     const { name, description } = Body.parse(req.body);
     const bundle = await repo.createBundle(req.userId!, name, description);
+    req.log.info({ bundleId: bundle.id, name }, "bundle created");
     reply.code(201);
     return { bundle };
   });
@@ -42,6 +43,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const data = Body.parse(req.body);
     const updated = await repo.updateBundle(id, req.userId!, data);
     if (!updated) return reply.notFound();
+    req.log.info({ bundleId: id }, "bundle updated");
     return { ok: true };
   });
 
@@ -49,6 +51,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
   app.delete("/:id", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     await repo.deleteBundle(id, req.userId!);
+    req.log.info({ bundleId: id }, "bundle deleted");
     reply.code(204);
   });
 
@@ -61,6 +64,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const { mediaIds } = Body.parse(req.body);
     const ok = await repo.addItems(id, req.userId!, mediaIds);
     if (!ok) return reply.notFound();
+    req.log.info({ bundleId: id, count: mediaIds.length }, "items added to bundle");
     return { ok: true };
   });
 
@@ -69,6 +73,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const { id, mediaId } = z.object({ id: z.string(), mediaId: z.string() }).parse(req.params);
     const ok = await repo.removeItem(id, req.userId!, mediaId);
     if (!ok) return reply.notFound();
+    req.log.info({ bundleId: id }, "item removed from bundle");
     reply.code(204);
   });
 
@@ -77,6 +82,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const starred = await repo.toggleStar(id, req.userId!);
     if (starred === null) return reply.notFound();
+    req.log.info({ bundleId: id, starred }, "bundle star toggled");
     return { ok: true, starred };
   });
 

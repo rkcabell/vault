@@ -21,10 +21,16 @@ tags:
   - name: Profile
   - name: Media
   - name: Tags
+  - name: Bundles
+  - name: Reminders
+  - name: Health
 security:
   - bearerAuth: []
   - cookieAuth: []
 paths:
+  # ---------------------------------------------------------------------------
+  # Auth
+  # ---------------------------------------------------------------------------
   /api/auth/me:
     get:
       summary: Get the current user
@@ -51,23 +57,9 @@ paths:
                       username: "casey"
                       avatarUrl: "https://cdn.example.com/avatar.png"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/auth/register:
     post:
       summary: Register a new user
@@ -75,6 +67,10 @@ paths:
         - Auth
       operationId: auth_register
       security: []
+      x-rateLimit:
+        max: 5
+        timeWindow: "1 minute"
+        keyBy: IP
       requestBody:
         required: true
         content:
@@ -114,31 +110,26 @@ paths:
                     error: "Bad Request"
                     message: "User already exists"
         "429":
-          description: Too many requests
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                rateLimited:
-                  $ref: "#/components/examples/ErrorRateLimited"
+          $ref: "#/components/responses/RateLimited"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/auth/login:
     post:
       summary: Log in and set auth cookies
-      description: Sets `access_token` and `refresh_token` cookies.
+      description: |
+        Sets `access_token` (20 h) and `refresh_token` (7 d) httpOnly cookies.
+        Rate limited to 30 attempts/min per IP and 10 attempts/min per email.
       tags:
         - Auth
       operationId: auth_login
       security: []
+      x-rateLimit:
+        - max: 30
+          timeWindow: "1 minute"
+          keyBy: IP
+        - max: 10
+          timeWindow: "1 minute"
+          keyBy: email
       requestBody:
         required: true
         content:
@@ -188,23 +179,9 @@ paths:
                     error: "Unauthorized"
                     message: "Invalid credentials"
         "429":
-          description: Too many requests
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                rateLimited:
-                  $ref: "#/components/examples/ErrorRateLimited"
+          $ref: "#/components/responses/RateLimited"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/auth/refresh:
     post:
       summary: Refresh the access token
@@ -212,6 +189,10 @@ paths:
         - Auth
       operationId: auth_refresh
       security: []
+      x-rateLimit:
+        max: 60
+        timeWindow: "1 minute"
+        keyBy: IP
       requestBody:
         required: true
         content:
@@ -246,23 +227,13 @@ paths:
                     error: "Unauthorized"
                     message: "Invalid or expired refresh token"
         "429":
-          description: Too many requests
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                rateLimited:
-                  $ref: "#/components/examples/ErrorRateLimited"
+          $ref: "#/components/responses/RateLimited"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
+
+  # ---------------------------------------------------------------------------
+  # Profile
+  # ---------------------------------------------------------------------------
   /api/profile:
     get:
       summary: Get the current user's profile
@@ -290,32 +261,11 @@ paths:
                       avatarUrl: "https://cdn.example.com/avatar.png"
                       createdAt: "2026-01-29T18:35:00Z"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: Profile not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                notFound:
-                  $ref: "#/components/examples/ErrorNotFound"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
     patch:
       summary: Update the current user's profile
       tags:
@@ -353,36 +303,22 @@ paths:
                       location: "Seattle, WA"
                       avatarUrl: null
                       createdAt: "2026-01-29T18:35:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: Profile not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                notFound:
-                  $ref: "#/components/examples/ErrorNotFound"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
+
+  # ---------------------------------------------------------------------------
+  # Media
+  # ---------------------------------------------------------------------------
   /api/media:
     post:
       summary: Initialize a media upload
+      description: Returns a presigned S3 PUT URL. Upload the file directly to that URL, then call `/finalize`.
       tags:
         - Media
       operationId: media_initUpload
@@ -428,23 +364,9 @@ paths:
                     error: "Bad Request"
                     message: "receipt.pdf exceeds the documents limit (250 MB max)."
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
     get:
       summary: List media for the current user
       description: If `cursor` is provided, `page` is ignored.
@@ -552,23 +474,9 @@ paths:
                 badRequest:
                   $ref: "#/components/examples/ErrorBadRequest"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/media/batch-init:
     post:
       summary: Initialize multiple uploads in a batch
@@ -611,35 +519,11 @@ paths:
                         storageKey: "usr_123/b5d3adbb-2bd5-4b22-9412-7d1c54a89b7b/scan.png"
                         putUrl: "https://s3.example.com/presigned-put-2"
         "400":
-          description: Bad request
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                badRequest:
-                  value:
-                    statusCode: 400
-                    error: "Bad Request"
-                    message: "Tags may only contain lowercase letters, digits, and dashes"
+          $ref: "#/components/responses/BadRequest"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/media/batch-finalize:
     post:
       summary: Finalize multiple uploads
@@ -671,69 +555,12 @@ paths:
                     ok: true
                     count: 2
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
-  /api/media/{id}/finalize:
-    post:
-      summary: Finalize a single upload
-      tags:
-        - Media
-      operationId: media_finalize
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: Upload finalized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MediaFinalizeResponse"
-              examples:
-                success:
-                  value:
-                    ok: true
-                    count: 1
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
-        "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/media/tags:
     get:
-      summary: List top tags for the current user (media)
+      summary: List top tags for the current user
       tags:
         - Media
       operationId: media_listTags
@@ -752,33 +579,70 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MediaTagsResponse"
+                $ref: "#/components/schemas/TagsResponse"
               examples:
                 success:
                   value:
                     tags:
-                      - tag: "receipt"
+                      - name: "receipt"
                         count: 12
-                      - tag: "application-pdf"
+                      - name: "application-pdf"
                         count: 9
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "500":
-          description: Internal server error
+          $ref: "#/components/responses/InternalServerError"
+  /api/media/events:
+    get:
+      summary: Subscribe to real-time media processing updates
+      description: |
+        Server-Sent Events (SSE) stream. Each event carries the updated field and value
+        for a media item owned by the authenticated user. A keep-alive ping comment is
+        sent every 25 seconds.
+
+        Event format:
+        ```
+        data: {"mediaId":"<uuid>","field":"<field>","value":"<value>"}
+        ```
+      tags:
+        - Media
+      operationId: media_events
+      responses:
+        "200":
+          description: SSE stream established
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                update:
+                  value: "data: {\"mediaId\":\"7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9\",\"field\":\"thumbState\",\"value\":\"READY\"}"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/media/{id}/finalize:
+    post:
+      summary: Finalize a single upload
+      tags:
+        - Media
+      operationId: media_finalize
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+      responses:
+        "200":
+          description: Upload finalized
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/MediaFinalizeResponse"
               examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+                success:
+                  value:
+                    ok: true
+                    count: 1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
   /api/media/{id}:
     get:
       summary: Get media detail
@@ -786,12 +650,7 @@ paths:
         - Media
       operationId: media_getDetail
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/MediaId"
       responses:
         "200":
           description: Media detail
@@ -847,44 +706,18 @@ paths:
                       canDownload: true
                       canOcr: true
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: Media not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                notFound:
-                  $ref: "#/components/examples/ErrorNotFound"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
     patch:
       summary: Update media metadata
       tags:
         - Media
       operationId: media_update
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/MediaId"
       requestBody:
         required: true
         content:
@@ -932,82 +765,35 @@ paths:
                     error: "Bad Request"
                     message: "Provide a title or tags to update"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: Media not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                notFound:
-                  $ref: "#/components/examples/ErrorNotFound"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
     delete:
       summary: Delete media
       tags:
         - Media
       operationId: media_delete
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/MediaId"
       responses:
         "200":
           description: Media deleted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MediaDeleteResponse"
+                $ref: "#/components/schemas/OkResponse"
               examples:
                 success:
                   value:
                     ok: true
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: Media not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                notFound:
-                  $ref: "#/components/examples/ErrorNotFound"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/media/{id}/download:
     get:
       summary: Get a presigned download URL
@@ -1015,12 +801,7 @@ paths:
         - Media
       operationId: media_getDownloadUrl
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/MediaId"
       responses:
         "200":
           description: Download URL
@@ -1033,32 +814,11 @@ paths:
                   value:
                     url: "https://s3.example.com/presigned-get"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: Media not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                notFound:
-                  $ref: "#/components/examples/ErrorNotFound"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/media/{id}/text:
     get:
       summary: Get a chunk of extracted text
@@ -1066,12 +826,7 @@ paths:
         - Media
       operationId: media_getText
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/MediaId"
         - in: query
           name: offset
           schema:
@@ -1102,44 +857,18 @@ paths:
                     hasMore: true
                     textSource: "OCR"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: Media not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                notFound:
-                  $ref: "#/components/examples/ErrorNotFound"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
     post:
       summary: Re-run text extraction
       tags:
         - Media
       operationId: media_rerunTextExtraction
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/MediaId"
       requestBody:
         required: true
         content:
@@ -1164,32 +893,11 @@ paths:
                   value:
                     ok: true
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: Media not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                notFound:
-                  $ref: "#/components/examples/ErrorNotFound"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/media/{id}/text/cancel:
     post:
       summary: Cancel text extraction
@@ -1197,12 +905,7 @@ paths:
         - Media
       operationId: media_cancelTextExtraction
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/MediaId"
       responses:
         "200":
           description: OCR job cancellation requested
@@ -1215,78 +918,72 @@ paths:
                   value:
                     ok: true
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "404":
-          description: Media not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                notFound:
-                  $ref: "#/components/examples/ErrorNotFound"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/media/{id}/thumbnail:
     get:
       summary: Get a thumbnail image
-      description: Returns a WebP image. Missing thumbnails return a 1x1 fallback image.
+      description: Returns a WebP image. Missing thumbnails return a 1×1 fallback image.
       tags:
         - Media
       operationId: media_getThumbnail
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/MediaId"
       responses:
         "200":
           description: WebP thumbnail
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "public, max-age=31536000, immutable"
+            ETag:
+              schema:
+                type: string
           content:
             image/webp:
               schema:
                 type: string
                 format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/media/{id}/thumbnail/regenerate:
+    post:
+      summary: Regenerate the thumbnail
+      tags:
+        - Media
+      operationId: media_regenerateThumbnail
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+      responses:
+        "200":
+          description: Thumbnail regeneration enqueued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
               examples:
                 success:
-                  value: "<binary>"
+                  value:
+                    ok: true
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
+
+  # ---------------------------------------------------------------------------
+  # Tags
+  # ---------------------------------------------------------------------------
   /api/tags:
     get:
-      summary: List top tags for the current user (catalog)
+      summary: List top tags for the current user
       tags:
         - Tags
       operationId: tags_list
@@ -1314,82 +1011,12 @@ paths:
                       - name: "application-pdf"
                         count: 9
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
-    post:
-      summary: Create or ensure a tag exists
-      tags:
-        - Tags
-      operationId: tags_create
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TagCreateRequest"
-            examples:
-              create:
-                value:
-                  name: "receipt"
-      responses:
-        "200":
-          description: Tag ensured
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TagCreateResponse"
-              examples:
-                success:
-                  value:
-                    tag: "receipt"
-        "400":
-          description: Bad request
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                badRequest:
-                  value:
-                    statusCode: 400
-                    error: "Bad Request"
-                    message: "Provide a tag name or tags array"
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
-        "500":
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+          $ref: "#/components/responses/InternalServerError"
   /api/tags/{tag}:
     delete:
-      summary: Delete a tag from the catalog and remove it from media
+      summary: Delete a tag and remove it from all media
       tags:
         - Tags
       operationId: tags_delete
@@ -1399,6 +1026,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Tag name (will be normalized before deletion).
       responses:
         "200":
           description: Tag deleted
@@ -1412,7 +1040,7 @@ paths:
                     ok: true
                     tag: "receipt"
         "400":
-          description: Bad request
+          description: Invalid tag name
           content:
             application/json:
               schema:
@@ -1424,24 +1052,659 @@ paths:
                     error: "Bad Request"
                     message: "Tags may only contain lowercase letters, digits, and dashes"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                unauthorized:
-                  $ref: "#/components/examples/ErrorUnauthorized"
+          $ref: "#/components/responses/Unauthorized"
         "500":
-          description: Internal server error
+          $ref: "#/components/responses/InternalServerError"
+
+  # ---------------------------------------------------------------------------
+  # Bundles
+  # ---------------------------------------------------------------------------
+  /api/bundles:
+    get:
+      summary: List bundles for the current user
+      tags:
+        - Bundles
+      operationId: bundles_list
+      responses:
+        "200":
+          description: Bundle list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleListResponse"
+              examples:
+                success:
+                  value:
+                    bundles:
+                      - id: "c1d2e3f4-0001-0000-0000-000000000001"
+                        name: "Tax documents 2025"
+                        description: "W2, receipts, and filings"
+                        starred: true
+                        itemCount: 7
+                        coverMediaId: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                        createdAt: "2026-01-01T00:00:00Z"
+                        updatedAt: "2026-03-15T12:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    post:
+      summary: Create a bundle
+      tags:
+        - Bundles
+      operationId: bundles_create
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BundleCreateRequest"
+            examples:
+              create:
+                value:
+                  name: "Tax documents 2025"
+                  description: "W2, receipts, and filings"
+      responses:
+        "201":
+          description: Bundle created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleSummaryResponse"
+              examples:
+                success:
+                  value:
+                    bundle:
+                      id: "c1d2e3f4-0001-0000-0000-000000000001"
+                      name: "Tax documents 2025"
+                      description: "W2, receipts, and filings"
+                      starred: false
+                      itemCount: 0
+                      coverMediaId: null
+                      createdAt: "2026-03-17T00:00:00Z"
+                      updatedAt: "2026-03-17T00:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/bundles/{id}:
+    get:
+      summary: Get bundle detail with items
+      tags:
+        - Bundles
+      operationId: bundles_get
+      parameters:
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200":
+          description: Bundle detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleDetailResponse"
+              examples:
+                success:
+                  value:
+                    bundle:
+                      id: "c1d2e3f4-0001-0000-0000-000000000001"
+                      name: "Tax documents 2025"
+                      description: "W2, receipts, and filings"
+                      starred: true
+                      itemCount: 2
+                      coverMediaId: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                      createdAt: "2026-01-01T00:00:00Z"
+                      updatedAt: "2026-03-15T12:00:00Z"
+                      items:
+                        - mediaId: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                          order: 0
+                          addedAt: "2026-01-01T00:00:00Z"
+                          title: "W2 2025"
+                          mimeType: "application/pdf"
+                          thumbState: "READY"
+                          thumbnailKey: "usr_123/7a1b54a0/thumb.webp"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    patch:
+      summary: Update bundle name or description
+      tags:
+        - Bundles
+      operationId: bundles_update
+      parameters:
+        - $ref: "#/components/parameters/BundleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BundlePatchRequest"
+            examples:
+              update:
+                value:
+                  name: "Tax docs 2025 (updated)"
+      responses:
+        "200":
+          description: Bundle updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    delete:
+      summary: Delete a bundle
+      description: Deletes the bundle record. Media items are not deleted.
+      tags:
+        - Bundles
+      operationId: bundles_delete
+      parameters:
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "204":
+          description: Bundle deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/bundles/{id}/items:
+    post:
+      summary: Add media items to a bundle
+      tags:
+        - Bundles
+      operationId: bundles_addItems
+      parameters:
+        - $ref: "#/components/parameters/BundleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BundleAddItemsRequest"
+            examples:
+              add:
+                value:
+                  mediaIds:
+                    - "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                    - "8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da"
+      responses:
+        "200":
+          description: Items added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/bundles/{id}/items/{mediaId}:
+    delete:
+      summary: Remove a media item from a bundle
+      tags:
+        - Bundles
+      operationId: bundles_removeItem
+      parameters:
+        - $ref: "#/components/parameters/BundleId"
+        - in: path
+          name: mediaId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Item removed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/bundles/{id}/items/order:
+    put:
+      summary: Reorder items within a bundle
+      tags:
+        - Bundles
+      operationId: bundles_reorderItems
+      parameters:
+        - $ref: "#/components/parameters/BundleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BundleOrderRequest"
+            examples:
+              reorder:
+                value:
+                  orderedIds:
+                    - "8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da"
+                    - "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+      responses:
+        "200":
+          description: Order updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/bundles/{id}/star:
+    post:
+      summary: Toggle the starred state of a bundle
+      tags:
+        - Bundles
+      operationId: bundles_toggleStar
+      parameters:
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200":
+          description: Starred state toggled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BundleStarResponse"
+              examples:
+                starred:
+                  value:
+                    ok: true
+                    starred: true
+                unstarred:
+                  value:
+                    ok: true
+                    starred: false
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ---------------------------------------------------------------------------
+  # Reminders
+  # ---------------------------------------------------------------------------
+  /api/reminders/summary:
+    get:
+      summary: Get reminder counts by bucket
+      tags:
+        - Reminders
+      operationId: reminders_summary
+      responses:
+        "200":
+          description: Reminder summary counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderSummaryStats"
+              examples:
+                success:
+                  value:
+                    visibleNow: 3
+                    overdue: 1
+                    dueToday: 1
+                    dueSoon: 1
+                    totalActive: 5
+                    soonWindowDays: 7
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/reminders:
+    get:
+      summary: List reminders
+      description: |
+        - `status=active` (default) returns active reminders sorted by urgency.
+        - `status=completed` returns completed reminders, only supports `view=all`.
+        - `view=overview` (default) returns a limited set grouped by bucket; `view=all` returns a flat list.
+        - `status=canceled` is not supported.
+      tags:
+        - Reminders
+      operationId: reminders_list
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum:
+              - active
+              - completed
+          description: Filter by reminder status. Defaults to `active`.
+        - in: query
+          name: view
+          schema:
+            type: string
+            enum:
+              - overview
+              - all
+          description: |
+            `overview` returns a capped list per bucket; `all` returns the full flat list.
+            `completed` status only supports `view=all`.
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 5
+          description: Maximum items to return. Applies per-bucket in `overview` view.
+      responses:
+        "200":
+          description: Reminder list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderListResponse"
+              examples:
+                active:
+                  value:
+                    items:
+                      - id: "a1b2c3d4-0000-0000-0000-000000000001"
+                        title: "Renew car insurance"
+                        note: "Check inbox for renewal notice"
+                        media:
+                          id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                          title: "Insurance policy"
+                        effectiveDueAt: "2026-03-20T00:00:00Z"
+                        remindAt: "2026-03-13T00:00:00Z"
+                        snoozedUntil: null
+                        bucket: "soon"
+                        isOverdue: false
+                        remindOffsetDays: 7
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    post:
+      summary: Create a reminder
+      tags:
+        - Reminders
+      operationId: reminders_create
+      parameters:
+        - in: header
+          name: x-timezone
+          schema:
+            type: string
+          description: IANA timezone identifier (e.g. `America/New_York`). Defaults to UTC.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReminderRequest"
+            examples:
+              simple:
+                value:
+                  title: "Renew car insurance"
+                  dueAt: "2026-03-20T00:00:00Z"
+                  remindOffsetDays: 7
+                  mediaId: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+              recurring:
+                value:
+                  title: "Monthly budget review"
+                  dueAt: "2026-04-01T00:00:00Z"
+                  rrule: "FREQ=MONTHLY;BYMONTHDAY=1"
+      responses:
+        "201":
+          description: Reminder created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderResponse"
+              examples:
+                success:
+                  value:
+                    reminder:
+                      id: "a1b2c3d4-0000-0000-0000-000000000001"
+                      userId: "usr_123"
+                      title: "Renew car insurance"
+                      note: null
+                      mediaId: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                      status: "ACTIVE"
+                      timezone: "UTC"
+                      dueAt: "2026-03-20T00:00:00Z"
+                      nextDueAt: null
+                      remindOffsetDays: 7
+                      remindAt: "2026-03-13T00:00:00Z"
+                      snoozedUntil: null
+                      rrule: null
+                      lastCompletedAt: null
+                      createdAt: "2026-03-17T00:00:00Z"
+                      updatedAt: "2026-03-17T00:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/reminders/{id}:
+    patch:
+      summary: Update a reminder
+      tags:
+        - Reminders
+      operationId: reminders_update
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchReminderRequest"
+            examples:
+              update:
+                value:
+                  title: "Renew car insurance (updated)"
+                  remindOffsetDays: 14
+      responses:
+        "200":
+          description: Reminder updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/reminders/{id}/complete:
+    post:
+      summary: Mark a reminder complete
+      description: |
+        For one-off reminders, sets status to `COMPLETED`. For recurring reminders
+        (with `rrule`), advances to the next occurrence and stays `ACTIVE`,
+        updating `lastCompletedAt`.
+      tags:
+        - Reminders
+      operationId: reminders_complete
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+      responses:
+        "200":
+          description: Reminder completed (or advanced to next recurrence)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "400":
+          description: Reminder is not ACTIVE
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/reminders/{id}/snooze:
+    post:
+      summary: Snooze a reminder until a future time
+      tags:
+        - Reminders
+      operationId: reminders_snooze
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnoozeReminderRequest"
+            examples:
+              snooze:
+                value:
+                  until: "2026-03-18T09:00:00Z"
+      responses:
+        "200":
+          description: Reminder snoozed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
               examples:
-                serverError:
-                  $ref: "#/components/examples/ErrorInternalServer"
+                success:
+                  value:
+                    ok: true
+        "400":
+          description: "`until` is in the past or reminder is not ACTIVE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/reminders/{id}/cancel:
+    post:
+      summary: Cancel a reminder
+      tags:
+        - Reminders
+      operationId: reminders_cancel
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+      responses:
+        "200":
+          description: Reminder cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ---------------------------------------------------------------------------
+  # Health
+  # ---------------------------------------------------------------------------
+  /healthz:
+    get:
+      summary: Liveness check
+      tags:
+        - Health
+      operationId: health_liveness
+      security: []
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+  /readyz:
+    get:
+      summary: Readiness check
+      description: Performs a database connectivity check (`SELECT 1`).
+      tags:
+        - Health
+      operationId: health_readiness
+      security: []
+      responses:
+        "200":
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ready:
+                    type: boolean
+                required:
+                  - ready
+              examples:
+                success:
+                  value:
+                    ready: true
+        "500":
+          description: Database unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
+  # ---------------------------------------------------------------------------
+  # Security
+  # ---------------------------------------------------------------------------
   securitySchemes:
     bearerAuth:
       type: http
@@ -1451,10 +1714,92 @@ components:
       type: apiKey
       in: cookie
       name: access_token
+
+  # ---------------------------------------------------------------------------
+  # Reusable parameters
+  # ---------------------------------------------------------------------------
+  parameters:
+    MediaId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Media ID (UUID).
+    BundleId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+      description: Bundle ID.
+    ReminderId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Reminder ID (UUID).
+
+  # ---------------------------------------------------------------------------
+  # Reusable responses
+  # ---------------------------------------------------------------------------
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            badRequest:
+              $ref: "#/components/examples/ErrorBadRequest"
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            unauthorized:
+              $ref: "#/components/examples/ErrorUnauthorized"
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            notFound:
+              $ref: "#/components/examples/ErrorNotFound"
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            rateLimited:
+              $ref: "#/components/examples/ErrorRateLimited"
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            serverError:
+              $ref: "#/components/examples/ErrorInternalServer"
+
+  # ---------------------------------------------------------------------------
+  # Schemas
+  # ---------------------------------------------------------------------------
   schemas:
     ErrorResponse:
       type: object
-      description: Error response payloads from Fastify and rate limiting.
+      description: Error response payload from Fastify and rate limiting.
       properties:
         statusCode:
           type: integer
@@ -1466,6 +1811,17 @@ components:
           type: integer
         windowMs:
           type: integer
+
+    OkResponse:
+      type: object
+      description: Generic acknowledgement response.
+      properties:
+        ok:
+          type: boolean
+      required:
+        - ok
+
+    # --- Auth ---
     User:
       type: object
       description: User summary returned by auth endpoints.
@@ -1476,17 +1832,11 @@ components:
           type: string
           format: email
         name:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         username:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         avatarUrl:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
       required:
         - id
         - email
@@ -1532,7 +1882,7 @@ components:
         - password
     AuthLoginResponse:
       type: object
-      description: User returned after login.
+      description: User returned after login. Tokens are set as httpOnly cookies.
       properties:
         user:
           $ref: "#/components/schemas/User"
@@ -1548,7 +1898,7 @@ components:
         - refresh
     AuthRefreshResponse:
       type: object
-      description: New access token payload.
+      description: New access token.
       properties:
         access:
           type: string
@@ -1562,6 +1912,8 @@ components:
           $ref: "#/components/schemas/User"
       required:
         - user
+
+    # --- Profile ---
     Profile:
       type: object
       description: Profile details for the current user.
@@ -1572,29 +1924,17 @@ components:
           type: string
           format: email
         name:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         username:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         bio:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         website:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         location:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         avatarUrl:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         createdAt:
           type: string
           format: date-time
@@ -1622,32 +1962,28 @@ components:
       additionalProperties: false
       properties:
         name:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
+          maxLength: 200
         username:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
+          maxLength: 80
         bio:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
+          maxLength: 1000
         website:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
+          maxLength: 200
         location:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
+          maxLength: 200
         avatarUrl:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
+          maxLength: 400
+
+    # --- Media shared ---
     MediaWorkerState:
       type: string
-      description: Background processing state for media.
+      description: Background processing state.
       enum:
         - PENDING
         - READY
@@ -1685,9 +2021,11 @@ components:
         - type: array
           items:
             type: string
+
+    # --- Media upload ---
     MediaInitUploadRequest:
       type: object
-      description: Request to initialize an upload and receive a presigned URL.
+      description: Request to initialize an upload and receive a presigned PUT URL.
       properties:
         filename:
           type: string
@@ -1698,7 +2036,7 @@ components:
         sizeBytes:
           type: integer
           minimum: 1
-          description: Upload size limit is 50 MB for photos, 250 MB for documents, with a hard cap of 500 MB for other files.
+          description: Size limits — 50 MB for photos, 250 MB for documents, 500 MB hard cap.
         title:
           type: string
           minLength: 1
@@ -1737,7 +2075,6 @@ components:
         sizeBytes:
           type: integer
           minimum: 1
-          description: Upload size limit is 50 MB for photos, 250 MB for documents, with a hard cap of 500 MB for other files.
         title:
           type: string
           minLength: 1
@@ -1749,7 +2086,7 @@ components:
         - sizeBytes
     MediaBatchInitRequest:
       type: object
-      description: Batch upload initialization request.
+      description: Batch upload initialization request (1–100 items).
       properties:
         items:
           type: array
@@ -1786,7 +2123,7 @@ components:
         - items
     MediaBatchFinalizeRequest:
       type: object
-      description: Finalize multiple uploads after data is uploaded.
+      description: Finalize multiple uploads (1–100 IDs).
       properties:
         ids:
           type: array
@@ -1799,7 +2136,7 @@ components:
         - ids
     MediaFinalizeResponse:
       type: object
-      description: Finalize result with updated count.
+      description: Finalize result.
       properties:
         ok:
           type: boolean
@@ -1808,6 +2145,8 @@ components:
       required:
         - ok
         - count
+
+    # --- Media list/detail ---
     MediaSummary:
       type: object
       description: Summary item returned by media list.
@@ -1816,7 +2155,7 @@ components:
           type: string
           format: uuid
         title:
-          type: string
+          type: [string, "null"]
         thumbState:
           $ref: "#/components/schemas/MediaWorkerState"
         textState:
@@ -1832,7 +2171,6 @@ components:
           type: string
       required:
         - id
-        - title
         - thumbState
         - textState
         - createdAt
@@ -1847,20 +2185,16 @@ components:
           items:
             $ref: "#/components/schemas/MediaSummary"
         nextCursor:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         nextPage:
-          type:
-            - integer
-            - "null"
+          type: [integer, "null"]
       required:
         - items
         - nextCursor
         - nextPage
     MediaUpdateRequest:
       type: object
-      description: Update request for media metadata.
+      description: Update request for media metadata. At least one field required.
       properties:
         title:
           type: string
@@ -1868,10 +2202,8 @@ components:
         tags:
           $ref: "#/components/schemas/TagInput"
       anyOf:
-        - required:
-            - title
-        - required:
-            - tags
+        - required: [title]
+        - required: [tags]
     MediaUpdate:
       type: object
       description: Updated media metadata.
@@ -1880,11 +2212,11 @@ components:
           type: string
           format: uuid
         title:
-          type: string
+          type: [string, "null"]
         filename:
           type: string
         sizeBytes:
-          type: integer
+          type: [integer, "null"]
         mimeType:
           type: string
         thumbState:
@@ -1897,9 +2229,7 @@ components:
             type: string
       required:
         - id
-        - title
         - filename
-        - sizeBytes
         - mimeType
         - thumbState
         - textState
@@ -1912,14 +2242,6 @@ components:
           $ref: "#/components/schemas/MediaUpdate"
       required:
         - media
-    MediaDeleteResponse:
-      type: object
-      description: Delete acknowledgement response.
-      properties:
-        ok:
-          type: boolean
-      required:
-        - ok
     MediaDownloadResponse:
       type: object
       description: Presigned download URL response.
@@ -1930,7 +2252,7 @@ components:
         - url
     MediaTextChunk:
       type: object
-      description: Chunk of extracted text.
+      description: Chunk of extracted text with pagination metadata.
       properties:
         text:
           type: string
@@ -1943,14 +2265,15 @@ components:
         hasMore:
           type: boolean
         textSource:
-          $ref: "#/components/schemas/TextSource"
+          anyOf:
+            - $ref: "#/components/schemas/TextSource"
+            - type: "null"
       required:
         - text
         - offset
         - limit
         - totalLength
         - hasMore
-        - textSource
     TextExtractionRequest:
       type: object
       description: Options for re-running text extraction.
@@ -1959,23 +2282,14 @@ components:
           type: string
           minLength: 2
           maxLength: 12
+          description: ISO 639 language hint for Tesseract (e.g. `eng`, `fra`).
         rotation:
           type: string
-          enum:
-            - "0"
-            - "90"
-            - "180"
-            - "270"
+          enum: ["0", "90", "180", "270"]
+          description: Page rotation to apply before OCR.
         forceOcr:
           type: boolean
-    OkResponse:
-      type: object
-      description: Generic ok response.
-      properties:
-        ok:
-          type: boolean
-      required:
-        - ok
+          description: Force OCR even if native text is available.
     ImageGps:
       type: object
       description: GPS coordinates extracted from image metadata.
@@ -1985,187 +2299,109 @@ components:
         longitude:
           type: number
         altitude:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
       required:
         - latitude
         - longitude
     ImageMetadata:
       type: object
-      description: Image metadata fields, when available.
+      description: Image metadata extracted from EXIF.
       properties:
         make:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         model:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         lens:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         iso:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         exposureTime:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         fNumber:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         focalLengthMm:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         orientation:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         colorSpace:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         editedBy:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         capturedAt:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         width:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         height:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         bitDepth:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         hasAlpha:
-          type:
-            - boolean
-            - "null"
+          type: [boolean, "null"]
         gps:
           anyOf:
             - $ref: "#/components/schemas/ImageGps"
             - type: "null"
     PdfMetadata:
       type: object
-      description: PDF metadata fields, when available.
+      description: PDF document metadata.
       properties:
         title:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         author:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         subject:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         producer:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         creator:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         pdfVersion:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         pageCount:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         encrypted:
-          type:
-            - boolean
-            - "null"
+          type: [boolean, "null"]
         createdAt:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         modifiedAt:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
     OfficeMetadata:
       type: object
-      description: Office document metadata fields, when available.
+      description: Office document metadata.
       properties:
         application:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         appVersion:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         lastModifiedBy:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         revision:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         language:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         hasComments:
-          type:
-            - boolean
-            - "null"
+          type: [boolean, "null"]
         hasTrackedChanges:
-          type:
-            - boolean
-            - "null"
+          type: [boolean, "null"]
     TextStats:
       type: object
-      description: Computed text statistics for extracted content.
+      description: Computed statistics for extracted text.
       properties:
         totalChars:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         totalWords:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         pageCount:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         pagesWithText:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         avgCharsPerPage:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
         avgWordsPerPage:
-          type:
-            - number
-            - "null"
+          type: [number, "null"]
     MediaMetadata:
       type: object
-      description: Derived metadata for media content.
+      description: Derived metadata for a media item.
       properties:
         image:
           anyOf:
@@ -2185,7 +2421,7 @@ components:
             - type: "null"
     MediaPermissions:
       type: object
-      description: Permission flags for the current user.
+      description: Permission flags for the authenticated user on this media item.
       properties:
         canEdit:
           type: boolean
@@ -2207,21 +2443,20 @@ components:
         rawText:
           type: string
         textSource:
-          $ref: "#/components/schemas/TextSource"
+          anyOf:
+            - $ref: "#/components/schemas/TextSource"
+            - type: "null"
         textTotalLength:
           type: integer
         textLanguage:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         textLanguageStatus:
-          $ref: "#/components/schemas/TextLanguageStatus"
+          anyOf:
+            - $ref: "#/components/schemas/TextLanguageStatus"
+            - type: "null"
       required:
         - rawText
-        - textSource
         - textTotalLength
-        - textLanguage
-        - textLanguageStatus
     MediaDetail:
       type: object
       description: Full media record with derived fields.
@@ -2232,13 +2467,13 @@ components:
         userId:
           type: string
         title:
-          type: string
+          type: [string, "null"]
         filename:
           type: string
         mimeType:
           type: string
         sizeBytes:
-          type: integer
+          type: [integer, "null"]
         storageKey:
           type: string
         createdAt:
@@ -2254,51 +2489,34 @@ components:
         thumbState:
           $ref: "#/components/schemas/MediaWorkerState"
         thumbError:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         textState:
           $ref: "#/components/schemas/MediaWorkerState"
         thumbnailKey:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         hasText:
           type: boolean
         hasThumb:
           type: boolean
         textError:
-          type:
-            - string
-            - "null"
+          type: [string, "null"]
         textAttemptsMade:
-          type:
-            - integer
-            - "null"
+          type: [integer, "null"]
         textAttemptsTotal:
-          type:
-            - integer
-            - "null"
+          type: [integer, "null"]
       required:
         - id
         - userId
-        - title
         - filename
         - mimeType
-        - sizeBytes
         - storageKey
         - createdAt
         - updatedAt
         - tags
         - thumbState
-        - thumbError
         - textState
-        - thumbnailKey
         - hasText
         - hasThumb
-        - textError
-        - textAttemptsMade
-        - textAttemptsTotal
     MediaDetailResponse:
       type: object
       description: Media detail response envelope.
@@ -2314,36 +2532,18 @@ components:
             - $ref: "#/components/schemas/MediaMetadata"
             - type: "null"
         permissions:
-          $ref: "#/components/schemas/MediaPermissions"
+          anyOf:
+            - $ref: "#/components/schemas/MediaPermissions"
+            - type: "null"
       required:
         - media
         - document
         - metadata
-        - permissions
-    MediaTagCount:
-      type: object
-      description: Tag name and count for media tags list.
-      properties:
-        tag:
-          type: string
-        count:
-          type: integer
-      required:
-        - tag
-        - count
-    MediaTagsResponse:
-      type: object
-      description: Top tags response for media.
-      properties:
-        tags:
-          type: array
-          items:
-            $ref: "#/components/schemas/MediaTagCount"
-      required:
-        - tags
+
+    # --- Tags ---
     TagCount:
       type: object
-      description: Tag name and count for catalog list.
+      description: Tag name with usage count.
       properties:
         name:
           type: string
@@ -2354,7 +2554,7 @@ components:
         - count
     TagsResponse:
       type: object
-      description: Top tags response for the tag catalog.
+      description: Tag list response.
       properties:
         tags:
           type: array
@@ -2362,27 +2562,6 @@ components:
             $ref: "#/components/schemas/TagCount"
       required:
         - tags
-    TagCreateRequest:
-      type: object
-      description: Request to create or ensure a tag exists.
-      properties:
-        name:
-          type: string
-        tags:
-          $ref: "#/components/schemas/TagInput"
-      anyOf:
-        - required:
-            - name
-        - required:
-            - tags
-    TagCreateResponse:
-      type: object
-      description: Tag creation response.
-      properties:
-        tag:
-          type: string
-      required:
-        - tag
     TagDeleteResponse:
       type: object
       description: Tag deletion response.
@@ -2394,6 +2573,398 @@ components:
       required:
         - ok
         - tag
+
+    # --- Bundles ---
+    BundleSummary:
+      type: object
+      description: Bundle summary returned in list responses.
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+        starred:
+          type: boolean
+        itemCount:
+          type: integer
+        coverMediaId:
+          type: [string, "null"]
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - starred
+        - itemCount
+        - createdAt
+        - updatedAt
+    BundleItem:
+      type: object
+      description: A media item within a bundle.
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+        order:
+          type: integer
+        addedAt:
+          type: string
+          format: date-time
+        title:
+          type: [string, "null"]
+        mimeType:
+          type: string
+        thumbState:
+          $ref: "#/components/schemas/MediaWorkerState"
+        thumbnailKey:
+          type: [string, "null"]
+      required:
+        - mediaId
+        - order
+        - addedAt
+        - mimeType
+        - thumbState
+    BundleDetail:
+      description: Bundle summary with its ordered item list.
+      allOf:
+        - $ref: "#/components/schemas/BundleSummary"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/BundleItem"
+          required:
+            - items
+    BundleListResponse:
+      type: object
+      description: Bundle list response envelope.
+      properties:
+        bundles:
+          type: array
+          items:
+            $ref: "#/components/schemas/BundleSummary"
+      required:
+        - bundles
+    BundleSummaryResponse:
+      type: object
+      description: Single bundle summary response envelope.
+      properties:
+        bundle:
+          $ref: "#/components/schemas/BundleSummary"
+      required:
+        - bundle
+    BundleDetailResponse:
+      type: object
+      description: Bundle detail response envelope.
+      properties:
+        bundle:
+          $ref: "#/components/schemas/BundleDetail"
+      required:
+        - bundle
+    BundleCreateRequest:
+      type: object
+      description: Request to create a new bundle.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 1000
+      required:
+        - name
+    BundlePatchRequest:
+      type: object
+      description: Update bundle name or description (at least one field required).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: [string, "null"]
+          maxLength: 1000
+    BundleAddItemsRequest:
+      type: object
+      description: Add media items to a bundle (1–100 IDs).
+      properties:
+        mediaIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            format: uuid
+      required:
+        - mediaIds
+    BundleOrderRequest:
+      type: object
+      description: Reorder items in a bundle by providing the full ordered list of media IDs.
+      properties:
+        orderedIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: uuid
+      required:
+        - orderedIds
+    BundleStarResponse:
+      type: object
+      description: Result of toggling the starred state.
+      properties:
+        ok:
+          type: boolean
+        starred:
+          type: boolean
+      required:
+        - ok
+        - starred
+
+    # --- Reminders ---
+    ReminderStatus:
+      type: string
+      description: Lifecycle state of a reminder.
+      enum:
+        - ACTIVE
+        - COMPLETED
+        - CANCELED
+    ReminderBucket:
+      type: string
+      description: Urgency bucket derived from due date relative to now.
+      enum:
+        - overdue
+        - today
+        - soon
+        - later
+    ReminderMediaRef:
+      type: object
+      description: Minimal media reference attached to a reminder.
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: [string, "null"]
+      required:
+        - id
+    Reminder:
+      type: object
+      description: Full reminder record.
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+        title:
+          type: string
+        note:
+          type: [string, "null"]
+        mediaId:
+          type: [string, "null"]
+          format: uuid
+        status:
+          $ref: "#/components/schemas/ReminderStatus"
+        timezone:
+          type: string
+          description: IANA timezone identifier.
+        dueAt:
+          type: string
+          format: date-time
+        nextDueAt:
+          type: [string, "null"]
+          format: date-time
+          description: Next occurrence due date for recurring reminders.
+        remindOffsetDays:
+          type: [integer, "null"]
+          description: Days before `dueAt` to surface the reminder.
+        remindAt:
+          type: string
+          format: date-time
+          description: Computed time when the reminder becomes visible (`dueAt - remindOffsetDays`).
+        snoozedUntil:
+          type: [string, "null"]
+          format: date-time
+        rrule:
+          type: [string, "null"]
+          description: iCal RRULE string for recurring reminders.
+        lastCompletedAt:
+          type: [string, "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - title
+        - status
+        - timezone
+        - dueAt
+        - remindAt
+        - createdAt
+        - updatedAt
+    ReminderSummaryItem:
+      type: object
+      description: Reminder list item with derived urgency fields.
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        note:
+          type: [string, "null"]
+        media:
+          anyOf:
+            - $ref: "#/components/schemas/ReminderMediaRef"
+            - type: "null"
+        effectiveDueAt:
+          type: string
+          format: date-time
+          description: The active due date (nextDueAt for recurring, dueAt otherwise).
+        remindAt:
+          type: string
+          format: date-time
+        snoozedUntil:
+          type: [string, "null"]
+          format: date-time
+        bucket:
+          $ref: "#/components/schemas/ReminderBucket"
+        isOverdue:
+          type: boolean
+        remindOffsetDays:
+          type: [integer, "null"]
+      required:
+        - id
+        - title
+        - effectiveDueAt
+        - remindAt
+        - bucket
+        - isOverdue
+    ReminderListResponse:
+      type: object
+      description: Reminder list response envelope.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReminderSummaryItem"
+      required:
+        - items
+    ReminderResponse:
+      type: object
+      description: Single reminder response envelope.
+      properties:
+        reminder:
+          $ref: "#/components/schemas/Reminder"
+      required:
+        - reminder
+    ReminderSummaryStats:
+      type: object
+      description: Aggregate reminder counts by urgency bucket.
+      properties:
+        visibleNow:
+          type: integer
+          description: Total reminders that are currently visible (past remindAt).
+        overdue:
+          type: integer
+        dueToday:
+          type: integer
+        dueSoon:
+          type: integer
+        totalActive:
+          type: integer
+        soonWindowDays:
+          type: integer
+          description: Number of days used to define the "soon" window.
+      required:
+        - visibleNow
+        - overdue
+        - dueToday
+        - dueSoon
+        - totalActive
+        - soonWindowDays
+    CreateReminderRequest:
+      type: object
+      description: Request to create a reminder.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+        note:
+          type: [string, "null"]
+          maxLength: 5000
+        mediaId:
+          type: [string, "null"]
+          format: uuid
+          description: Optional media item to link to this reminder.
+        dueAt:
+          type: string
+          format: date-time
+          description: Due date. Must be in the future.
+        remindOffsetDays:
+          type: [integer, "null"]
+          minimum: 0
+          description: Days before `dueAt` to surface the reminder. Defaults to 0 (due date itself).
+        rrule:
+          type: [string, "null"]
+          maxLength: 1000
+          description: iCal RRULE string for recurring reminders (e.g. `FREQ=MONTHLY`).
+      required:
+        - title
+        - dueAt
+    PatchReminderRequest:
+      type: object
+      description: Update reminder fields (at least one field required).
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+        note:
+          type: [string, "null"]
+          maxLength: 5000
+        mediaId:
+          type: [string, "null"]
+          format: uuid
+        dueAt:
+          type: string
+          format: date-time
+        remindOffsetDays:
+          type: [integer, "null"]
+          minimum: 0
+        rrule:
+          type: [string, "null"]
+          maxLength: 1000
+    SnoozeReminderRequest:
+      type: object
+      description: Snooze a reminder until a future datetime.
+      properties:
+        until:
+          type: string
+          format: date-time
+          description: Must be in the future.
+      required:
+        - until
+
+  # ---------------------------------------------------------------------------
+  # Examples
+  # ---------------------------------------------------------------------------
   examples:
     ErrorUnauthorized:
       value:
@@ -2404,7 +2975,7 @@ components:
       value:
         statusCode: 400
         error: "Bad Request"
-        message: "Use either ?tag=one or ?tags=one,two"
+        message: "Bad Request"
     ErrorNotFound:
       value:
         statusCode: 404

@@ -64,6 +64,7 @@ export const authRoutes: FastifyPluginAsync = async app => {
 
       try {
         const { user, tokens } = await authService.register(data.email, data.password);
+        req.log.info({ email: data.email }, "register");
         return { user, access: tokens.access, refresh: tokens.refresh };
       } catch (err) {
         if (err instanceof AuthError && err.code === "USER_EXISTS") {
@@ -99,6 +100,7 @@ export const authRoutes: FastifyPluginAsync = async app => {
 
       try {
         const { user, tokens } = await authService.login(data.email, data.password);
+        req.log.info({ email: data.email }, "login");
         const cookieConfig = {
           httpOnly: true,
           sameSite: "lax" as const,
@@ -115,6 +117,7 @@ export const authRoutes: FastifyPluginAsync = async app => {
         return reply.send({ user });
       } catch (err) {
         if (err instanceof AuthError && err.code === "INVALID_CREDENTIALS") {
+          req.log.warn({ email: data.email }, "login failed");
           return reply.unauthorized("Invalid credentials");
         }
         throw err;
