@@ -13,7 +13,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/Dialog';
-import { normalizeTags, TagValidationError } from '@/lib/tags';
+import { normalizeTags, TagValidationError, emitTagsUpdated } from '@/lib/tags';
 import type { MediaItem } from './MediaCard';
 
 interface BulkTagDialogProps {
@@ -102,6 +102,7 @@ export function BulkTagDialog({ open, onOpenChange, selectedItems, onDone }: Bul
     setProgress(null);
     setPendingTags([]);
     setTagInput('');
+    emitTagsUpdated();
     onDone(updatedItems);
     onOpenChange(false);
   };

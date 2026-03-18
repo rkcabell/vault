@@ -34,6 +34,12 @@ export type OcrProcessingDeps = {
   publishJobUpdate?: (update: { userId: string; mediaId: string; field: "textState"; value: "READY" | "ERROR" }) => void;
 };
 
+/**
+ * Return true if the error is likely transient and worth retrying.
+ * SOURCE_NOT_READY means the S3 object hasn't propagated yet; the networking
+ * and throttling codes come from the AWS SDK. TextJobError codes are matched
+ * directly to avoid string-matching on human-readable messages.
+ */
 function isTransientError (err: unknown) {
   const msg =
     err instanceof TextJobError
@@ -52,6 +58,25 @@ function isTransientError (err: unknown) {
 }
 
 
+/**
+ * Execute a single OCR job. The two-stage flow:
+ *
+ * Stage 1 — Native PDF extraction (PDF MIME, forceOcr = false):
+ *   Attempts text extraction with pdf.js. If the PDF has embedded text,
+ *   textState → READY and we're done. If the PDF appears to be a scan
+ *   (needsOcr = true), textState stays PENDING and a new job is enqueued
+ *   with forceOcr = true for Stage 2. A pdf.js error (other than
+ *   SOURCE_NOT_READY) also falls through to Stage 2.
+ *
+ * Stage 2 — OCRmyPDF (images, forceOcr = true, or pdf.js fallback):
+ *   Runs ocrmypdf in a temp directory, wrapping images in a PDF first.
+ *   The resulting OCR'd PDF is then parsed by pdf.js to extract text.
+ *   textState → READY on success.
+ *
+ * An AbortController enforces a per-file timeout (see computeOcrTimeout).
+ * Cancellation is detected via textState = ERROR/FAILED before processing
+ * starts and after each state write.
+ */
 export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) {
   const { mediaRepository, documentRepository, s3, bucket, enqueueOcr, logger, sleep } = deps;
   const { mediaId, storageKey, forceOcr, language, rotation } = data;
@@ -190,6 +215,11 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
   }
 }
 
+/**
+ * Wrap `processOcrJob` in the BullMQ worker callback signature.
+ * Logs start, completion (with duration), and failure with a structured
+ * errorCode. Re-throws so BullMQ can apply retry/backoff.
+ */
 export function createOcrProcessor (deps: OcrProcessingDeps) {
   return async (job: {
     data: OcrJobData;

@@ -37,13 +37,14 @@ interface MediaCardProps {
   className?: string;
   onDownload?: (id: string) => void;
   onRename?: (id: string, nextTitle: string) => void | Promise<void>;
-  onDelete?: (id: string) => void | Promise<void>;
+  onDelete?: (id: string, e: React.MouseEvent) => void | Promise<void>;
   isDeleting?: boolean;
   loading?: "eager" | "lazy";
   density?: "comfortable" | "compact";
   isSelectMode?: boolean;
   isSelected?: boolean;
   onSelect?: (id: string) => void;
+  gridCols?: number;
 }
 
 
@@ -71,6 +72,7 @@ export function MediaCard({
   isSelectMode = false,
   isSelected = false,
   onSelect,
+  gridCols,
 }: MediaCardProps) {
   const searchParams = useSearchParams();
   const id = media?.id;
@@ -87,6 +89,15 @@ export function MediaCard({
   const [isSavingRename, setIsSavingRename] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const ignoreBlurRef = useRef(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [titleOverflows, setTitleOverflows] = useState(false);
+
+  useEffect(() => {
+    if (gridCols !== 4 || variant !== 'grid') return;
+    const el = titleRef.current;
+    if (!el) return;
+    setTitleOverflows(el.scrollWidth > el.clientWidth);
+  }, [media.title, gridCols, variant]);
 
   useEffect(() => {
     if (!isRenaming) {
@@ -176,8 +187,8 @@ export function MediaCard({
   const triggerDelete = (e?: React.MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
-    if (!onDelete || isDeleting) return;
-    void onDelete(media.id);
+    if (!onDelete || isDeleting || !e) return;
+    void onDelete(media.id, e);
   };
 
   const triggerRename = (e?: React.MouseEvent) => {
@@ -316,14 +327,14 @@ export function MediaCard({
               )}
               {media.tags && media.tags.length > 0 && (
                 <div className={cn("mt-1 flex flex-wrap gap-1", isCompact && "mt-0.5")}>
-                  {media.tags.slice(0, 3).map((tag) => (
-                    <Badge key={tag} variant="outline" className="text-xs">
-                      {tag}
+                  {media.tags.slice(0, 1).map((tag) => (
+                    <Badge key={tag} variant="outline" className="text-xs max-w-[10rem]">
+                      <span className="truncate">{tag}</span>
                     </Badge>
                   ))}
-                  {media.tags.length > 3 && (
+                  {media.tags.length > 1 && (
                     <Badge variant="outline" className="text-xs">
-                      +{media.tags.length - 3}
+                      +{media.tags.length - 1}
                     </Badge>
                   )}
                 </div>
@@ -382,12 +393,12 @@ export function MediaCard({
 
   return (
     <Card
-      className={cn('group flex h-full flex-col overflow-hidden hover:shadow-lg transition-shadow', className)}
+      className={cn('group flex flex-col overflow-hidden hover:shadow-lg transition-shadow', className)}
       style={isSelectMode && isSelected ? { outline: '2px solid #06b6d4', outlineOffset: '0px' } : undefined}
     >
       {isSelectMode ? (
         <div
-          className="block cursor-pointer relative aspect-[4/3] w-full overflow-hidden bg-muted media-item shrink-0"
+          className={cn("block cursor-pointer relative w-full overflow-hidden bg-muted media-item shrink-0", isCompact ? "aspect-square" : "aspect-[4/3]")}
           onClick={handleSelectClick}
         >
           <img
@@ -418,7 +429,7 @@ export function MediaCard({
         </div>
       ) : (
         <Link href={hrefWithQuery} className="block cursor-zoom-in">
-          <div className="relative aspect-[4/3] w-full overflow-hidden bg-muted media-item shrink-0">
+          <div className={cn("relative w-full overflow-hidden bg-muted media-item shrink-0", isCompact ? "aspect-square" : "aspect-[4/3]")}>
             <img
               key={`${media.id}-${thumbVersion}-grid`}
               src={thumbnailSrc}
@@ -436,8 +447,8 @@ export function MediaCard({
         </Link>
       )}
 
-      <CardContent className="flex flex-col gap-2 p-4">
-        <div className="flex items-start gap-2">
+      <CardContent className={cn("flex flex-col gap-1 px-2 py-2", isCompact && "gap-0 px-1 py-0.5")}>
+        <div className={cn("flex items-center gap-1", isCompact && "gap-0.5")}>
           <div className="min-w-0 flex-1">
             {isRenaming ? (
               <div className="flex items-center gap-2">
@@ -480,19 +491,19 @@ export function MediaCard({
                 onClick={handleSelectClick}
                 className="text-left w-full"
               >
-                <h3 className="media-card__title font-medium">{media.title}</h3>
+                <h3 ref={titleRef} className={cn("media-card__title font-medium", isCompact ? "text-xs leading-tight line-clamp-2" : "truncate", titleOverflows && "text-xs")}>{media.title}</h3>
               </button>
             ) : (
               <Link
                 href={hrefWithQuery}
                 className="font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
               >
-                <h3 className="media-card__title">{media.title}</h3>
+                <h3 ref={titleRef} className={cn("media-card__title", isCompact ? "text-xs leading-tight line-clamp-2" : "truncate", titleOverflows && "text-xs")}>{media.title}</h3>
               </Link>
             )}
           </div>
 
-          {!isRenaming && !isSelectMode && (
+          {!isRenaming && !isSelectMode && !isCompact && (
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -540,16 +551,16 @@ export function MediaCard({
           )}
         </div>
 
-        {media.tags && media.tags.length > 0 && (
+        {!isCompact && media.tags && media.tags.length > 0 && (
           <div className="flex flex-wrap gap-1">
-            {media.tags.slice(0, 3).map((tag) => (
-              <Badge key={tag} variant="outline" className="text-xs">
-                {tag}
+            {media.tags.slice(0, 1).map((tag) => (
+              <Badge key={tag} variant="outline" className="text-xs max-w-[10rem]">
+                <span className="truncate">{tag}</span>
               </Badge>
             ))}
-            {media.tags.length > 3 && (
+            {media.tags.length > 1 && (
               <Badge variant="outline" className="text-xs">
-                +{media.tags.length - 3}
+                +{media.tags.length - 1}
               </Badge>
             )}
           </div>

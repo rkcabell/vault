@@ -1,14 +1,15 @@
 //File: apps/web/components/common/Sidebar.tsx
 
-import { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronDown, ChevronRight, Tag, BookmarkCheck, Loader2, Plus, MoreVertical, Trash } from 'lucide-react';
+import { ChevronDown, ChevronRight, Tag, Folder, Loader2, Plus, MoreVertical, Trash } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ScrollArea } from '@/ui/ScrollArea';
 import { Badge } from '@/ui/Badge';
 import type { Route } from "next";
 import { emitTagsUpdated } from '@/lib/tags';
+import { ConfirmPopover } from '@/components/ui/ConfirmPopover';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,6 +78,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
   const searchParams = useSearchParams();
   const router = useRouter();
   const [deletingTag, setDeletingTag] = useState<string | null>(null);
+  const [confirmState, setConfirmState] = useState<{ x: number; y: number; tag: string } | null>(null);
 
   const activeTag = useMemo(() => {
     const tagParam = searchParams.get("tag")?.trim() || "";
@@ -102,8 +104,12 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
     router.push((qs ? `${targetPath}?${qs}` : targetPath)as Route);
   };
 
-  const handleDeleteTag = async (tag: string) => {
+  const requestDeleteTag = (tag: string, e: React.MouseEvent) => {
     if (deletingTag) return;
+    setConfirmState({ x: e.clientX, y: e.clientY, tag });
+  };
+
+  const handleDeleteTag = async (tag: string) => {
     setDeletingTag(tag);
     try {
       const res = await fetch(`/api/tags/${encodeURIComponent(tag)}`, {
@@ -119,7 +125,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
 
   if (isLoading) {
     return (
-      <aside className={cn('w-64 border-r bg-background', className)}>
+      <aside className={cn('w-64 border-r bg-background rounded-b-2xl', className)}>
         <div className="flex h-full items-center justify-center">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
@@ -128,7 +134,15 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
   }
 
   return (
-    <aside className={cn('w-64 border-r bg-background', className)}>
+    <aside className={cn('w-64 border-r bg-background rounded-b-2xl', className)}>
+      <ConfirmPopover
+        open={confirmState !== null}
+        x={confirmState?.x ?? 0}
+        y={confirmState?.y ?? 0}
+        message={`Delete tag "${confirmState?.tag}"? This will remove it from all media.`}
+        onConfirm={() => { const tag = confirmState!.tag; setConfirmState(null); void handleDeleteTag(tag); }}
+        onCancel={() => setConfirmState(null)}
+      />
       <ScrollArea className="h-full py-4">
         <nav className="px-3 space-y-1">
           <SidebarSection
@@ -172,7 +186,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                       <div
                         key={tag.id}
                         className={cn(
-                          'group flex items-center gap-2 rounded-md px-2 py-1 transition-colors',
+                          'group flex min-w-0 items-center gap-2 rounded-md px-2 py-1 transition-colors',
                           isActive
                             ? 'bg-accent text-accent-foreground'
                             : 'hover:bg-accent hover:text-accent-foreground text-muted-foreground'
@@ -181,12 +195,12 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                         <button
                           onClick={() => selectTag(tag.name)}
                           className={cn(
-                            'flex w-full items-center gap-2 rounded-md px-2 py-1 text-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                            'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
                           )}
                         >
                           <span className="truncate">{tag.name}</span>
                           {tag.count !== undefined && (
-                            <Badge variant="secondary" className="ml-auto h-5 px-1.5 text-xs">
+                            <Badge variant="secondary" className="ml-auto shrink-0 h-5 px-1.5 text-xs">
                               {tag.count}
                             </Badge>
                           )}
@@ -197,7 +211,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                             onClick={(e) => e.stopPropagation()}
                           >
                             <button
-                              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               aria-label={`Actions for ${tag.name}`}
                             >
                               <MoreVertical className="h-4 w-4" />
@@ -207,7 +221,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                             <DropdownMenuItem
                               onClick={(e) => {
                                 e.stopPropagation();
-                                void handleDeleteTag(tag.name);
+                                requestDeleteTag(tag.name, e);
                               }}
                               disabled={deletingTag === tag.name}
                               className="text-destructive focus:text-destructive"
@@ -227,7 +241,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
 
           <SidebarSection
             title="Saved Bundles"
-            icon={<BookmarkCheck className="h-4 w-4" />}
+            icon={<Folder className="h-4 w-4" />}
           >
             <div className="space-y-2">
               <Link

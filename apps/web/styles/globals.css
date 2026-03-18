@@ -32,34 +32,35 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
+    --background: 240 5% 99%;
     --foreground: 0 0% 3.9%;
 
-    --page-background: 0 0% 93.3%;
+    --page-background: 240 5% 93%;
 
-    --card: 0 0% 100%;
+    --card: 240 5% 99%;
     --card-foreground: 0 0% 3.9%;
 
-    --popover: 0 0% 100%;
+    --popover: 240 5% 99%;
     --popover-foreground: 0 0% 3.9%;
 
     --primary: 0 0% 9%;
     --primary-foreground: 0 0% 98%;
+    --color-primary-hover: hsl(0 0% 22%);
 
-    --secondary: 0 0% 96.1%;
+    --secondary: 240 4% 94%;
     --secondary-foreground: 0 0% 9%;
 
-    --muted: 0 0% 96.1%;
+    --muted: 240 4% 94%;
     --muted-foreground: 0 0% 35%;
 
-    --accent: 0 0% 96.1%;
+    --accent: 240 4% 94%;
     --accent-foreground: 0 0% 9%;
 
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
+    --border: 240 4% 88%;
+    --input: 240 4% 88%;
     --ring: 0 0% 3.9%;
 
     --radius: 0.5rem;
@@ -85,6 +86,11 @@
     --text-primary-foreground: hsl(var(--primary-foreground));
     --bg-secondary: hsl(var(--secondary));
     --text-secondary-foreground: hsl(var(--secondary-foreground));
+
+    /* Reminder status colors */
+    --reminder-today: #d97706;
+    --reminder-overdue: #dc2626;
+    --reminder-snoozed: rgba(3, 105, 161, 0.8);
   }
 
 
@@ -109,6 +115,7 @@
 
     --primary: 0 0% 98%;
     --primary-foreground: 0 0% 9%;
+    --color-primary-hover: hsl(0 0% 82%);
 
     --secondary: 0 0% 14.9%;
     --secondary-foreground: 0 0% 98%;
@@ -125,6 +132,230 @@
     --border: 0 0% 14.9%;
     --input: 0 0% 14.9%;
     --ring: 0 0% 83.1%;
+
+    /* Reminder status colors — dark */
+    --reminder-today: #fcd34d;
+    --reminder-overdue: #f87171;
+    --reminder-snoozed: rgba(125, 211, 252, 0.8);
+  }
+
+  /* ---- Light theme variants ---- */
+  html:not(.dark).theme-latte {
+    --page-background: 36 38% 86%;
+    --background: 36 60% 95%;
+    --card: 36 60% 95%;
+    --secondary: 36 28% 89%;
+    --muted: 36 28% 89%;
+    --accent: 36 28% 89%;
+    --primary: 36 68% 22%;
+    --primary-foreground: 0 0% 98%;
+    --color-primary: hsl(36 68% 22%);
+    --color-primary-foreground: hsl(0 0% 98%);
+    --color-primary-hover: hsl(36 68% 34%);
+    --border: 36 24% 80%;
+    --input: 36 24% 80%;
+  }
+
+  html:not(.dark).theme-solarize {
+    --page-background: 28 50% 76%;
+    --background: 28 55% 82%;
+    --card: 28 55% 82%;
+    --secondary: 28 42% 75%;
+    --muted: 28 42% 75%;
+    --accent: 28 42% 75%;
+    --primary: 28 72% 24%;
+    --primary-foreground: 0 0% 98%;
+    --color-primary: hsl(28 72% 24%);
+    --color-primary-foreground: hsl(0 0% 98%);
+    --color-primary-hover: hsl(28 72% 36%);
+    --border: 28 36% 67%;
+    --input: 28 36% 67%;
+  }
+
+  html:not(.dark).theme-mist {
+    --page-background: 202 22% 87%;
+    --background: 202 28% 94%;
+    --card: 202 28% 94%;
+    --secondary: 202 18% 90%;
+    --muted: 202 18% 90%;
+    --accent: 202 18% 90%;
+    --primary: 202 62% 20%;
+    --primary-foreground: 0 0% 98%;
+    --color-primary: hsl(202 62% 20%);
+    --color-primary-foreground: hsl(0 0% 98%);
+    --color-primary-hover: hsl(202 62% 32%);
+    --border: 202 16% 83%;
+    --input: 202 16% 83%;
+  }
+
+  html:not(.dark).theme-lavender {
+    --page-background: 263 22% 87%;
+    --background: 263 28% 94%;
+    --card: 263 28% 94%;
+    --secondary: 263 18% 90%;
+    --muted: 263 18% 90%;
+    --accent: 263 18% 90%;
+    --primary: 263 52% 24%;
+    --primary-foreground: 0 0% 98%;
+    --color-primary: hsl(263 52% 24%);
+    --color-primary-foreground: hsl(0 0% 98%);
+    --color-primary-hover: hsl(263 52% 36%);
+    --border: 263 16% 83%;
+    --input: 263 16% 83%;
+  }
+
+  html:not(.dark).theme-dream {
+    --page-background: 335 28% 88%;
+    --background: 335 34% 95%;
+    --card: 335 34% 95%;
+    --secondary: 335 22% 91%;
+    --muted: 335 22% 91%;
+    --accent: 335 22% 91%;
+    --primary: 335 62% 24%;
+    --primary-foreground: 0 0% 98%;
+    --color-primary: hsl(335 62% 24%);
+    --color-primary-foreground: hsl(0 0% 98%);
+    --color-primary-hover: hsl(335 62% 36%);
+    --border: 335 18% 84%;
+    --input: 335 18% 84%;
+  }
+
+  html:not(.dark).theme-cotton-candy {
+    --page-background: 335 55% 82%;
+    --background: 200 72% 88%;
+    --card: 200 72% 88%;
+    --secondary: 200 55% 84%;
+    --muted: 200 55% 84%;
+    --accent: 335 45% 85%;
+    --primary: 335 68% 26%;
+    --primary-foreground: 0 0% 98%;
+    --color-primary: hsl(335 68% 26%);
+    --color-primary-foreground: hsl(0 0% 98%);
+    --color-primary-hover: hsl(335 68% 38%);
+    --border: 330 100% 60%;
+    --input: 200 55% 84%;
+  }
+
+  html:not(.dark).theme-mint {
+    --page-background: 148 20% 83%;
+    --background: 145 26% 92%;
+    --card: 145 26% 92%;
+    --secondary: 150 14% 88%;
+    --muted: 150 14% 88%;
+    --accent: 152 36% 85%;
+    --primary: 148 52% 18%;
+    --primary-foreground: 0 0% 98%;
+    --color-primary: hsl(148 52% 18%);
+    --color-primary-foreground: hsl(0 0% 98%);
+    --color-primary-hover: hsl(148 52% 30%);
+    --border: 148 16% 77%;
+    --input: 148 16% 77%;
+  }
+
+  html:not(.dark).theme-garden {
+    /*
+     * Garden palette — user-provided swatches:
+     *   Deep forest green:   #237227  hsl(123 53% 29%)  — page background
+     *   Fern green:          #519A66  hsl(137 31% 46%)  — panel/card tonal anchor
+     *   Dandelion saturated: #FFAA00  hsl(40  100% 50%) — bold yellow accent candidate
+     *   Dandelion light:     #FFD786  hsl(40  100% 76%) — soft yellow highlight candidate
+     *   Terracotta rose:     #C44A3A  hsl(7   54%  50%) — flower accent (hover highlight)
+     *   Marigold orange:     #D97A2B  hsl(27  70%  51%) — warm flower accent candidate
+     *
+     * Panels use a lightened fern (hue 137) so dark text stays readable.
+     * Accent (hover) is a lifted terracotta rose — a flower blooming in the green.
+     */
+    --page-background: 130 26% 55%;
+    --background: 137 32% 72%;
+    --card: 137 32% 72%;
+    --secondary: 137 28% 66%;
+    --muted: 137 28% 66%;
+    --accent: 7 50% 68%;
+    --primary: 123 53% 29%;
+    --primary-foreground: 0 0% 98%;
+    --color-primary: hsl(123 53% 29%);
+    --color-primary-foreground: hsl(0 0% 98%);
+    --color-primary-hover: hsl(123 53% 42%);
+    --border: 130 26% 46%;
+    --input: 130 26% 46%;
+
+    /* Reminder status — dark enough to pass WCAG AA on the garden green background */
+    --reminder-today: #78350f;     /* amber-900  ~5.3:1 */
+    --reminder-overdue: #7f1d1d;   /* red-950    ~5.7:1 */
+    --reminder-snoozed: #1e3a5f;   /* navy       ~7.0:1 */
+  }
+
+/* ---- Dark theme variants ---- */
+  html.dark.theme-new-moon {
+    --card: 221 39% 11%;
+    --card-foreground: 0 0% 98%;
+    --popover: 221 39% 11%;
+    --popover-foreground: 0 0% 98%;
+    --secondary: 215 24% 20%;
+    --accent: 215 24% 20%;
+    --accent-foreground: 0 0% 98%;
+    --border: 215 20% 18%;
+    --input: 215 20% 18%;
+  }
+
+  html.dark.theme-charcoal {
+    --page-background: 220 5% 13%;
+    --background: 220 5% 17%;
+    --foreground: 0 0% 88%;
+
+    --card: 220 5% 20%;
+    --card-foreground: 0 0% 88%;
+
+    --popover: 220 5% 20%;
+    --popover-foreground: 0 0% 88%;
+
+    --primary: 0 0% 90%;
+    --primary-foreground: 0 0% 9%;
+
+    --secondary: 220 5% 25%;
+    --secondary-foreground: 0 0% 88%;
+
+    --muted: 220 5% 25%;
+    --muted-foreground: 0 0% 72%;
+
+    --accent: 220 5% 25%;
+    --accent-foreground: 0 0% 88%;
+
+    --border: 220 5% 28%;
+    --input: 220 5% 28%;
+    --ring: 0 0% 68%;
+  }
+
+  html.dark.theme-matrix {
+    --page-background: 0 0% 2%;
+    --background: 0 0% 4%;
+    --foreground: 120 80% 60%;
+    --card: 120 8% 7%;
+    --card-foreground: 120 80% 60%;
+    --popover: 120 8% 7%;
+    --popover-foreground: 120 80% 60%;
+    --primary: 120 90% 52%;
+    --primary-foreground: 0 0% 0%;
+    --color-primary: hsl(120 90% 52%);
+    --color-primary-hover: hsl(120 90% 52%);
+    --secondary: 120 15% 12%;
+    --secondary-foreground: 120 70% 65%;
+    --muted: 120 10% 12%;
+    --muted-foreground: 120 40% 48%;
+    --accent: 120 15% 12%;
+    --accent-foreground: 120 70% 65%;
+    --border: 120 20% 16%;
+    --input: 120 20% 16%;
+    --ring: 120 90% 52%;
+  }
+
+  html.dark.theme-matrix button:hover {
+    background-color: transparent;
+    text-decoration: underline;
+  }
+
+  html.dark.theme-matrix button.bg-primary:hover {
+    background-color: var(--color-primary);
   }
 
   html {
@@ -500,59 +731,28 @@ html.dark .text-error-panel__detail,
    ------------------------------------ */
 .overview-page {
   min-height: 100vh;
-  background-color: #eeeeee;
-}
-
-html.dark .overview-page,
-:root[data-theme="dark"] .overview-page,
-[data-theme="dark"] .overview-page {
-  background-color: #0b0f14;
+  background-color: hsl(var(--page-background));
 }
 
 .overview-card {
-  background-color: #ffffff;
-  border: 1px solid #e5e7eb;
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .overview-card:hover {
-  background-color: #e5e5e5;
-}
-
-html.dark .overview-card,
-[data-theme="dark"] .overview-card {
-  background-color: #111827;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.08);
-}
-
-html.dark .overview-card:hover,
-[data-theme="dark"] .overview-card:hover {
-  background-color: #273240;
+  background-color: hsl(var(--accent));
 }
 
 .overview-secondary-btn {
-  background-color: #ffffff;
-  border: 1px solid #e5e7eb;
+  background-color: hsl(var(--card));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .overview-secondary-btn:hover {
-  background-color: #F3F4F6;
-}
-
-
-html.dark .overview-secondary-btn,
-[data-theme="dark"] .overview-secondary-btn {
-  color: #ffffff;
-  background-color: #111827;
-  border: 1px solid #e5e7eb;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-}
-
-html.dark .overview-secondary-btn:hover,
-[data-theme="dark"] .overview-secondary-btn:hover {
-  background-color: #273240;
+  background-color: hsl(var(--accent));
 }
 
 /* --------------------------------------
@@ -623,6 +823,13 @@ html.dark .reminders-row-note,
   color: #a3a3a3;
 }
 
+html.dark.theme-charcoal .reminders-summary-text,
+html.dark.theme-charcoal .reminders-empty-text,
+html.dark.theme-charcoal .reminders-loading-text,
+html.dark.theme-charcoal .reminders-row-note {
+  color: #c4c4c4;
+}
+
 .reminders-summary-text,
 .reminders-empty-text,
 .reminders-loading-text {
@@ -682,32 +889,17 @@ html.dark .reminders-error-text,
 
 .reminders-row-due--snoozed {
   font-weight: 400 !important;
-  color: rgba(3, 105, 161, 0.8);
-}
-
-html.dark .reminders-row-due--snoozed,
-[data-theme="dark"] .reminders-row-due--snoozed {
-  color: rgba(125, 211, 252, 0.8);
+  color: var(--reminder-snoozed);
 }
 
 .reminders-row-due--overdue {
   font-weight: 600;
-  color: #dc2626;
-}
-
-html.dark .reminders-row-due--overdue,
-[data-theme="dark"] .reminders-row-due--overdue {
-  color: #f87171;
+  color: var(--reminder-overdue);
 }
 
 .reminders-row-due--today {
   font-weight: 600;
-  color: #f59e0b;
-}
-
-html.dark .reminders-row-due--today,
-[data-theme="dark"] .reminders-row-due--today {
-  color: #fcd34d;
+  color: var(--reminder-today);
 }
 
 .reminders-row-due--default {
@@ -917,39 +1109,19 @@ html.dark .reminders-page-summary,
 }
 
 .reminders-bucket-heading--overdue {
-  color: #dc2626;
-}
-
-html.dark .reminders-bucket-heading--overdue,
-[data-theme="dark"] .reminders-bucket-heading--overdue {
-  color: #f87171;
+  color: var(--reminder-overdue);
 }
 
 .reminders-bucket-heading--overdue .reminders-bucket-dot {
-  background: #dc2626;
-}
-
-html.dark .reminders-bucket-heading--overdue .reminders-bucket-dot,
-[data-theme="dark"] .reminders-bucket-heading--overdue .reminders-bucket-dot {
-  background: #f87171;
+  background: var(--reminder-overdue);
 }
 
 .reminders-bucket-heading--today {
-  color: #d97706;
-}
-
-html.dark .reminders-bucket-heading--today,
-[data-theme="dark"] .reminders-bucket-heading--today {
-  color: #fcd34d;
+  color: var(--reminder-today);
 }
 
 .reminders-bucket-heading--today .reminders-bucket-dot {
-  background: #d97706;
-}
-
-html.dark .reminders-bucket-heading--today .reminders-bucket-dot,
-[data-theme="dark"] .reminders-bucket-heading--today .reminders-bucket-dot {
-  background: #fcd34d;
+  background: var(--reminder-today);
 }
 
 .reminders-bucket-heading--soon {
@@ -1125,6 +1297,39 @@ html.dark .reminders-cancel-btn,
 html.dark .reminders-empty-subtext,
 [data-theme="dark"] .reminders-empty-subtext {
   color: #737373;
+}
+
+/* Matrix: override all hardcoded gray/white reminder text to Matrix green */
+html.dark.theme-matrix .reminders-open-link {
+  color: hsl(120 80% 60%);
+}
+
+html.dark.theme-matrix .reminders-summary-text,
+html.dark.theme-matrix .reminders-empty-text,
+html.dark.theme-matrix .reminders-loading-text,
+html.dark.theme-matrix .reminders-row-note,
+html.dark.theme-matrix .reminders-row-due--default,
+html.dark.theme-matrix .reminders-page-summary,
+html.dark.theme-matrix .reminders-bucket-heading--later,
+html.dark.theme-matrix .reminders-completed-at,
+html.dark.theme-matrix .reminders-full-row-note,
+html.dark.theme-matrix .reminders-row-media,
+html.dark.theme-matrix .reminders-empty-subtext {
+  color: hsl(120 40% 48%);
+}
+
+html.dark.theme-matrix .reminders-bucket-heading--soon {
+  color: hsl(180 70% 50%);
+}
+
+html.dark.theme-matrix .reminders-bucket-heading--soon .reminders-bucket-dot,
+html.dark.theme-matrix .reminders-bucket-heading--later .reminders-bucket-dot {
+  background: hsl(120 40% 48%);
+}
+
+/* Matrix: tint the browser-native calendar/clock icon on datetime-local inputs */
+html.dark.theme-matrix input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(70%) sepia(60%) saturate(400%) hue-rotate(80deg) brightness(90%);
 }
 
 .reminders-skeleton-list {

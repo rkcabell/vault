@@ -15,6 +15,8 @@ import { mediaRoutes } from "./routes/media.js";
 import { tagsRoutes } from "./routes/tags.js";
 import { remindersRoutes } from "./routes/reminders.js";
 import { bundlesRoutes } from "./routes/bundles.js";
+import { preferencesRoutes } from "./routes/preferences.js";
+import { initRoutes } from "./routes/init.js";
 import queueEventsPlugin from "./plugins/queueEvents.js";
 import redisPlugin from "./plugins/redis.js";
 import rateLimitPlugin from "./plugins/rateLimit.js";
@@ -45,6 +47,23 @@ async function main () {
 
   registerShutdown(app);
 
+  // Surface the real error message instead of the generic "Internal Server Error".
+  // Fastify's default handler hard-codes the message for non-HTTP errors (a security
+  // default), but this is a personal app where descriptive errors are more useful.
+  app.setErrorHandler((error, req, reply) => {
+    if (error.statusCode) {
+      // HTTP error created by @fastify/sensible — pass through with its own message.
+      void reply.status(error.statusCode).send(error);
+    } else {
+      req.log.error({ err: error }, "unhandled error");
+      void reply.status(500).send({
+        statusCode: 500,
+        error: "Internal Server Error",
+        message: error.message || "Internal Server Error",
+      });
+    }
+  });
+
   app.addHook("onResponse", (req, reply, done) => {
     if (reply.statusCode >= 500) {
       app.log.error({ method: req.method, url: req.url, status: reply.statusCode }, "server error");
@@ -71,6 +90,8 @@ async function main () {
   await app.register(tagsRoutes, { prefix: "/api/tags" });
   await app.register(remindersRoutes, { prefix: "/api/reminders" });
   await app.register(bundlesRoutes, { prefix: "/api/bundles" });
+  await app.register(preferencesRoutes, { prefix: "/api/preferences" });
+  await app.register(initRoutes, { prefix: "/api/init" });
   await app.register(redisPlugin); // Redis for queue/rate-limit groundwork
   await app.register(rateLimitPlugin); // Redis rate limit
 

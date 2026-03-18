@@ -29,6 +29,7 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 const listeners = new Map<string, Set<() => void>>();
+const inflight = new Map<string, Promise<unknown>>();
 
 function serializeKey(key: QueryKey) {
   return JSON.stringify(key);
@@ -156,7 +157,15 @@ function useCachedQuery<T>(key: QueryKey, fetcher: () => Promise<T>) {
     setLoading(true);
     setError(undefined);
 
-    fetcher()
+    // Share in-flight promise so concurrent callers don't start duplicate requests.
+    let promise = inflight.get(keyString) as Promise<T> | undefined;
+    if (!promise) {
+      promise = fetcher();
+      inflight.set(keyString, promise);
+      promise.finally(() => inflight.delete(keyString));
+    }
+
+    promise
       .then(result => {
         if (!active) return;
         setCacheData(key, result);
@@ -189,8 +198,8 @@ function getBrowserTimezone() {
 
 const REMINDERS_SUMMARY_KEY = ["reminders", "summary"] as const;
 
-function overviewKey(limit: number) {
-  return ["reminders", "overview", { limit }] as const;
+function overviewKey(limit: number, soonWindowDays: number) {
+  return ["reminders", "overview", { limit, soonWindowDays }] as const;
 }
 
 function completedKey(limit: number) {
@@ -236,6 +245,16 @@ function useReminderMutation<TArgs, TData>(
   return { isPending, error, mutateAsync };
 }
 
+/** Called by useAppInit to pre-seed the summary cache from the batched /api/init response. */
+export function seedRemindersSummary(summary: RemindersSummary) {
+  setCacheData(REMINDERS_SUMMARY_KEY, summary);
+}
+
+/** Called by useAppInit to pre-seed the overview reminders cache from the batched /api/init response. */
+export function seedOverviewReminders(items: ReminderOverviewRow[], soonWindowDays: number) {
+  setCacheData(overviewKey(5, soonWindowDays), { items });
+}
+
 export function useRemindersSummary() {
   const fetchSummary = useCallback(
     () => requestJson<RemindersSummary>("/api/reminders/summary", { method: "GET" }),
@@ -244,28 +263,28 @@ export function useRemindersSummary() {
   return useCachedQuery(REMINDERS_SUMMARY_KEY, fetchSummary);
 }
 
-export function useOverviewReminders(limit: number) {
-  const key = useMemo(() => overviewKey(limit), [limit]);
+export function useOverviewReminders(limit: number, soonWindowDays: number) {
+  const key = useMemo(() => overviewKey(limit, soonWindowDays), [limit, soonWindowDays]);
   const fetchOverview = useCallback(
     () =>
       requestJson<{ items: ReminderOverviewRow[] }>(
-        `/api/reminders?status=active&view=overview&limit=${encodeURIComponent(String(limit))}`,
+        `/api/reminders?status=active&view=overview&limit=${encodeURIComponent(String(limit))}&soonWindowDays=${encodeURIComponent(String(soonWindowDays))}`,
         { method: "GET" },
       ),
-    [limit],
+    [limit, soonWindowDays],
   );
   return useCachedQuery(key, fetchOverview);
 }
 
-export function useAllActiveReminders() {
-  const key = useMemo(() => ["reminders", "all-active"] as const, []);
+export function useAllActiveReminders(soonWindowDays: number) {
+  const key = useMemo(() => ["reminders", "all-active", { soonWindowDays }] as const, [soonWindowDays]);
   const fetchAll = useCallback(
     () =>
       requestJson<{ items: ReminderOverviewRow[] }>(
-        "/api/reminders?status=active&view=all&limit=100",
+        `/api/reminders?status=active&view=all&limit=100&soonWindowDays=${encodeURIComponent(String(soonWindowDays))}`,
         { method: "GET" },
       ),
-    [],
+    [soonWindowDays],
   );
   return useCachedQuery(key, fetchAll);
 }
@@ -335,6 +354,16 @@ export function useSnoozeReminder() {
     } finally {
       invalidateReminderQueries();
     }
+  });
+}
+
+export function useUnsnoozeReminder() {
+  return useReminderMutation(async ({ id }: { id: string }) => {
+    const response = await requestJson<{ ok: boolean }>(`/api/reminders/${id}/unsnooze`, {
+      method: "POST",
+    });
+    invalidateReminderQueries();
+    return response;
   });
 }
 

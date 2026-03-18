@@ -52,6 +52,119 @@ export function parseSearchTerms(value: string) {
   return unique;
 }
 
+const MIME_TAGS: Record<string, string> = {
+  // Images
+  "image/jpeg": "JPEG",
+  "image/jpg": "JPEG",
+  "image/png": "PNG",
+  "image/gif": "GIF",
+  "image/webp": "WebP",
+  "image/svg+xml": "SVG",
+  "image/tiff": "TIFF",
+  "image/bmp": "BMP",
+  "image/heic": "HEIC",
+  "image/heif": "HEIF",
+  "image/avif": "AVIF",
+  // Documents
+  "application/pdf": "PDF",
+  "application/msword": "DOC",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX",
+  "application/vnd.ms-excel": "XLS",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX",
+  "application/vnd.ms-powerpoint": "PPT",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX",
+  "application/rtf": "RTF",
+  // Text
+  "text/plain": "TXT",
+  "text/csv": "CSV",
+  "text/html": "HTML",
+  "text/markdown": "Markdown",
+  // Video
+  "video/mp4": "MP4",
+  "video/webm": "WebM",
+  "video/quicktime": "MOV",
+  "video/x-matroska": "MKV",
+  "video/x-msvideo": "AVI",
+  // Audio
+  "audio/mpeg": "MP3",
+  "audio/wav": "WAV",
+  "audio/ogg": "OGG",
+  "audio/flac": "FLAC",
+  "audio/aac": "AAC",
+  // Archives
+  "application/zip": "ZIP",
+  "application/x-tar": "TAR",
+  "application/gzip": "GZ",
+  "application/x-7z-compressed": "7Z",
+  "application/x-rar-compressed": "RAR",
+};
+
+const EXT_TAGS: Record<string, string> = {
+  ".heic": "HEIC",
+  ".heif": "HEIF",
+  ".avif": "AVIF",
+  ".webp": "WebP",
+  ".jpg": "JPEG",
+  ".jpeg": "JPEG",
+  ".png": "PNG",
+  ".gif": "GIF",
+  ".tiff": "TIFF",
+  ".tif": "TIFF",
+  ".bmp": "BMP",
+  ".svg": "SVG",
+  ".pdf": "PDF",
+  ".doc": "DOC",
+  ".docx": "DOCX",
+  ".xls": "XLS",
+  ".xlsx": "XLSX",
+  ".ppt": "PPT",
+  ".pptx": "PPTX",
+  ".rtf": "RTF",
+  ".txt": "TXT",
+  ".csv": "CSV",
+  ".mp4": "MP4",
+  ".mov": "MOV",
+  ".mkv": "MKV",
+  ".avi": "AVI",
+  ".webm": "WebM",
+  ".mp3": "MP3",
+  ".wav": "WAV",
+  ".flac": "FLAC",
+  ".aac": "AAC",
+  ".ogg": "OGG",
+  ".zip": "ZIP",
+  ".tar": "TAR",
+  ".gz": "GZ",
+  ".7z": "7Z",
+  ".rar": "RAR",
+};
+
+/**
+ * Returns a short human-readable label for a MIME type (e.g. "HEIC", "PDF").
+ * Accepts an optional filename to use as a fallback when the MIME type is
+ * uninformative (e.g. application/octet-stream for HEIC files from browsers).
+ */
+export function formatMimeTag(mimeType?: string | null, filename?: string | null): string {
+  const lower = mimeType?.toLowerCase().trim() ?? "";
+
+  if (lower && lower !== "application/octet-stream") {
+    if (MIME_TAGS[lower]) return MIME_TAGS[lower];
+    const subtype = lower.split("/")[1];
+    if (subtype) return subtype.replace(/^(x-|vnd\.)/, "").toUpperCase();
+  }
+
+  // Fall back to file extension when MIME is missing or generic
+  if (filename) {
+    const dot = filename.lastIndexOf(".");
+    if (dot !== -1) {
+      const ext = filename.slice(dot).toLowerCase();
+      if (EXT_TAGS[ext]) return EXT_TAGS[ext];
+    }
+  }
+
+  return "File";
+}
+
 export function containsAnyTerm(text: string, terms: string[]) {
   const lower = text.toLowerCase();
   return terms.some((term) => lower.includes(term.toLowerCase()));

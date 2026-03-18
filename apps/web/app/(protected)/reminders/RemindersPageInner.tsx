@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { usePreferences } from "@/hooks/usePreferences";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { AddReminderDialog } from "@/components/reminders/AddReminderDialog";
@@ -9,6 +10,7 @@ import {
   useAllActiveReminders,
   useCompleteReminder,
   useSnoozeReminder,
+  useUnsnoozeReminder,
   useCancelReminder,
   useRemindersSummary,
   useCompletedReminders,
@@ -48,7 +50,7 @@ function formatDueLabel(reminder: ReminderOverviewRow, nowMs: number) {
 
   if (reminder.bucket === "overdue") return `${snoozedPrefix}Overdue · ${dateLabel} ${timeLabel}`;
   if (reminder.bucket === "today") return `${snoozedPrefix}Today at ${timeLabel}`;
-  if (reminder.bucket === "soon") return `${snoozedPrefix}${dateLabel}`;
+  if (reminder.bucket === "soon") return `${snoozedPrefix}Due soon · ${dateLabel} ${timeLabel}`;
   return `${snoozedPrefix}${dateLabel}`;
 }
 
@@ -100,8 +102,10 @@ type ReminderRowProps = {
   actionsDisabled: boolean;
   completeIsPending: boolean;
   snoozeIsPending: boolean;
+  unsnoozeIsPending: boolean;
   onEdit: (row: ReminderOverviewRow) => void;
   onSnooze: (id: string) => void;
+  onUnsnooze: (id: string) => void;
   onComplete: (id: string) => void;
   onCancel: (id: string) => void;
 };
@@ -113,8 +117,10 @@ function ReminderRow({
   actionsDisabled,
   completeIsPending,
   snoozeIsPending,
+  unsnoozeIsPending,
   onEdit,
   onSnooze,
+  onUnsnooze,
   onComplete,
   onCancel,
 }: ReminderRowProps) {
@@ -143,7 +149,16 @@ function ReminderRow({
           >
             Edit
           </Button>
-          {(row.bucket === "overdue" || row.bucket === "today" || row.bucket === "soon") && (
+          {isSnoozed ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onUnsnooze(row.id)}
+              disabled={actionsDisabled}
+            >
+              {isBusy && unsnoozeIsPending ? "Unsnoozed..." : "Unsnooze"}
+            </Button>
+          ) : (row.bucket === "overdue" || row.bucket === "today" || row.bucket === "soon") ? (
             <Button
               size="sm"
               variant="outline"
@@ -152,7 +167,7 @@ function ReminderRow({
             >
               {isBusy && snoozeIsPending ? "Snoozing..." : "Snooze 1d"}
             </Button>
-          )}
+          ) : null}
           <Button
             size="sm"
             onClick={() => onComplete(row.id)}
@@ -222,10 +237,12 @@ function CompletedRemindersList() {
 }
 
 export function RemindersPageInner() {
-  const reminders = useAllActiveReminders();
+  const { prefs } = usePreferences();
+  const reminders = useAllActiveReminders(prefs.soonWindowDays);
   const summary = useRemindersSummary();
   const completeReminder = useCompleteReminder();
   const snoozeReminder = useSnoozeReminder();
+  const unsnoozeReminder = useUnsnoozeReminder();
   const cancelReminder = useCancelReminder();
 
   const [addOpen, setAddOpen] = useState(false);
@@ -257,7 +274,7 @@ export function RemindersPageInner() {
   }, [completedPreferenceReady, showCompleted]);
 
   const actionsDisabled =
-    completeReminder.isPending || snoozeReminder.isPending || cancelReminder.isPending;
+    completeReminder.isPending || snoozeReminder.isPending || unsnoozeReminder.isPending || cancelReminder.isPending;
 
   const nowMs = Date.now();
 
@@ -293,6 +310,15 @@ export function RemindersPageInner() {
     setBusyId(id);
     try {
       await completeReminder.mutateAsync({ id });
+    } finally {
+      setBusyId(current => (current === id ? null : current));
+    }
+  };
+
+  const handleUnsnooze = async (id: string) => {
+    setBusyId(id);
+    try {
+      await unsnoozeReminder.mutateAsync({ id });
     } finally {
       setBusyId(current => (current === id ? null : current));
     }
@@ -351,8 +377,10 @@ export function RemindersPageInner() {
                     actionsDisabled={actionsDisabled}
                     completeIsPending={completeReminder.isPending}
                     snoozeIsPending={snoozeReminder.isPending}
+                    unsnoozeIsPending={unsnoozeReminder.isPending}
                     onEdit={setEditTarget}
                     onSnooze={id => void handleSnooze(id)}
+                    onUnsnooze={id => void handleUnsnooze(id)}
                     onComplete={id => void handleComplete(id)}
                     onCancel={id => void handleCancel(id)}
                   />
@@ -378,9 +406,9 @@ export function RemindersPageInner() {
         {showCompleted ? <CompletedRemindersList /> : null}
       </section>
 
-      {completeReminder.error || snoozeReminder.error || cancelReminder.error ? (
+      {completeReminder.error || snoozeReminder.error || unsnoozeReminder.error || cancelReminder.error ? (
         <p className="reminders-error-text">
-          {completeReminder.error ?? snoozeReminder.error ?? cancelReminder.error}
+          {completeReminder.error ?? snoozeReminder.error ?? unsnoozeReminder.error ?? cancelReminder.error}
         </p>
       ) : null}
 

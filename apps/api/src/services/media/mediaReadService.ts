@@ -11,6 +11,12 @@ import type { PdfTextPage } from "../pdf/extractPdfText.js";
 import { buildTextStats } from "./metadata/textStats.js";
 import type { MediaMetadata } from "./metadata/types.js";
 
+/**
+ * Validate and coerce a Prisma JsonValue (stored in Media.document.pages) into
+ * a typed PdfTextPage array. Returns null if any item is missing required fields
+ * so callers can treat the stored value as absent rather than partially valid.
+ * `numChars` is back-filled from text.length when absent (legacy rows).
+ */
 function normalizePdfTextPages (value: unknown): PdfTextPage[] | null {
   if (!Array.isArray(value)) return null;
 
@@ -69,7 +75,18 @@ type MediaReadDeps = {
   ocrQueue?: Queue<OcrJobData>;
 };
 
+/**
+ * Factory for the media read service. All returned functions close over `deps`
+ * so the service can be constructed once per request scope or application lifetime.
+ */
 export function createMediaReadService (deps: MediaReadDeps) {
+  /**
+   * Fetch BullMQ job metadata for display in the UI.
+   * Only queries the queue when `textState` is PENDING (show attempt progress)
+   * or ERROR/FAILED (surface the failure reason). Returns null in all other
+   * states to avoid unnecessary Redis round-trips on the read path.
+   * On lookup failure, logs a warning and returns null rather than throwing.
+   */
   const getOcrJobMeta = async (
     mediaId: string,
     textState?: string | null,
@@ -115,6 +132,11 @@ export function createMediaReadService (deps: MediaReadDeps) {
     }
   };
 
+  /**
+   * Return a paginated slice of the raw extracted text for a document.
+   * Ownership is enforced by scoping the DB lookup to `userId`.
+   * `hasMore` indicates whether additional content exists beyond this chunk.
+   */
   const getTextChunk = async (userId: string, id: string, offset: number, limit: number) => {
     const media = await deps.repository.findDocumentForUser(userId, id);
     if (!media) return null;
@@ -138,6 +160,18 @@ export function createMediaReadService (deps: MediaReadDeps) {
     };
   };
 
+  /**
+   * Assemble the full detail payload for a single media item.
+   *
+   * Combines:
+   * - Core media fields from the DB (state, keys, timestamps, tags)
+   * - Segmented text (split into logical sections for the reader UI)
+   * - Language detection on the raw text
+   * - Stored extraction metadata (EXIF, PDF info, etc.) merged with live text stats
+   * - OCR job progress / error details from BullMQ (only when relevant to textState)
+   *
+   * No S3 downloads occur on this path; all data comes from the DB join.
+   */
   const getMediaDetail = async (userId: string, id: string) => {
     const media = await deps.repository.findDetail(userId, id);
     if (!media) return null;
@@ -193,6 +227,11 @@ export function createMediaReadService (deps: MediaReadDeps) {
     };
   };
 
+  /**
+   * Stream the WebP thumbnail for a media item directly from S3.
+   * Returns null (with a warning log) if the object is missing or the request
+   * fails, so the caller can return a 404 without crashing the request.
+   */
   const getThumbnail = async (id: string) => {
     const thumbKey = computeThumbKey(id);
     try {

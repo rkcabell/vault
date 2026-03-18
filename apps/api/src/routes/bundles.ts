@@ -33,12 +33,14 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     return { bundle };
   });
 
-  // PATCH /:id — update name/description
+  // PATCH /:id — update name/description/starred/coverMediaId
   app.patch("/:id", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const Body = z.object({
       name: z.string().min(1).max(200).optional(),
       description: z.string().max(1000).nullable().optional(),
+      starred: z.boolean().optional(),
+      coverMediaId: z.string().nullable().optional(),
     });
     const data = Body.parse(req.body);
     const updated = await repo.updateBundle(id, req.userId!, data);

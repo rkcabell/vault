@@ -17,6 +17,7 @@ type ListMediaInput = {
   tags?: string[];
   thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED";
   textState?: "PENDING" | "READY" | "ERROR" | "FAILED";
+  mimeTypePrefix?: string;
   sort?: typeof SORT_OPTIONS[number];
   limit?: number;
   cursor?: string | null;
@@ -57,6 +58,7 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
       tags: query.tags,
       thumbState: query.thumbState,
       textState: query.textState,
+      mimeTypePrefix: query.mimeTypePrefix,
       orderBy,
       take: take + 1,
       cursor: query.cursor ?? null,

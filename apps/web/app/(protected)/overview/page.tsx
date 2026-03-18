@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listMedia } from "@/lib/api.server";
 import { deriveOverallState } from "@/lib/media/status";
+import { formatMimeTag } from "@/lib/media/utils";
 import { OverviewRemindersCard } from "@/components/reminders/OverviewRemindersCard";
 
 export default async function OverviewPage() {
@@ -16,7 +17,7 @@ export default async function OverviewPage() {
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Home</h1>
-          <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          <p className="text-sm text-muted-foreground">
             {inbox.length
               ? `${inbox.length} item(s) still processing or awaiting review`
               : "Nothing pending. You're caught up."}
@@ -25,7 +26,7 @@ export default async function OverviewPage() {
 
         <div className="flex gap-2">
           <Link
-            className="overview-secondary-btn rounded-md border px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
+            className="overview-secondary-btn rounded-md border px-3 py-2 text-sm"
             href="/library"
           >
             Open Library
@@ -42,7 +43,7 @@ export default async function OverviewPage() {
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Inbox</h2>
         {inbox.length === 0 ? (
-          <div className="rounded-2xl border p-6 text-sm text-neutral-600 dark:text-neutral-400">
+          <div className="rounded-2xl border p-6 text-sm text-muted-foreground">
             No items in the inbox.
           </div>
         ) : (
@@ -51,12 +52,12 @@ export default async function OverviewPage() {
               <Link
                 key={m.id}
                 href={`/media/${m.id}`}
-                className="overview-card rounded-2xl border p-4 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                className="overview-card rounded-2xl border p-4"
               >
                 <div className="truncate text-sm font-medium">
                   {m.title || m.id}
                 </div>
-                <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+                <div className="mt-1 text-xs text-muted-foreground">
                   {deriveOverallState(m.thumbState, m.textState)}
                 </div>
               </Link>
@@ -74,13 +75,13 @@ export default async function OverviewPage() {
             <Link
               key={m.id}
               href={`/media/${m.id}`}
-              className="overview-card rounded-2xl border p-4 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+              className="overview-card rounded-2xl border p-4"
             >
               <div className="truncate text-sm font-medium">
                 {m.title || m.id}
               </div>
-              <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
-                {m.mimeType ?? "file"}
+              <div className="mt-1 text-xs text-muted-foreground">
+                {formatMimeTag(m.mimeType, m.title)}
               </div>
             </Link>
           ))}

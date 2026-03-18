@@ -1,12 +1,13 @@
 // File: apps/web/components/media/BulkActionBar.tsx
 "use client";
 
+import React from 'react';
 import { Button } from '@/components/ui/Button';
 import { Trash2, Tag, FolderPlus } from 'lucide-react';
 
 interface BulkActionBarProps {
   count: number;
-  onDelete: () => void;
+  onDelete: (e: React.MouseEvent) => void;
   onTag: () => void;
   onAddToBundle: () => void;
   onClear: () => void;
@@ -26,7 +27,7 @@ export function BulkActionBar({ count, onDelete, onTag, onAddToBundle, onClear }
             <FolderPlus className="mr-2 h-4 w-4" />
             Add to Bundle
           </Button>
-          <Button size="sm" variant="destructive" onClick={onDelete}>
+          <Button size="sm" variant="destructive" onClick={(e) => onDelete(e)}>
             <Trash2 className="mr-2 h-4 w-4" />
             Delete
           </Button>

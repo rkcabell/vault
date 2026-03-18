@@ -187,25 +187,6 @@ export function MediaTextContent(props: {
     }
   }
 
-  const handleNextMatch = () => {
-    if (matches.length === 0) return
-    const next = activeMatchIndex < 0 ? 0 : (activeMatchIndex + 1) % matches.length
-    setActiveMatchIndex(next)
-    const match = matches[next]
-    if (match) jumpToMatch(match)
-  }
-
-  const handlePrevMatch = () => {
-    if (matches.length === 0) return
-    const prev =
-      activeMatchIndex < 0
-        ? matches.length - 1
-        : (activeMatchIndex - 1 + matches.length) % matches.length
-    setActiveMatchIndex(prev)
-    const match = matches[prev]
-    if (match) jumpToMatch(match)
-  }
-
   const handleSelectMatch = (index: number) => {
     const match = matches[index]
     if (!match) return

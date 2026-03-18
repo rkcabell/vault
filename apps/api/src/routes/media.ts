@@ -115,12 +115,13 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       tags: z.unknown().optional(),
       thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
       textState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
+      mimeType: z.string().trim().optional(),
       sort: z.enum(SORT_OPTIONS).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
       cursor: z.string().optional(),
       page: z.coerce.number().int().min(1).optional(),
     });
-    const { q, search, tag, tags, thumbState, textState, sort, limit, cursor, page } = Query.parse(
+    const { q, search, tag, tags, thumbState, textState, mimeType, sort, limit, cursor, page } = Query.parse(
       rawQuery,
     );
     const hasTagsParam = Object.prototype.hasOwnProperty.call(rawQuery, "tags");
@@ -149,6 +150,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       tags: tagFilters,
       thumbState,
       textState,
+      mimeTypePrefix: mimeType,
       sort,
       limit,
       cursor,
@@ -166,7 +168,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     const tags = await queryService.listTopTags(userId, limit);
 
-    return { tags };
+    return { tags: tags.map(t => t.tag) };
   });
 
   // GET /media/events - Server-Sent Events stream for job state updates (thumb + text)

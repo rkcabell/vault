@@ -2,11 +2,15 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { ChevronLeft } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { Sidebar, type TagItem, type SavedView } from "./Sidebar";
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { TAGS_UPDATED_EVENT } from "@/lib/tags";
 import { BUNDLES_UPDATED_EVENT } from "@/lib/bundles";
+import { ThemeApplier } from "./ThemeApplier";
+import { useAppInit } from "@/hooks/useAppInit";
+import { cn } from "@/lib/utils";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -24,6 +28,8 @@ export function AppShell({
   showSidebar = true,
 }: AppShellProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [tabPulsing, setTabPulsing] = useState(false);
   const [sidebarTags, setSidebarTags] = useState<TagItem[] | null>(tags);
   const [isFetchingTags, setIsFetchingTags] = useState(false);
   const [tagsError, setTagsError] = useState<string | null>(null);
@@ -31,9 +37,20 @@ export function AppShell({
   const [sidebarBundles, setSidebarBundles] = useState<SavedView[] | null>(savedViews);
   const bundlesAbortRef = useRef<AbortController | null>(null);
 
+  const { data: initData, isLoaded: initLoaded } = useAppInit();
+
+  // Seed sidebar from the batched init response.
   useEffect(() => {
-    setSidebarTags(tags);
-  }, [tags]);
+    if (!initLoaded) return;
+    if (initData) {
+      setSidebarTags(initData.tags.map(t => ({ id: t.name, name: t.name, count: t.count })));
+      setSidebarBundles(initData.bundles.map(b => ({ id: b.id, name: b.name, count: b.itemCount })));
+    } else {
+      // Init failed — fall back to individual fetches.
+      void fetchSidebarTags().catch(() => {});
+      void fetchSidebarBundles().catch(() => {});
+    }
+  }, [initLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchSidebarTags = useCallback(async () => {
     tagsAbortRef.current?.abort();
@@ -73,11 +90,9 @@ export function AppShell({
     }
   }, []);
 
+  // Refresh tags when a mutation signals an update.
   useEffect(() => {
-    void fetchSidebarTags().catch(() => {});
-    const handler = () => {
-      void fetchSidebarTags().catch(() => {});
-    };
+    const handler = () => { void fetchSidebarTags().catch(() => {}); };
     window.addEventListener(TAGS_UPDATED_EVENT, handler);
     return () => {
       window.removeEventListener(TAGS_UPDATED_EVENT, handler);
@@ -103,12 +118,12 @@ export function AppShell({
         data.bundles.map(b => ({ id: b.id, name: b.name, count: b.itemCount })),
       );
     } catch {
-      // aborted or error — sidebar just stays empty
+      // aborted or error — sidebar just stays with last known data
     }
   }, []);
 
+  // Refresh bundles when a mutation signals an update.
   useEffect(() => {
-    void fetchSidebarBundles().catch(() => {});
     const handler = () => { void fetchSidebarBundles().catch(() => {}); };
     window.addEventListener(BUNDLES_UPDATED_EVENT, handler);
     return () => {
@@ -119,12 +134,20 @@ export function AppShell({
 
   return (
     <div className="flex h-screen flex-col">
+      <ThemeApplier />
       <TopNav onMenuClick={() => setMobileMenuOpen(true)} />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {showSidebar && (
           <>
-            <div className="hidden lg:block">
+            {/* Desktop sidebar — absolute overlay, floats above page content */}
+            <div
+              className="hidden lg:block absolute left-0 top-0 bottom-0 z-20"
+              style={{
+                transform: sidebarCollapsed ? "translateX(-256px)" : "translateX(0)",
+                transition: "transform 300ms ease-in-out",
+              }}
+            >
               <Suspense fallback={null}>
                 <Sidebar
                   tags={sidebarTags}
@@ -135,6 +158,36 @@ export function AppShell({
               </Suspense>
             </div>
 
+            {/* Collapse tab — tracks sidebar's right edge */}
+            <button
+              onClick={() => {
+                setSidebarCollapsed(c => !c);
+                setTabPulsing(true);
+                setTimeout(() => setTabPulsing(false), 250);
+              }}
+              className={cn(
+                "hidden lg:flex absolute top-6 z-20 h-[42px] w-[30px] items-center justify-center border border-l-0 border-border shadow-sm transition-colors duration-150",
+                tabPulsing
+                  ? "bg-foreground text-background"
+                  : "bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              )}
+              style={{
+                left: sidebarCollapsed ? 0 : 256,
+                transition: "left 300ms ease-in-out",
+                borderRadius: "0 10px 10px 0",
+              }}
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              <ChevronLeft
+                className="h-3.5 w-3.5"
+                style={{
+                  transform: sidebarCollapsed ? "rotate(180deg)" : "rotate(0deg)",
+                  transition: "transform 300ms ease-in-out",
+                }}
+              />
+            </button>
+
+            {/* Mobile sidebar */}
             <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
               <SheetContent side="left" className="p-0 w-64">
                 <Suspense fallback={null}>
