@@ -1,11 +1,12 @@
 'use client'
 
+import React from 'react'
 import { Button } from '@/components/ui/Button'
 
 export function MediaInfoCard (props: {
   onDownload: () => Promise<void>
   onEmail: () => void
-  onDelete: () => Promise<void>
+  onDelete: (e: React.MouseEvent) => void
   onRegenerateThumbnail: () => Promise<void>
   busy: boolean
 }) {
@@ -22,7 +23,7 @@ export function MediaInfoCard (props: {
       <Button variant='outline' onClick={onRegenerateThumbnail} disabled={busy}>
         Regenerate thumbnail
       </Button>
-      <Button variant='destructive' onClick={onDelete} disabled={busy}>
+      <Button variant='destructive' onClick={(e) => onDelete(e)} disabled={busy}>
         Delete
       </Button>
     </div>

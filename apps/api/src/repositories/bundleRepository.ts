@@ -12,6 +12,7 @@ export class BundleRepository {
         name: true,
         description: true,
         starred: true,
+        coverMediaId: true,
         createdAt: true,
         updatedAt: true,
         _count: { select: { items: true } },
@@ -29,7 +30,7 @@ export class BundleRepository {
       description: b.description,
       starred: b.starred,
       itemCount: b._count.items,
-      coverMediaId: b.items[0]?.mediaId ?? null,
+      coverMediaId: b.coverMediaId ?? b.items[0]?.mediaId ?? null,
       createdAt: b.createdAt.toISOString(),
       updatedAt: b.updatedAt.toISOString(),
     }));
@@ -43,6 +44,7 @@ export class BundleRepository {
         name: true,
         description: true,
         starred: true,
+        coverMediaId: true,
         createdAt: true,
         updatedAt: true,
         _count: { select: { items: true } },
@@ -73,7 +75,7 @@ export class BundleRepository {
       description: bundle.description,
       starred: bundle.starred,
       itemCount: bundle._count.items,
-      coverMediaId: bundle.items[0]?.mediaId ?? null,
+      coverMediaId: bundle.coverMediaId ?? bundle.items[0]?.mediaId ?? null,
       createdAt: bundle.createdAt.toISOString(),
       updatedAt: bundle.updatedAt.toISOString(),
       items: bundle.items.map(item => ({
@@ -95,7 +97,7 @@ export class BundleRepository {
     });
   }
 
-  async updateBundle (id: string, userId: string, data: { name?: string; description?: string | null }) {
+  async updateBundle (id: string, userId: string, data: { name?: string; description?: string | null; starred?: boolean; coverMediaId?: string | null }) {
     const result = await this.prisma.bundle.updateMany({
       where: { id, userId },
       data,

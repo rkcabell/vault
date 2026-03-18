@@ -119,6 +119,7 @@ function looksLikePdf (buf: Buffer): boolean {
   );
 }
 
+/** Return the page count of a PDF buffer, or null if pdf-lib fails to parse it. */
 async function getPdfPageCount (buffer: Buffer): Promise<number | null> {
   try {
     const doc = await PDFDocument.load(buffer);
@@ -134,6 +135,12 @@ type OcrmypdfRunResult = {
   stderr: string;
 };
 
+/**
+ * Spawn the `ocrmypdf` process with the given arguments and collect stdout/stderr.
+ * Both streams are fed to `onProgress` (if provided) for live page-count updates.
+ * Output is ring-buffered to MAX_CAPTURE_BYTES so large files don't bloat memory.
+ * Resolves with the exit code and captured output; never rejects on non-zero exit.
+ */
 async function runOcrmypdf (
   cmdArgs: string[],
   onProgress?: (progress: { current: number; total?: number | null }) => void,
@@ -165,6 +172,15 @@ async function runOcrmypdf (
   });
 }
 
+/**
+ * Returns a stateful chunk parser that scans ocrmypdf's output for progress lines.
+ *
+ * ocrmypdf emits lines like "Page 3/12" or "3/12" when --progress-bar is set.
+ * The parser buffers incomplete lines across chunks, deduplicates repeated
+ * progress values, and fires `onProgress` only when current or total changes.
+ * An initial `{ current: 0, total }` event is emitted immediately if totalPages
+ * is known, so callers can show a 0 % state before any output arrives.
+ */
 function createProgressParser (
   onProgress?: (progress: { current: number; total?: number | null }) => void,
   totalPages?: number | null,
@@ -201,6 +217,7 @@ function createProgressParser (
   };
 }
 
+/** Build a descriptive Error from a non-zero ocrmypdf exit, including captured stderr/stdout. */
 function buildOcrmypdfError (result: OcrmypdfRunResult): Error {
   const baseMsg = `ocrmypdf failed (exit ${result.code})`;
   const stderr = result.stderr.trim() ? `stderr: ${result.stderr.trim()}` : null;
@@ -209,6 +226,14 @@ function buildOcrmypdfError (result: OcrmypdfRunResult): Error {
   return new Error(extra ? `${baseMsg}\n${extra}` : baseMsg);
 }
 
+/**
+ * Wrap a single image buffer in a one-page PDF suitable for ocrmypdf.
+ *
+ * Sharp normalises the image to PNG with a white background (handles alpha
+ * channels and colour-space conversions) and applies any EXIF rotation before
+ * embedding. The PDF page dimensions match the image pixel dimensions; DPI is
+ * not set because ocrmypdf only needs the image pixels, not physical size.
+ */
 async function imageToPdf (buffer: Buffer, rotation?: string | number | null): Promise<Buffer> {
   const angle = normalizeRotation(rotation);
 
@@ -232,6 +257,11 @@ async function imageToPdf (buffer: Buffer, rotation?: string | number | null): P
   return Buffer.from(pdfBytes);
 }
 
+/**
+ * Parse and normalise a rotation value to a non-negative angle in [0, 360).
+ * Accepts numeric degrees or their string representation. Returns 0 for null,
+ * undefined, or any value that doesn't parse to a finite number.
+ */
 function normalizeRotation (value?: string | number | null): number {
   if (value === undefined || value === null) return 0;
   const parsed = typeof value === "string" ? Number.parseInt(value, 10) : value;

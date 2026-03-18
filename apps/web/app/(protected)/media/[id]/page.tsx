@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useMemo, useState } from "react";
+import React, { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronRight } from "lucide-react";
@@ -18,6 +18,7 @@ import { MediaTextPanel } from "@/components/media/MediaTextPanel";
 import { TagEditor } from "@/components/media/TagEditor";
 import { MediaMetadataCard } from "@/components/media/MediaMetadataCard";
 import MediaDetailSplit from "@/components/media/MediaDetailSplit";
+import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 
 function MessageCard(props: {
   heading: string;
@@ -69,6 +70,7 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isEmailing, setIsEmailing] = useState(false);
+  const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);
 
   const title = media?.title || media?.filename || "Media details";
   const busy = isDeleting || isDownloading || isEmailing;
@@ -147,11 +149,12 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = (e: React.MouseEvent) => {
     if (isDeleting) return;
-    const confirmed = window.confirm("Delete this media item? This cannot be undone.");
-    if (!confirmed) return;
+    setConfirmState({ x: e.clientX, y: e.clientY });
+  };
 
+  const doDelete = async () => {
     setIsDeleting(true);
     setErrorMessage(null);
 
@@ -321,6 +324,14 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
           }
         />
       )}
+      <ConfirmPopover
+        open={confirmState !== null}
+        x={confirmState?.x ?? 0}
+        y={confirmState?.y ?? 0}
+        message="Delete this media item? This cannot be undone."
+        onConfirm={() => { setConfirmState(null); void doDelete(); }}
+        onCancel={() => setConfirmState(null)}
+      />
     </Container>
   );
 }

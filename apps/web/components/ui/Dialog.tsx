@@ -1,5 +1,6 @@
 // File: apps/web/components/ui/Dialog.tsx
 import * as React from 'react';
+import * as ReactDOM from 'react-dom';
 import { cn } from '@/lib/utils';
 
 interface DialogProps {
@@ -32,14 +33,14 @@ function Dialog({ open, onOpenChange, children }: DialogProps) {
 
   if (!open) return null;
 
-  return (
-    <>
-      <div
-        className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm"
-        onClick={() => onOpenChange(false)}
-      />
+  return ReactDOM.createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4 bg-background/80 backdrop-blur-sm"
+      onClick={() => onOpenChange(false)}
+    >
       {children}
-    </>
+    </div>,
+    document.body
   );
 }
 
@@ -51,7 +52,7 @@ function DialogContent({ className, children, ...props }: DialogContentProps) {
   return (
     <div
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2',
+        'relative z-50 w-full max-w-md my-auto',
         'rounded-lg border bg-background p-6 shadow-lg',
         className
       )}

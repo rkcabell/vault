@@ -10,11 +10,13 @@ import {
   ReactNode,
 } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAppInit } from '@/hooks/useAppInit';
 
 interface User {
   id: string;
   email: string;
-  name?: string;
+  name?: string | null;
+  username?: string | null;
   avatarUrl?: string | null;
 }
 
@@ -34,6 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
   const router = useRouter();
+  const { data: initData, isLoaded: initLoaded } = useAppInit();
 
   const logout = useCallback(async () => {
     try {
@@ -47,6 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [router]);
 
+  // Fallback: hit /api/auth/me directly (used for focus re-auth and init failures).
   const refresh = useCallback(async () => {
     setStatus('loading');
     try {
@@ -80,10 +84,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [logout]);
 
+  // Hydrate user from the batched init response — no separate /api/auth/me on mount.
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!initLoaded) return;
+    if (initData?.user) {
+      setUserState(initData.user as User);
+      setStatus('authenticated');
+    } else if (initData !== null) {
+      // Init succeeded but returned no user → unauthenticated.
+      setUserState(null);
+      setStatus('unauthenticated');
+    } else {
+      // Init fetch failed entirely → fall back to direct auth check.
+      void refresh();
+    }
+  }, [initLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Re-validate session on window focus (only when already authenticated).
   useEffect(() => {
     const handleFocus = () => {
       if (status !== 'authenticated') void refresh();

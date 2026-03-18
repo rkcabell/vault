@@ -110,10 +110,10 @@ export function MediaMetadataCard (props: {
         </span>
         <Button
           size='sm'
-          variant='ghost'
+          variant='outline'
           onClick={startEdit}
           disabled={busy}
-          className='shrink-0'
+          className='shrink-0 h-auto py-0.5 px-2 text-xs'
         >
           Edit
         </Button>

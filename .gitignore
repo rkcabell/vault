@@ -136,3 +136,6 @@ screenshots/
 # Local dev docs
 ################################################################################
 docs/test-coverage-plan.md
+
+# Ignore local Claude workspace
+.claude/

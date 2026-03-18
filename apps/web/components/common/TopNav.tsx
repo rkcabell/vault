@@ -1,10 +1,10 @@
 //File: apps/web/components/common/TopNav.tsx
 
-import { useState } from 'react';
+import * as React from 'react';
 import type { Route } from "next";
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Search, Menu, User, LogOut, ChevronDown, Settings } from 'lucide-react';
+import { Menu, User, LogOut, ChevronDown, Settings, HelpCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/ui/Button';
 import {
@@ -14,10 +14,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/ui/DropdownMenu';
-import { Input } from '@/ui/Input';
 import { useAuth } from '@/components/contexts/AuthContext';
 import { useRemindersSummary } from '@/lib/reminders';
 import { ThemeToggle } from './ThemeToggle';
+import { HelpDialog } from './HelpDialog';
 
 interface TopNavProps {
   onMenuClick?: () => void;
@@ -35,18 +35,20 @@ export function TopNav({ onMenuClick }: TopNavProps) {
   const { user, logout, status } = useAuth();
   const remindersSummary = useRemindersSummary();
   const overdueCount = remindersSummary.data?.overdue ?? 0;
-  const [searchExpanded, setSearchExpanded] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [helpOpen, setHelpOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return;
+      if (e.key === '?') setHelpOpen((prev) => !prev);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
 
   const handleLogout = async () => {
     await logout();
-  };
-
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      window.location.href = `/search?q=${encodeURIComponent(searchQuery)}`;
-    }
   };
 
   const renderAuthControls = () => {
@@ -181,47 +183,21 @@ export function TopNav({ onMenuClick }: TopNavProps) {
 
         <div className="flex-1" />
 
-        {searchExpanded ? (
-          <form onSubmit={handleSearch} className="flex items-center gap-2 flex-1 max-w-md">
-            <Input
-              type="search"
-              placeholder="Search media..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onBlur={() => {
-                if (!searchQuery) setSearchExpanded(false);
-              }}
-              autoFocus
-              className="h-9"
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setSearchQuery('');
-                setSearchExpanded(false);
-              }}
-            >
-              Cancel
-            </Button>
-          </form>
-        ) : (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setSearchExpanded(true)}
-            aria-label="Search"
-            className="hidden sm:flex"
-          >
-            <Search className="h-5 w-5" />
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setHelpOpen(true)}
+          aria-label="Help"
+        >
+          <HelpCircle className="h-5 w-5" />
+        </Button>
 
         <ThemeToggle />
 
         {renderAuthControls()}
       </div>
+
+      <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </nav>
   );
 }

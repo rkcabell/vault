@@ -7,6 +7,7 @@ export type MediaListFilters = {
   tags?: string[];
   thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED";
   textState?: "PENDING" | "READY" | "ERROR" | "FAILED";
+  mimeTypePrefix?: string;
   orderBy: Prisma.MediaOrderByWithRelationInput[];
   take: number;
   cursor?: string | null;
@@ -16,6 +17,7 @@ export type MediaListFilters = {
 export class MediaRepository {
   constructor (private readonly prisma: PrismaClient) {}
 
+  /** Insert a new Media row and return its id, storageKey, and title. */
   async createMedia (data: Prisma.MediaUncheckedCreateInput) {
     return this.prisma.media.create({
       data,
@@ -23,6 +25,7 @@ export class MediaRepository {
     });
   }
 
+  /** Bulk-insert Media rows without returning individual ids (used in batch upload init). */
   async createBatch (items: Prisma.MediaCreateManyInput[]) {
     await this.prisma.media.createMany({ data: items });
   }
@@ -40,8 +43,13 @@ export class MediaRepository {
     `;
   }
 
+  /**
+   * Paginated media listing with optional full-text search, tag filtering, and
+   * state filtering. Cursor-based pagination: pass `cursor` (last seen id) to
+   * fetch the next page; `skip: 1` drops the cursor row itself.
+   */
   async listMedia (filters: MediaListFilters) {
-    const { userId, queryText, tags, thumbState, textState, orderBy, take, cursor } = filters;
+    const { userId, queryText, tags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor } = filters;
 
     return this.prisma.media.findMany({
       where: {
@@ -57,6 +65,7 @@ export class MediaRepository {
         ...(tags?.length ? { tags: { hasEvery: tags } } : {}),
         ...(thumbState ? { thumbState } : {}),
         ...(textState ? { textState } : {}),
+        ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
       },
       orderBy,
       take,
@@ -73,6 +82,7 @@ export class MediaRepository {
     });
   }
 
+  /** Return storageKey and thumbnailKey for a media item (used to delete S3 objects). */
   async findMediaKeys (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
@@ -138,6 +148,11 @@ export class MediaRepository {
     });
   }
 
+  /**
+   * Transition textState to PENDING for a user-triggered re-run.
+   * Allowed from PENDING, READY, or ERROR. Returns false only if the row
+   * doesn't exist or is in an unexpected state (shouldn't happen in practice).
+   */
   async setTextStatePending (id: string): Promise<boolean> {
     // Re-run trigger: allowed from READY or ERROR (and idempotently from PENDING).
     // NOT allowed if somehow the record ends up in an unknown state — but all three
@@ -188,6 +203,12 @@ export class MediaRepository {
     });
   }
 
+  /**
+   * Atomically mark the thumbnail as ready and store its key.
+   * Guards on thumbState = PENDING so a late-arriving worker can't overwrite
+   * a FAILED state (e.g. after retry exhaustion) with READY.
+   * Returns false if the guard prevented the update.
+   */
   async setThumbReady (mediaId: string, thumbnailKey: string): Promise<boolean> {
     // Guard: only transition from PENDING. Prevents a late-arriving worker from
     // overwriting a FAILED state with READY (e.g., retry completing after exhaustion).
@@ -198,6 +219,7 @@ export class MediaRepository {
     return result.count > 0;
   }
 
+  /** Clear thumbnailKey and reset thumbState to PENDING (used to re-trigger thumbnail generation). */
   async resetThumbState (mediaId: string): Promise<boolean> {
     const result = await this.prisma.media.updateMany({
       where: { id: mediaId },
@@ -206,6 +228,10 @@ export class MediaRepository {
     return result.count > 0;
   }
 
+  /**
+   * Mark thumbnail generation as permanently failed and store the sanitized error message.
+   * Guards on thumbState = PENDING to prevent retrograde READY → FAILED writes.
+   */
   async setThumbFailed (mediaId: string, error: string): Promise<boolean> {
     // Guard: only transition from PENDING. Prevents retrograde READY → FAILED writes.
     const result = await this.prisma.media.updateMany({
@@ -222,6 +248,7 @@ export class MediaRepository {
     });
   }
 
+  /** Read the current textState for a media item (used to check for cancellation before processing). */
   async getTextState (mediaId: string) {
     const media = await this.prisma.media.findUnique({
       where: { id: mediaId },
@@ -276,6 +303,10 @@ export class MediaRepository {
     return result.count;
   }
 
+  /**
+   * Return the most-used tags for a user, ordered by frequency descending then
+   * alphabetically. Uses raw SQL to unnest the Postgres array column.
+   */
   async listTopTags (userId: string, limit: number) {
     return this.prisma.$queryRaw<{ tag: string; count: number }[]>`
       SELECT tag, COUNT(*)::int AS count
@@ -290,6 +321,7 @@ export class MediaRepository {
     `;
   }
 
+  /** Remove a tag from every Media row owned by the user using array_remove. */
   async deleteTag (userId: string, tag: string) {
     await this.prisma.$executeRaw`
       UPDATE "Media"

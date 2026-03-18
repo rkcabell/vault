@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 
 type Props = {
   buildQuery: (cursor?: string) => string;
@@ -26,14 +27,9 @@ async function readErrorMessage(response: Response) {
 
 export default function DevPurgeButton({ buildQuery, onSuccess, onError }: Props) {
   const [isPurging, setIsPurging] = useState(false);
+  const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);
 
-  const handleDevPurge = async () => {
-    if (isPurging) return;
-    const confirmed = window.confirm(
-      "Delete all uploaded files for this account? This cannot be undone.",
-    );
-    if (!confirmed) return;
-
+  const doPurge = async () => {
     setIsPurging(true);
     try {
       let cursor: string | null = null;
@@ -66,8 +62,23 @@ export default function DevPurgeButton({ buildQuery, onSuccess, onError }: Props
   };
 
   return (
-    <Button variant="outline" size="sm" onClick={handleDevPurge} disabled={isPurging}>
-      {isPurging ? "Deleting..." : "Delete All (Dev)"}
-    </Button>
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={(e) => { if (!isPurging) setConfirmState({ x: e.clientX, y: e.clientY }); }}
+        disabled={isPurging}
+      >
+        {isPurging ? "Deleting..." : "Delete All (Dev)"}
+      </Button>
+      <ConfirmPopover
+        open={confirmState !== null}
+        x={confirmState?.x ?? 0}
+        y={confirmState?.y ?? 0}
+        message="Delete all uploaded files for this account? This cannot be undone."
+        onConfirm={() => { setConfirmState(null); void doPurge(); }}
+        onCancel={() => setConfirmState(null)}
+      />
+    </>
   );
 }

@@ -117,9 +117,10 @@ function toOverviewRow(
     media: { id: string; title: string } | null;
   },
   now: Date,
+  soonWindowDays?: number,
 ) {
   const effectiveDueAt = getEffectiveDueAt(reminder.dueAt, reminder.nextDueAt);
-  const bucket = getReminderBucket(effectiveDueAt, reminder.timezone, now);
+  const bucket = getReminderBucket(effectiveDueAt, reminder.timezone, now, soonWindowDays);
 
   return {
     id: reminder.id,
@@ -282,6 +283,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
         status: z.enum(["active", "completed", "canceled"]).default("active"),
         view: z.enum(["overview", "all"]).default("overview"),
         limit: z.coerce.number().int().min(1).max(100).default(5),
+        soonWindowDays: z.coerce.number().int().min(2).max(14).default(7),
       })
       .parse(req.query);
 
@@ -345,7 +347,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
         orderBy: { dueAt: "asc" },
         select: reminderSelect,
       });
-      const rows = allReminders.map(reminder => toOverviewRow(reminder, now));
+      const rows = allReminders.map(reminder => toOverviewRow(reminder, now, query.soonWindowDays));
       sortOverviewRows(rows);
       return { items: rows };
     }
@@ -368,7 +370,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
       select: reminderSelect,
     });
 
-    const visibleRows = visibleReminders.map(reminder => toOverviewRow(reminder, now));
+    const visibleRows = visibleReminders.map(reminder => toOverviewRow(reminder, now, query.soonWindowDays));
     sortOverviewRows(visibleRows);
 
     if (visibleRows.length >= query.limit) {
@@ -389,7 +391,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
       select: reminderSelect,
     });
 
-    const fallbackRows = hiddenReminders.map(reminder => toOverviewRow(reminder, now));
+    const fallbackRows = hiddenReminders.map(reminder => toOverviewRow(reminder, now, query.soonWindowDays));
     sortOverviewRows(fallbackRows);
 
     return { items: [...visibleRows, ...fallbackRows.slice(0, remaining)] };
@@ -601,6 +603,27 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
     await app.prisma.reminder.update({
       where: { id },
       data: { snoozedUntil: body.until },
+    });
+
+    return reply.send({ ok: true });
+  });
+
+  app.post<{ Params: { id: string } }>("/:id/unsnooze", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const { id } = paramsSchema.parse(req.params);
+
+    const reminder = await app.prisma.reminder.findFirst({
+      where: { id, userId },
+      select: { id: true, status: true },
+    });
+    if (!reminder) return reply.notFound();
+    if (reminder.status !== "ACTIVE") {
+      throw app.httpErrors.badRequest("Only active reminders can be unsnoozed");
+    }
+
+    await app.prisma.reminder.update({
+      where: { id },
+      data: { snoozedUntil: null },
     });
 
     return reply.send({ ok: true });

@@ -8,6 +8,11 @@ import { looksLikeHeic } from "../../lib/fileSignatures.js";
 export type TextSource = "NATIVE" | "OCR";
 export type TextJobErrorCode = "SOURCE_NOT_READY" | "TIMEOUT";
 
+/**
+ * Typed error thrown by processTextJob for known failure conditions.
+ * `code` is machine-readable so callers can branch on it without string-matching
+ * against error messages (see isTransientError in ocrProcessingService).
+ */
 export class TextJobError extends Error {
   code: TextJobErrorCode;
 
@@ -32,6 +37,24 @@ export type ProcessTextJobDeps = {
   logger?: { info: (ctx: object, msg: string) => void };
 };
 
+/**
+ * Download a file from S3 and extract its text content.
+ *
+ * Two paths:
+ * - **Native** (`isPdf && !forceOcr`): uses pdf.js to extract embedded text.
+ *   Returns `needsOcr: true` when the PDF appears to be a scanned image with
+ *   no embedded text layer.
+ * - **OCR** (all other cases, or when forceOcr = true): runs ocrmypdf to
+ *   produce a text-layer PDF, then extracts text from that with pdf.js.
+ *   Non-PDF images are first checked for blankness — near-uniform white
+ *   images skip OCR entirely and return empty text.
+ *
+ * `abortSignal` is forwarded to ocrmypdf's subprocess so the process is
+ * killed promptly when the job times out. An AbortError is re-thrown as
+ * `TextJobError("TIMEOUT")` for structured handling upstream.
+ *
+ * `deps` can be overridden in tests to stub S3, ocrmypdf, and blank detection.
+ */
 export async function processTextJob (
   args: {
     s3: S3Client;
@@ -132,6 +155,7 @@ export async function processTextJob (
   };
 }
 
+/** Detect both the Web AbortError name and the Node.js ABORT_ERR errno code. */
 function isAbortError (err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return err.name === "AbortError" || (err as NodeJS.ErrnoException).code === "ABORT_ERR";

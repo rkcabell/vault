@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePreferences } from "@/hooks/usePreferences";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 
@@ -15,9 +16,11 @@ import { BulkActionBar } from "@/components/media/BulkActionBar";
 import { BulkTagDialog } from "@/components/media/BulkTagDialog";
 import { BulkBundleDialog } from "@/components/media/BulkBundleDialog";
 import { Button } from "@/components/ui/Button";
-import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown } from "lucide-react";
+import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
+import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown, Search, X } from "lucide-react";
 import { useUpload } from "@/components/contexts/UploadContext";
-import { cn } from "@/lib/utils";
+import { emitTagsUpdated } from "@/lib/tags";
+import { emitBundlesUpdated } from "@/lib/bundles";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,10 +30,12 @@ import {
 
 // Thumbnail loading behavior.
 const EAGER_THUMB_COUNT = 6;
-// Pagination defaults.
-const PAGE_SIZE = 24;
-// Grid density settings.
-const DENSITY_OPTIONS = [3, 4, 5, 6] as const;
+// Items loaded per "page" — grid sizes are row-based so each load fills complete rows.
+const LIST_ITEMS_PER_LOAD = 24;
+const GRID_ROWS_PER_LOAD = 5;          // comfortable grid: 5 full rows
+const COMPACT_GRID_ROWS_PER_LOAD = 10; // compact grid: 10 full rows (≈50 at default 5 cols)
+// Grid density settings. 7+ triggers compact card style (no tags, no action button).
+const DENSITY_OPTIONS = [4, 5, 6, 7, 8] as const;
 // Sort menu definitions.
 const SORT_OPTIONS = [
   { value: "createdAt_desc", label: "Newest" },
@@ -98,23 +103,20 @@ export default function LibraryPageInner() {
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [isBundleDialogOpen, setIsBundleDialogOpen] = useState(false);
 
+  // Delete confirmation popover.
+  const [confirmState, setConfirmState] = useState<{ x: number; y: number; message: string; action: () => void } | null>(null);
+
   // Refresh control.
   const [refreshToken, setRefreshToken] = useState(0);
   const [hasHandledRefreshParam, setHasHandledRefreshParam] = useState(false);
 
   // View + density controls.
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [gridCols, setGridCols] = useState<DensityValue>(5);
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("library:gridCols");
-      const parsed = Number(saved);
-      if ((DENSITY_OPTIONS as readonly number[]).includes(parsed)) {
-        setGridCols(parsed as DensityValue);
-      }
-    } catch { /* ignore */ }
-  }, []);
-  const [isCompactList, setIsCompactList] = useState(false);
+  const { prefs, updatePreferences } = usePreferences();
+  const viewMode = prefs.libraryViewMode;
+  const gridCols = prefs.libraryGridCols;
+  const isCompactList = prefs.libraryIsCompactList;
+  // Compact grid is derived: 7+ columns triggers compact card style.
+  const isCompactGrid = gridCols >= 7;
 
   // Drag/drop overlay state (robust against child enter/leave flicker)
   const [isDragging, setIsDragging] = useState(false);
@@ -123,6 +125,20 @@ export default function LibraryPageInner() {
   // Search and filter params.
   const searchParams = useSearchParams();
   const q = searchParams.get("q")?.trim() ?? "";
+
+  // Local title search input — debounces into URL param.
+  const [searchInput, setSearchInput] = useState(q);
+  useEffect(() => { setSearchInput(q); }, [q]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (searchInput.trim()) params.set("q", searchInput.trim());
+      else params.delete("q");
+      const nextQuery = params.toString();
+      router.push(nextQuery ? `${LIBRARY_PATH}?${nextQuery}` : LIBRARY_PATH);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]); // eslint-disable-line react-hooks/exhaustive-deps
   const tagsParam = searchParams.get("tags")?.trim() ?? "";
   const singleTag = searchParams.get("tag")?.trim() ?? "";
   const tag = useMemo(() => {
@@ -144,24 +160,36 @@ export default function LibraryPageInner() {
     SORT_OPTIONS.find((option) => option.value === sort)?.label ?? "Newest";
 
   // Layout class helpers.
-  const gridClassByCols: Record<3 | 4 | 5 | 6, string> = {
-    3: "grid-cols-1 sm:grid-cols-2 md:grid-cols-3",
+  const gridClassByCols: Record<4 | 5 | 6 | 7 | 8, string> = {
     4: "grid-cols-2 sm:grid-cols-3 md:grid-cols-4",
     5: "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5",
     6: "grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6",
+    7: "grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-7",
+    8: "grid-cols-4 sm:grid-cols-5 md:grid-cols-7 lg:grid-cols-8",
   };
 
   const layoutClass =
     viewMode === "grid"
-      ? `grid items-start gap-4 ${gridClassByCols[gridCols]}`
+      ? `grid items-start ${isCompactGrid ? "gap-1" : "gap-4"} ${gridClassByCols[gridCols]}`
       : isCompactList
       ? "space-y-0"
       : "space-y-4";
 
+  const cardDensity: "compact" | "comfortable" =
+    (viewMode === "grid" && isCompactGrid) || (viewMode === "list" && isCompactList)
+      ? "compact"
+      : "comfortable";
+
   const buildQuery = useCallback(
     (cursor?: string) => {
+      const itemLimit =
+        viewMode === "list"
+          ? LIST_ITEMS_PER_LOAD
+          : isCompactGrid
+            ? COMPACT_GRID_ROWS_PER_LOAD * gridCols
+            : GRID_ROWS_PER_LOAD * gridCols;
       const params = new URLSearchParams();
-      params.set("limit", String(PAGE_SIZE));
+      params.set("limit", String(itemLimit));
       params.set("sort", sort);
       if (q) params.set("q", q);
       if (tag) params.set("tags", tag);
@@ -170,7 +198,7 @@ export default function LibraryPageInner() {
       if (cursor) params.set("cursor", cursor);
       return params.toString();
     },
-    [q, sort, tag, textState, thumbState]
+    [gridCols, isCompactGrid, q, sort, tag, textState, thumbState, viewMode]
   );
 
   const handleSortChange = useCallback(
@@ -329,46 +357,44 @@ export default function LibraryPageInner() {
   }, [fetchMedia, nextCursor]);
 
   const handleDelete = useCallback(
-    async (id: string) => {
+    (id: string, e: React.MouseEvent) => {
       if (deletingIds.has(id)) return;
-
-      const confirmed = window.confirm("Delete this media item? This cannot be undone.");
-      if (!confirmed) return;
-
-      setDeletingIds((prev) => {
-        const next = new Set(prev);
-        next.add(id);
-        return next;
+      setConfirmState({
+        x: e.clientX,
+        y: e.clientY,
+        message: "Delete this item? This cannot be undone.",
+        action: async () => {
+          setDeletingIds((prev) => {
+            const next = new Set(prev);
+            next.add(id);
+            return next;
+          });
+          try {
+            const res = await fetch(`/api/media/${id}`, {
+              method: "DELETE",
+              credentials: "include",
+            });
+            if (!res.ok) {
+              const msg = await readErrorMessage(res);
+              setError(msg);
+              return;
+            }
+            deletedIdsRef.current.add(id);
+            setMediaItems((prev) => prev.filter((item) => item.id !== id));
+            setError(null);
+            fetchMedia({ silent: true });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to delete media.";
+            setError(message);
+          } finally {
+            setDeletingIds((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+          }
+        },
       });
-
-      try {
-        const res = await fetch(`/api/media/${id}`, {
-          method: "DELETE",
-          credentials: "include",
-        });
-
-        if (!res.ok) {
-          const msg = await readErrorMessage(res);
-          setError(msg);
-          return;
-        }
-
-        // Optimistic remove + prevent resurrection on refetch/append
-        deletedIdsRef.current.add(id);
-        setMediaItems((prev) => prev.filter((item) => item.id !== id));
-
-        setError(null);
-        fetchMedia({ silent: true });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to delete media.";
-        setError(message);
-      } finally {
-        setDeletingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      }
     },
     [deletingIds, fetchMedia]
   );
@@ -437,11 +463,14 @@ export default function LibraryPageInner() {
     });
   }, []);
 
-  const handleBulkDelete = useCallback(async () => {
+  const handleBulkDelete = useCallback((e: React.MouseEvent) => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
-    const confirmed = window.confirm(`Delete ${ids.length} item(s)? This cannot be undone.`);
-    if (!confirmed) return;
+    setConfirmState({
+      x: e.clientX,
+      y: e.clientY,
+      message: `Delete ${ids.length} item(s)? This cannot be undone.`,
+      action: async () => {
 
     setDeletingIds(prev => {
       const next = new Set(prev);
@@ -482,6 +511,8 @@ export default function LibraryPageInner() {
         setSelectedIds(new Set());
       }
     }
+      },
+    });
   }, [selectedIds, fetchMedia]);
 
   // Drag & drop handlers (no window/global pattern)
@@ -549,30 +580,10 @@ export default function LibraryPageInner() {
             )}
 
             {!isSelectMode && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setViewMode(viewMode === "grid" ? "list" : "grid")}
-                >
-                  {viewMode === "grid" ? (
-                    <>
-                      <LayoutList className="mr-2 h-4 w-4" suppressHydrationWarning />
-                      List View
-                    </>
-                  ) : (
-                    <>
-                      <LayoutGrid className="mr-2 h-4 w-4" suppressHydrationWarning />
-                      Grid View
-                    </>
-                  )}
-                </Button>
-
-                <Button size="sm" onClick={handleUploadClick}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Upload Media
-                </Button>
-              </>
+              <Button size="sm" onClick={handleUploadClick}>
+                <Plus className="mr-2 h-4 w-4" />
+                Upload Media
+              </Button>
             )}
           </>
         }
@@ -586,6 +597,26 @@ export default function LibraryPageInner() {
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <input
+              type="search"
+              placeholder="Filter by title..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="h-9 w-48 rounded-md border border-input bg-background pl-8 pr-8 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => setSearchInput("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="flex items-center gap-2">
@@ -606,10 +637,30 @@ export default function LibraryPageInner() {
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              updatePreferences({ libraryViewMode: viewMode === "grid" ? "list" : "grid" });
+            }}
+          >
+            {viewMode === "grid" ? (
+              <>
+                <LayoutList className="mr-2 h-4 w-4" suppressHydrationWarning />
+                List View
+              </>
+            ) : (
+              <>
+                <LayoutGrid className="mr-2 h-4 w-4" suppressHydrationWarning />
+                Grid View
+              </>
+            )}
+          </Button>
+
           {DevPurgeButton && viewMode === "grid" && (
             <DevPurgeButton
               buildQuery={buildQuery}
-              onSuccess={() => { setMediaItems([]); setNextCursor(null); setError(null); }}
+              onSuccess={() => { setMediaItems([]); setNextCursor(null); setError(null); emitTagsUpdated(); emitBundlesUpdated(); }}
               onError={setError}
             />
           )}
@@ -619,43 +670,37 @@ export default function LibraryPageInner() {
               variant={isCompactList ? "default" : "outline"}
               size="sm"
               aria-pressed={isCompactList}
-              onClick={() => setIsCompactList((prev) => !prev)}
+              onClick={() => {
+                updatePreferences({ libraryIsCompactList: !isCompactList });
+              }}
             >
               {isCompactList ? "Compact" : "Comfortable"}
             </Button>
           )}
+
         </div>
 
         {viewMode === "grid" && (
-          <div className="inline-flex items-center overflow-hidden rounded-md border bg-background">
-            {DENSITY_OPTIONS.map((count, index) => {
-              const isActive = gridCols === count;
-              return (
-                <button
-                  key={count}
-                  type="button"
-                  onClick={() => {
-                    setGridCols(count);
-                    try { localStorage.setItem("library:gridCols", String(count)); } catch { /* ignore */ }
-                  }}
-                  aria-pressed={isActive}
-                  aria-label={`${count} columns`}
-                  className={cn(
-                    "flex h-8 items-center justify-center px-2 transition-colors",
-                    index > 0 && "border-l border-border",
-                    index === 0 && "rounded-l-md",
-                    index === DENSITY_OPTIONS.length - 1 && "rounded-r-md",
-                    isActive ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <span className="flex items-center gap-0.5" aria-hidden="true">
-                    {Array.from({ length: count }).map((_, i) => (
-                      <span key={i} className="h-1.5 w-1.5 rounded-[2px] bg-current" />
-                    ))}
-                  </span>
-                </button>
-              );
-            })}
+          <div className="flex flex-col items-end gap-1">
+            <input
+              type="range"
+              min={DENSITY_OPTIONS[0]}
+              max={DENSITY_OPTIONS[DENSITY_OPTIONS.length - 1]}
+              step={1}
+              value={gridCols}
+              list="density-ticks"
+              onChange={(e) => {
+                updatePreferences({ libraryGridCols: Number(e.target.value) as DensityValue });
+              }}
+              aria-label="Grid density"
+              className="w-72 h-4 accent-primary cursor-pointer"
+            />
+            <datalist id="density-ticks">
+              {DENSITY_OPTIONS.map(n => <option key={n} value={n} />)}
+            </datalist>
+            <span className="mt-1 text-xs font-medium text-foreground leading-none h-4">
+              {isCompactGrid ? "compact" : ""}
+            </span>
           </div>
         )}
       </div>
@@ -683,7 +728,7 @@ export default function LibraryPageInner() {
               <MediaCardSkeleton
                 key={i}
                 variant={viewMode}
-                density={isCompactList ? "compact" : "comfortable"}
+                density={cardDensity}
               />
             ))}
           </div>
@@ -694,7 +739,8 @@ export default function LibraryPageInner() {
                 key={media.id}
                 media={media}
                 variant={viewMode}
-                density={isCompactList ? "compact" : "comfortable"}
+                density={cardDensity}
+                gridCols={viewMode === 'grid' ? gridCols : undefined}
                 loading={index < EAGER_THUMB_COUNT ? "eager" : "lazy"}
                 onDownload={isSelectMode ? undefined : (id) => void handleDownload(id)}
                 onDelete={isSelectMode ? undefined : handleDelete}
@@ -734,12 +780,25 @@ export default function LibraryPageInner() {
       {isSelectMode && selectedIds.size > 0 && (
         <BulkActionBar
           count={selectedIds.size}
-          onDelete={() => void handleBulkDelete()}
+          onDelete={(e) => handleBulkDelete(e)}
           onTag={() => setIsTagDialogOpen(true)}
           onAddToBundle={() => setIsBundleDialogOpen(true)}
           onClear={() => setSelectedIds(new Set())}
         />
       )}
+
+      <ConfirmPopover
+        open={confirmState !== null}
+        x={confirmState?.x ?? 0}
+        y={confirmState?.y ?? 0}
+        message={confirmState?.message ?? "Delete? This cannot be undone."}
+        onConfirm={() => {
+          const action = confirmState?.action;
+          setConfirmState(null);
+          void action?.();
+        }}
+        onCancel={() => setConfirmState(null)}
+      />
 
       {/* Bulk tag dialog */}
       <BulkTagDialog

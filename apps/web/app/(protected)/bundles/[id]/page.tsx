@@ -1,17 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { Route } from 'next';
-import { ArrowLeft, FolderOpen, Loader2, MoreHorizontal, Pencil, Plus, Search, Star, Trash2, X } from 'lucide-react';
+import { ArrowLeft, FolderOpen, MoreHorizontal, Pencil, Plus, Star, Trash2 } from 'lucide-react';
+import { EditBundleModal } from '@/components/bundles/EditBundleModal';
+import { AddMediaDialog } from '@/components/bundles/AddMediaDialog';
 import { cn } from '@/lib/utils';
 import { emitBundlesUpdated } from '@/lib/bundles';
 import type { BundleDetail, BundleMediaItem } from '@vault/types';
 import { MediaCard } from '@/components/media/MediaCard';
 import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { Sheet, SheetContent } from '@/components/ui/Sheet';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,9 +19,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/DropdownMenu';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { ConfirmPopover } from '@/components/ui/ConfirmPopover';
 import type { MediaWorkerState } from '@/lib/media/types';
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function toMediaItem(item: BundleMediaItem) {
   return {
@@ -38,183 +39,6 @@ async function readError(res: Response): Promise<string> {
   return text || `Error ${res.status}`;
 }
 
-// ── Add-media picker ──────────────────────────────────────────────────────────
-
-interface PickerItem {
-  id: string;
-  title: string;
-  thumbState: MediaWorkerState;
-  textState: MediaWorkerState;
-  mimeType?: string | null;
-}
-
-function AddMediaSheet({
-  open,
-  onClose,
-  bundleId,
-  existingIds,
-  onAdded,
-}: {
-  open: boolean;
-  onClose: () => void;
-  bundleId: string;
-  existingIds: Set<string>;
-  onAdded: (ids: string[]) => void;
-}) {
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<PickerItem[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [isAdding, setIsAdding] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const search = useCallback(async (q: string) => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setIsSearching(true);
-    try {
-      const qs = new URLSearchParams({ limit: '30' });
-      if (q.trim()) qs.set('q', q.trim());
-      const res = await fetch(`/api/media?${qs.toString()}`, {
-        credentials: 'include',
-        signal: controller.signal,
-      });
-      if (!res.ok) return;
-      const data = (await res.json()) as { items: PickerItem[] };
-      if (abortRef.current !== controller) return;
-      setResults(data.items ?? []);
-    } catch {
-      // aborted or error — ignore
-    } finally {
-      if (abortRef.current === controller) setIsSearching(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (open) {
-      setQuery('');
-      setSelected(new Set());
-      void search('');
-    }
-    return () => abortRef.current?.abort();
-  }, [open, search]);
-
-  useEffect(() => {
-    const id = setTimeout(() => { void search(query); }, 300);
-    return () => clearTimeout(id);
-  }, [query, search]);
-
-  const toggle = (id: string) => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const handleAdd = async () => {
-    const ids = [...selected].filter(id => !existingIds.has(id));
-    if (!ids.length) return;
-    setIsAdding(true);
-    try {
-      const res = await fetch(`/api/bundles/${bundleId}/items`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaIds: ids }),
-      });
-      if (res.ok) {
-        onAdded(ids);
-        onClose();
-      }
-    } finally {
-      setIsAdding(false);
-    }
-  };
-
-  const addable = [...selected].filter(id => !existingIds.has(id)).length;
-
-  return (
-    <Sheet open={open} onOpenChange={v => { if (!v) onClose(); }}>
-      <SheetContent side="right" className="flex flex-col w-full sm:max-w-md p-0">
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <h2 className="font-semibold">Add media to bundle</h2>
-          <Button variant="ghost" size="icon" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-
-        <div className="px-4 py-3 border-b">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-            <Input
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Search media…"
-              className="pl-9"
-            />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-4 py-2 space-y-1">
-          {isSearching && results.length === 0 ? (
-            <div className="flex items-center justify-center py-10">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : results.length === 0 ? (
-            <p className="py-10 text-center text-sm text-muted-foreground">No media found</p>
-          ) : (
-            results.map(item => {
-              const alreadyIn = existingIds.has(item.id);
-              const isSelected = selected.has(item.id);
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => { if (!alreadyIn) toggle(item.id); }}
-                  disabled={alreadyIn}
-                  className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                    alreadyIn
-                      ? 'opacity-40 cursor-not-allowed'
-                      : isSelected
-                      ? 'bg-primary/10 text-primary'
-                      : 'hover:bg-accent'
-                  }`}
-                >
-                  <div className="h-10 w-14 shrink-0 overflow-hidden rounded bg-muted">
-                    <img
-                      src={`/api/media/${item.id}/thumbnail?v=${item.thumbState === 'READY' ? 'ready' : 'pending'}`}
-                      alt={item.title}
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-                  <span className="flex-1 truncate">{item.title}</span>
-                  {alreadyIn && <span className="text-xs text-muted-foreground">Added</span>}
-                  {isSelected && !alreadyIn && (
-                    <span className="text-xs font-medium text-primary">✓</span>
-                  )}
-                </button>
-              );
-            })
-          )}
-        </div>
-
-        <div className="border-t px-4 py-3">
-          <Button
-            className="w-full"
-            onClick={() => { void handleAdd(); }}
-            disabled={addable === 0 || isAdding}
-          >
-            {isAdding && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {addable > 0 ? `Add ${addable} item${addable > 1 ? 's' : ''}` : 'Select items to add'}
-          </Button>
-        </div>
-      </SheetContent>
-    </Sheet>
-  );
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function BundleDetailPage() {
@@ -225,16 +49,12 @@ export default function BundleDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [nameValue, setNameValue] = useState('');
-  const [isSavingName, setIsSavingName] = useState(false);
-
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [isDeletingBundle, setIsDeletingBundle] = useState(false);
+  const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);
   const [isStarring, setIsStarring] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
-
-  const nameInputRef = useRef<HTMLInputElement>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
 
   const fetchBundle = useCallback(async () => {
     setIsLoading(true);
@@ -248,7 +68,6 @@ export default function BundleDetailPage() {
       }
       const data = (await res.json()) as { bundle: BundleDetail };
       setBundle(data.bundle);
-      setNameValue(data.bundle.name);
     } catch {
       setError('Failed to load bundle.');
     } finally {
@@ -257,30 +76,6 @@ export default function BundleDetailPage() {
   }, [id, router]);
 
   useEffect(() => { void fetchBundle(); }, [fetchBundle]);
-
-  useEffect(() => {
-    if (isEditingName) nameInputRef.current?.focus();
-  }, [isEditingName]);
-
-  const saveName = async () => {
-    const trimmed = nameValue.trim();
-    if (!trimmed || trimmed === bundle?.name) { setIsEditingName(false); return; }
-    setIsSavingName(true);
-    try {
-      const res = await fetch(`/api/bundles/${id}`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed }),
-      });
-      if (res.ok) {
-        setBundle(prev => prev ? { ...prev, name: trimmed } : prev);
-        setIsEditingName(false);
-      }
-    } finally {
-      setIsSavingName(false);
-    }
-  };
 
   const removeItem = async (mediaId: string) => {
     if (removingId) return;
@@ -323,7 +118,6 @@ export default function BundleDetailPage() {
   };
 
   const deleteBundle = async () => {
-    if (!confirm('Delete this bundle? This cannot be undone.')) return;
     setIsDeletingBundle(true);
     try {
       await fetch(`/api/bundles/${id}`, { method: 'DELETE', credentials: 'include' });
@@ -376,64 +170,48 @@ export default function BundleDetailPage() {
 
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
-            {isEditingName ? (
-              <div className="flex items-center gap-2">
-                <input
-                  ref={nameInputRef}
-                  value={nameValue}
-                  onChange={e => setNameValue(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') { e.preventDefault(); void saveName(); }
-                    if (e.key === 'Escape') { setNameValue(bundle.name); setIsEditingName(false); }
-                  }}
-                  onBlur={() => { void saveName(); }}
-                  disabled={isSavingName}
-                  className="text-2xl font-bold tracking-tight bg-transparent border-b-2 border-primary outline-none w-full"
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold tracking-tight">{bundle.name}</h1>
+              <button
+                onClick={() => { void toggleStar(); }}
+                disabled={isStarring}
+                aria-label={bundle.starred ? 'Unstar bundle' : 'Star bundle'}
+                className="shrink-0 text-muted-foreground hover:text-yellow-500 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-1"
+              >
+                <Star
+                  className={cn(
+                    'h-5 w-5',
+                    bundle.starred && 'fill-yellow-400 text-yellow-400',
+                  )}
                 />
-                {isSavingName && <Loader2 className="h-4 w-4 animate-spin shrink-0" />}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setIsEditingName(true)}
-                  className="group flex items-center gap-2 text-left"
-                  aria-label="Edit bundle name"
-                >
-                  <h1 className="text-2xl font-bold tracking-tight">{bundle.name}</h1>
-                  <Pencil className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                </button>
-                <button
-                  onClick={() => { void toggleStar(); }}
-                  disabled={isStarring}
-                  aria-label={bundle.starred ? 'Unstar bundle' : 'Star bundle'}
-                  className="shrink-0 text-muted-foreground hover:text-yellow-500 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-1"
-                >
-                  <Star
-                    className={cn(
-                      'h-5 w-5',
-                      bundle.starred && 'fill-yellow-400 text-yellow-400',
-                    )}
-                  />
-                </button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" aria-label="Bundle options" className="h-8 w-8 text-muted-foreground shrink-0">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuItem
-                      onClick={() => { void deleteBundle(); }}
-                      disabled={isDeletingBundle}
-                      className="text-destructive focus:text-destructive"
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      {isDeletingBundle ? 'Deleting…' : 'Delete Bundle'}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            )}
+              </button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowEditModal(true)}
+                aria-label="Edit bundle"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground shrink-0"
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label="Bundle options" className="h-8 w-8 text-muted-foreground shrink-0">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem
+                    onClick={(e) => { setConfirmState({ x: e.clientX, y: e.clientY }); }}
+                    disabled={isDeletingBundle}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    {isDeletingBundle ? 'Deleting…' : 'Delete Bundle'}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
             <p className="text-sm text-muted-foreground mt-1">
               {bundle.itemCount} {bundle.itemCount === 1 ? 'item' : 'items'}
               {bundle.description && ` · ${bundle.description}`}
@@ -477,12 +255,35 @@ export default function BundleDetailPage() {
         </div>
       )}
 
-      <AddMediaSheet
+      <AddMediaDialog
         open={showPicker}
         onClose={() => setShowPicker(false)}
         bundleId={id}
+        bundleName={bundle.name}
+        coverMediaId={bundle.coverMediaId}
         existingIds={existingIds}
         onAdded={handleAdded}
+      />
+
+      {showEditModal && (
+        <EditBundleModal
+          bundle={bundle}
+          open={showEditModal}
+          onOpenChange={open => { if (!open) setShowEditModal(false); }}
+          onSaved={updated => {
+            setBundle(prev => prev ? { ...prev, ...updated } : prev);
+            setShowEditModal(false);
+          }}
+        />
+      )}
+
+      <ConfirmPopover
+        open={confirmState !== null}
+        x={confirmState?.x ?? 0}
+        y={confirmState?.y ?? 0}
+        message="Delete this bundle? This cannot be undone."
+        onConfirm={() => { setConfirmState(null); void deleteBundle(); }}
+        onCancel={() => setConfirmState(null)}
       />
     </div>
   );

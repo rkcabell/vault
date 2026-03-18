@@ -6,6 +6,7 @@
     "packages/*"
   ],
   "scripts": {
+    "clean": "npm run -w web clean",
     "build": "npm run -ws build",
     "lint": "npm run lint --workspace=api --workspace=web",
     "test:api": "npm -w @vault/db run build && npm -w api run test:api",
@@ -38,6 +39,8 @@
     "@napi-rs/canvas": "^0.1.88",
     "@tailwindcss/aspect-ratio": "^0.4.2",
     "franc": "^6.2.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "react-resizable-panels": "^4.4.1"
   }
 }

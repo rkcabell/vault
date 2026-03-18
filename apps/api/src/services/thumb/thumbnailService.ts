@@ -31,9 +31,16 @@ export type ThumbDeps = {
   publishJobUpdate?: (update: { userId: string; mediaId: string; field: "thumbState"; value: "READY" | "FAILED" }) => void;
 };
 
+/** Stored when the error message is empty after sanitization. */
 const THUMB_ERROR_FALLBACK = "thumbnail_failed";
+/** Maximum characters persisted in thumbError to keep DB values bounded. */
 const MAX_THUMB_ERROR_LENGTH = 160;
 
+/**
+ * Convert any thrown value to a short, single-line string safe for DB storage.
+ * Collapses whitespace, trims, truncates to MAX_THUMB_ERROR_LENGTH, and falls
+ * back to a generic sentinel when the message would be empty.
+ */
 export function sanitizeThumbError (err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   const cleaned = raw.replace(/\s+/g, " ").trim();
@@ -43,6 +50,7 @@ export function sanitizeThumbError (err: unknown): string {
     : cleaned;
 }
 
+/** Download an S3 object to a Buffer. Returns null (never throws) on any error. */
 async function getObjectToBuffer (s3: S3Client, bucket: string, key: string): Promise<Buffer | null> {
   try {
     const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
@@ -54,6 +62,12 @@ async function getObjectToBuffer (s3: S3Client, bucket: string, key: string): Pr
   }
 }
 
+/**
+ * Resize and encode an image buffer to WebP.
+ * `rotate()` with no argument applies EXIF auto-rotation.
+ * `fit: "inside"` preserves aspect ratio; `withoutEnlargement` prevents
+ * upscaling images that are already smaller than `size`.
+ */
 async function renderWebp(input: Buffer, size: number): Promise<Buffer> {
   return sharp(input, { failOn: "none" })
     .rotate()
@@ -63,6 +77,61 @@ async function renderWebp(input: Buffer, size: number): Promise<Buffer> {
 }
 
 
+type FormatHandler = {
+  /** Short label used in log messages and error codes (e.g. "video", "pdf"). */
+  label: string;
+  /** Return true if this handler should process the given file. First match wins. */
+  detect: (mimeType: string, buffer: Buffer) => boolean;
+  /** Render a high-resolution intermediate PNG from the source buffer. */
+  render: (buffer: Buffer, targetWidth: number) => Promise<Buffer>;
+};
+
+/**
+ * Registry of format-specific thumbnail renderers, checked in order.
+ * Order matters: HEIC must precede video because some HEIC files share
+ * MP4 magic bytes and would otherwise be misclassified.
+ *
+ * To add a new format: import its renderer and append an entry here.
+ * No changes to processThumb are needed.
+ */
+const FORMAT_HANDLERS: FormatHandler[] = [
+  {
+    label: "heic",
+    detect: (mime, buf) => mime.includes("heic") || mime.includes("heif") || looksLikeHeic(buf),
+    render: (buf, w) => renderHeicThumbnail({ image: buf, targetWidth: w }),
+  },
+  {
+    label: "video",
+    detect: (mime, buf) => mime.startsWith("video/") || looksLikeMp4(buf),
+    render: (buf, w) => renderVideoThumbnail({ video: buf, targetWidth: w }),
+  },
+  {
+    label: "pdf",
+    detect: (mime, buf) => mime.includes("pdf") || looksLikePdf(buf),
+    render: (buf, w) => renderPdfThumbnail({ pdf: buf, targetWidth: w }),
+  },
+];
+
+/**
+ * Core thumbnail processing logic for a single job.
+ *
+ * Flow:
+ * 1. Idempotency check — if thumbnailKey already matches outKey and state is
+ *    READY, return early. If state is wrong (e.g. PENDING after a crash),
+ *    repair it in place.
+ * 2. Wait for the source object to appear in S3 (up to 4 probes).
+ * 3. Opportunistically extract and persist file metadata from the buffer
+ *    (non-fatal; a metadata error never fails the thumb job).
+ * 4. Match the file against FORMAT_HANDLERS (first match wins) and render a
+ *    high-resolution intermediate PNG. Generic images pass through unchanged.
+ * 5. Encode the intermediate PNG to WebP at `size` px and upload to S3.
+ * 6. Mark thumbState READY in the DB and publish a real-time update.
+ *
+ * Format-specific render failures (video, PDF, HEIC) set thumbState FAILED
+ * and return without throwing, since the error is permanent and retrying
+ * would produce the same result. Sharp failures and S3 errors propagate
+ * so BullMQ can retry them.
+ */
 export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<void> {
   const { prismaMedia, s3, bucket, logger } = deps;
   const startedAt = Date.now();
@@ -105,73 +174,35 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
       })
       .catch((err: unknown) => logger.warn({ err, mediaId: job.mediaId }, "metadata extraction failed"));
   }
-  const isHeic =
-    mimeType.includes("heic") ||
-    mimeType.includes("heif") ||
-    looksLikeHeic(original);
-  const isVideo = mimeType.startsWith("video/") || (looksLikeMp4(original) && !isHeic);
-  const isPdf = mimeType.includes("pdf") || looksLikePdf(original);
+  const targetWidth = Math.min(1600, Math.max(800, size * 3));
 
-  if (isVideo) {
+  // Render a high-res intermediate PNG for formats that Sharp can't decode
+  // natively. Returns null and marks the job FAILED on any render error.
+  const tryRenderIntermediate = async (
+    renderFn: () => Promise<Buffer>,
+    label: string,
+  ): Promise<Buffer | null> => {
     try {
-      inputForSharp = await renderVideoThumbnail({
-        video: original,
-        targetWidth: Math.min(1600, Math.max(800, size * 3)),
-      });
-
-      if (!looksLikePng(inputForSharp)) {
-        throw new Error("VIDEO_RENDER_DID_NOT_RETURN_PNG");
-      }
+      const result = await renderFn();
+      if (!looksLikePng(result)) throw new Error(`${label.toUpperCase()}_RENDER_DID_NOT_RETURN_PNG`);
+      return result;
     } catch (err) {
       const reason = sanitizeThumbError(err);
       await prismaMedia.setThumbFailed(job.mediaId, reason);
       deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
       logger.error(
         { ...logContext, reason, errorCode: reason, durationMs: Date.now() - startedAt, err },
-        "failed to render video thumbnail",
+        `failed to render ${label} thumbnail`,
       );
-      return;
+      return null;
     }
-  } else if (isPdf) {
-    try {
-      inputForSharp = await renderPdfThumbnail({
-        pdf: original,
-        targetWidth: Math.min(1600, Math.max(800, size * 3)),
-      });
+  };
 
-      if (!looksLikePng(inputForSharp)) {
-        throw new Error("PDF_RENDER_DID_NOT_RETURN_PNG");
-      }
-    } catch (err) {
-      const reason = sanitizeThumbError(err);
-      await prismaMedia.setThumbFailed(job.mediaId, reason);
-      deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
-      logger.error(
-        { ...logContext, reason, errorCode: reason, durationMs: Date.now() - startedAt, err },
-        "failed to render PDF thumbnail",
-      );
-      return;
-    }
-  } else if (isHeic) {
-    try {
-      inputForSharp = await renderHeicThumbnail({
-        image: original,
-        targetWidth: Math.min(1600, Math.max(800, size * 3)),
-      });
-
-      if (!looksLikePng(inputForSharp)) {
-        throw new Error("HEIC_RENDER_DID_NOT_RETURN_PNG");
-      }
-    } catch (err) {
-      const reason = sanitizeThumbError(err);
-      await prismaMedia.setThumbFailed(job.mediaId, reason);
-      deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
-      logger.error(
-        { ...logContext, reason, errorCode: reason, durationMs: Date.now() - startedAt, err },
-        "failed to render HEIC thumbnail",
-      );
-      return;
-    }
+  const handler = FORMAT_HANDLERS.find(h => h.detect(mimeType, original));
+  if (handler) {
+    const rendered = await tryRenderIntermediate(() => handler.render(original, targetWidth), handler.label);
+    if (!rendered) return;
+    inputForSharp = rendered;
   }
 
   let webp: Buffer;
@@ -203,6 +234,11 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "READY" });
 }
 
+/**
+ * Wrap `processThumb` in the BullMQ worker callback signature.
+ * Logs job start, completion (with duration), and failure (re-throws so BullMQ
+ * can apply retry/backoff logic).
+ */
 export function createThumbProcessor (deps: ThumbDeps) {
   return async (job: { data: ThumbJob; id?: string; attemptsMade?: number }) => {
     const start = Date.now();

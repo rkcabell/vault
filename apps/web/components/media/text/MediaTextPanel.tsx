@@ -82,7 +82,6 @@ export function MediaTextPanel (props: {
     segments,
     textTotalLength,
     textSource,
-    textErrorMessage,
     isCopying,
     copyMessage,
     copySelected,

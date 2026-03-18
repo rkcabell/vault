@@ -72,7 +72,7 @@ async function batchInit(items: BatchInitItem[]): Promise<BatchInitResponse> {
     let msg = `Upload init failed (${res.status})`;
     try {
       const data = await res.json();
-      msg = data?.error || data?.message || msg;
+      msg = data?.message || data?.error || msg;
     } catch {}
     throw new Error(msg);
   }
@@ -92,7 +92,7 @@ async function batchFinalize(ids: string[]): Promise<void> {
     let msg = `Upload finalize failed (${res.status})`;
     try {
       const data = await res.json();
-      msg = data?.error || data?.message || msg;
+      msg = data?.message || data?.error || msg;
     } catch {}
     throw new Error(msg);
   }
@@ -127,11 +127,49 @@ function notifyUploadFailures(count: number) {
   });
 }
 
+/**
+ * Run `fn` over every item in `items` with at most `limit` concurrent
+ * executions — prevents saturating the browser connection pool when
+ * uploading large batches.
+ */
+async function limitConcurrent<T>(
+  items: T[],
+  fn: (item: T) => Promise<void>,
+  limit: number,
+): Promise<PromiseSettledResult<void>[]> {
+  const results: PromiseSettledResult<void>[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        await fn(items[i]);
+        results[i] = { status: "fulfilled", value: undefined };
+      } catch (err) {
+        results[i] = { status: "rejected", reason: err };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+const UPLOAD_CONCURRENCY = 5;
+const BATCH_CHUNK_SIZE = 100;
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 async function uploadBatch(
   pendingFiles: UploadPlan[],
   uploadOne: (plan: UploadPlan) => Promise<void>,
 ): Promise<{ failed: FailedUpload[]; completed: CompletedUpload[] }> {
-  const results = await Promise.allSettled(pendingFiles.map((f) => uploadOne(f)));
+  const results = await limitConcurrent(pendingFiles, uploadOne, UPLOAD_CONCURRENCY);
 
   const failed: FailedUpload[] = [];
   const completed: CompletedUpload[] = [];
@@ -252,64 +290,70 @@ export default function UploadPage() {
     setIsUploading(true);
     notifyUploadStart(pendingFiles.length);
 
+    const allFailed: FailedUpload[] = [];
+
     try {
-      const initPayload = pendingFiles.map((pending) => {
-        const contentType =
-          pending.file.type && pending.file.type.trim()
-            ? pending.file.type
-            : "application/octet-stream";
-        const title = pending.file.name.replace(/\.[^/.]+$/, "");
-        return {
-          fileId: pending.id,
-          file: pending.file,
-          contentType,
-          initBody: {
-            filename: pending.file.name,
-            mimeType: contentType,
-            sizeBytes: pending.file.size,
-            title,
-            tags: [],
-          } satisfies BatchInitItem,
-        };
-      });
+      const chunks = chunkArray(pendingFiles, BATCH_CHUNK_SIZE);
 
-      const init = await batchInit(initPayload.map((item) => item.initBody));
-      if (!init?.items || init.items.length !== initPayload.length) {
-        throw new Error("Upload init returned unexpected item count.");
-      }
+      for (const chunk of chunks) {
+        const initPayload = chunk.map((pending) => {
+          const contentType =
+            pending.file.type && pending.file.type.trim()
+              ? pending.file.type
+              : "application/octet-stream";
+          const title = pending.file.name.replace(/\.[^/.]+$/, "");
+          return {
+            fileId: pending.id,
+            file: pending.file,
+            contentType,
+            initBody: {
+              filename: pending.file.name,
+              mimeType: contentType,
+              sizeBytes: pending.file.size,
+              title,
+              tags: [],
+            } satisfies BatchInitItem,
+          };
+        });
 
-      const plans: UploadPlan[] = initPayload.map((item, index) => ({
-        fileId: item.fileId,
-        file: item.file,
-        contentType: item.contentType,
-        init: init.items[index],
-      }));
+        const init = await batchInit(initPayload.map((item) => item.initBody));
+        if (!init?.items || init.items.length !== initPayload.length) {
+          throw new Error("Upload init returned unexpected item count.");
+        }
 
-      const { failed, completed } = await uploadBatch(plans, uploadOne);
+        const plans: UploadPlan[] = initPayload.map((item, index) => ({
+          fileId: item.fileId,
+          file: item.file,
+          contentType: item.contentType,
+          init: init.items[index],
+        }));
 
-      if (completed.length > 0) {
-        emitTagsUpdated();
-        try {
-          await batchFinalize(completed.map((item) => item.mediaId));
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "Upload finalize failed.";
-          for (const item of completed) {
-            updateFileStatus(item.fileId, "error", message);
+        const { failed, completed } = await uploadBatch(plans, uploadOne);
+        allFailed.push(...failed);
+        applyFailures(failed, (id, _status, error) => updateFileStatus(id, "error", error));
+
+        if (completed.length > 0) {
+          try {
+            await batchFinalize(completed.map((item) => item.mediaId));
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Upload finalize failed.";
+            for (const item of completed) {
+              updateFileStatus(item.fileId, "error", message);
+            }
+            notifyUploadFailures(completed.length + allFailed.length);
+            return;
           }
-          applyFailures(failed, (id, _status, error) => updateFileStatus(id, "error", error));
-          notifyUploadFailures(completed.length + failed.length);
-          return;
         }
       }
 
-      if (failed.length === 0) {
+      if (allFailed.length === 0) {
+        emitTagsUpdated();
         notifyUploadSuccess();
         exitToLibrary(clearFiles, () => router.push(`${LIBRARY_PATH}?uploaded=1`));
         return;
       }
 
-      applyFailures(failed, (id, _status, error) => updateFileStatus(id, "error", error));
-      notifyUploadFailures(failed.length);
+      notifyUploadFailures(allFailed.length);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload failed.";
       for (const pending of pendingFiles) {

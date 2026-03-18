@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { usePreferences } from "@/hooks/usePreferences";
 import { Button } from "@/components/ui/Button";
 import { AddReminderDialog } from "@/components/reminders/AddReminderDialog";
 import {
@@ -9,6 +10,7 @@ import {
   useOverviewReminders,
   useRemindersSummary,
   useSnoozeReminder,
+  useUnsnoozeReminder,
   type ReminderOverviewRow,
 } from "@/lib/reminders";
 
@@ -34,15 +36,17 @@ function formatDueLabel(reminder: ReminderOverviewRow, nowMs: number) {
 
   if (reminder.bucket === "overdue") return `${prefix}Overdue - due ${dateLabel} ${timeLabel}`;
   if (reminder.bucket === "today") return `${prefix}Due today at ${timeLabel}`;
-  if (reminder.bucket === "soon") return `${prefix}Due soon - ${dateLabel}`;
-  return `${prefix}Due later - ${dateLabel}`;
+  if (reminder.bucket === "soon") return `${prefix}Due soon - ${dateLabel} ${timeLabel}`;
+  return `${prefix}${dateLabel}`;
 }
 
 export function OverviewRemindersCard() {
+  const { prefs } = usePreferences();
   const summary = useRemindersSummary();
-  const reminders = useOverviewReminders(OVERVIEW_LIMIT);
+  const reminders = useOverviewReminders(OVERVIEW_LIMIT, prefs.soonWindowDays);
   const completeReminder = useCompleteReminder();
   const snoozeReminder = useSnoozeReminder();
+  const unsnoozeReminder = useUnsnoozeReminder();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [addReminderOpen, setAddReminderOpen] = useState(false);
 
@@ -55,7 +59,7 @@ export function OverviewRemindersCard() {
 
   const rows = reminders.data?.items ?? [];
   const hasRows = rows.length > 0;
-  const actionsDisabled = completeReminder.isPending || snoozeReminder.isPending;
+  const actionsDisabled = completeReminder.isPending || snoozeReminder.isPending || unsnoozeReminder.isPending;
   const nowMs = Date.now();
 
   const handleComplete = async (id: string) => {
@@ -72,6 +76,15 @@ export function OverviewRemindersCard() {
     const until = new Date(Date.now() + SNOOZE_DURATION_MS).toISOString();
     try {
       await snoozeReminder.mutateAsync({ id, until });
+    } finally {
+      setBusyId(current => (current === id ? null : current));
+    }
+  };
+
+  const handleUnsnooze = async (id: string) => {
+    setBusyId(id);
+    try {
+      await unsnoozeReminder.mutateAsync({ id });
     } finally {
       setBusyId(current => (current === id ? null : current));
     }
@@ -128,14 +141,25 @@ export function OverviewRemindersCard() {
                     ) : null}
                   </div>
                   <div className="reminders-row-actions">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void handleSnooze(row.id)}
-                      disabled={actionsDisabled}
-                    >
-                      {busyId === row.id && snoozeReminder.isPending ? "Snoozing..." : "Snooze 1d"}
-                    </Button>
+                    {isSnoozed ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void handleUnsnooze(row.id)}
+                        disabled={actionsDisabled}
+                      >
+                        {busyId === row.id && unsnoozeReminder.isPending ? "Unsnoozed..." : "Unsnooze"}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void handleSnooze(row.id)}
+                        disabled={actionsDisabled}
+                      >
+                        {busyId === row.id && snoozeReminder.isPending ? "Snoozing..." : "Snooze 1d"}
+                      </Button>
+                    )}
                     <Button size="sm" onClick={() => void handleComplete(row.id)} disabled={actionsDisabled}>
                       {busyId === row.id && completeReminder.isPending ? "Completing..." : "Complete"}
                     </Button>

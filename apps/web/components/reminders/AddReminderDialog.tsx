@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -51,14 +51,25 @@ function inferMeridiem(localValue: string): "AM" | "PM" {
   return hour24 >= 12 ? "PM" : "AM";
 }
 
+function getNowLocalMin() {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
 export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminderDialogProps) {
   const createReminder = useCreateReminder();
   const [title, setTitle] = useState("");
+  const [minDateTime, setMinDateTime] = useState(getNowLocalMin);
   const [note, setNote] = useState("");
   const [dueAtLocal, setDueAtLocal] = useState("");
   const [dueMeridiem, setDueMeridiem] = useState<"AM" | "PM">("AM");
   const [remindOffsetDays, setRemindOffsetDays] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) setMinDateTime(getNowLocalMin());
+  }, [open]);
 
   const resetForm = () => {
     setTitle("");
@@ -171,6 +182,7 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
                   id="reminder-due"
                   type="datetime-local"
                   value={dueAtLocal}
+                  min={minDateTime}
                   onChange={event => {
                     const nextValue = event.target.value;
                     setDueAtLocal(nextValue);
