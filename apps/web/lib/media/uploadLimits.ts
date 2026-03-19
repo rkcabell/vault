@@ -12,6 +12,7 @@ const DOCUMENT_MIME_PREFIXES = [
   "application/vnd.ms-excel",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument",
+  "application/vnd.oasis.opendocument",
   "text/",
 ];
 
@@ -24,6 +25,11 @@ const DOCUMENT_MIME_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/epub+zip",
+  "application/vnd.oasis.opendocument.text",
+  "application/vnd.oasis.opendocument.spreadsheet",
+  "application/vnd.oasis.opendocument.presentation",
+  "application/json",
   "text/csv",
   "text/plain",
 ]);
@@ -32,6 +38,7 @@ const DOCUMENT_EXTENSIONS = new Set([
   ".csv",
   ".doc",
   ".docx",
+  ".epub",
   ".pdf",
   ".ppt",
   ".pptx",
@@ -39,6 +46,14 @@ const DOCUMENT_EXTENSIONS = new Set([
   ".txt",
   ".xls",
   ".xlsx",
+  ".json",
+  ".md",
+  ".html",
+  ".htm",
+  ".xml",
+  ".odt",
+  ".odp",
+  ".ods",
 ]);
 
 export const UPLOAD_LIMIT_LABELS: Record<UploadKind, string> = {

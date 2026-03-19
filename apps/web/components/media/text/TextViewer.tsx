@@ -82,7 +82,7 @@ export function TextViewer (props: {
             </div>
 
             <div className='flex min-w-0 flex-1 flex-wrap items-center gap-2'>
-              <div className='flex min-w-[220px] flex-1 items-center gap-2 rounded-md border bg-background px-2'>
+              <div className='flex min-w-0 flex-1 items-center gap-2 rounded-md border bg-background px-2'>
                 <Search className='h-4 w-4 text-muted-foreground' />
                 <Input
                   value={searchTerm}

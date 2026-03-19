@@ -52,7 +52,7 @@ function inferMeridiem(localValue: string): "AM" | "PM" {
 }
 
 function getNowLocalMin() {
-  const now = new Date();
+  const now = new Date(Date.now() + 60_000);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
@@ -215,11 +215,13 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
                 id="reminder-offset"
                 type="number"
                 min={0}
+                max={3650}
                 step={1}
                 inputMode="numeric"
                 placeholder="Leave empty for default"
                 value={remindOffsetDays}
                 onChange={event => setRemindOffsetDays(event.target.value)}
+                onKeyDown={e => { if (['e', 'E', '-', '+'].includes(e.key)) e.preventDefault(); }}
                 disabled={createReminder.isPending}
               />
             </div>

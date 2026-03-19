@@ -93,13 +93,14 @@ services:
       WATCHPACK_POLLING_INTERVAL: "500"
     ports: [ "3000:3000" ]
 
-  jobs:
+  jobs-ocr:
     env_file:
       - ../../.env.docker
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile
       target: jobs
+    command: npm run -w apps/api worker:ocr:dev
     depends_on:
       - api
     working_dir: /app
@@ -119,6 +120,51 @@ services:
       S3_FORCE_PATH_STYLE: "true"
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "500"
+      # Tune concurrency and lock timing without rebuilding the image.
+      # LOW_MEMORY=true halves all concurrency defaults (OCR: 4→2, Thumb: 8→4).
+      # OCR_CONCURRENCY overrides the default (or LOW_MEMORY default) explicitly.
+      # OCR_LOCK_DURATION_MS defaults to 1800000 (30 min) for large PDFs.
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  jobs-thumb:
+    env_file:
+      - ../../.env.docker
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: jobs
+    command: npm run -w apps/api worker:thumb:dev
+    depends_on:
+      - api
+    working_dir: /app
+    volumes:
+      - ../..:/app
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+      POSTGRES_URL: postgresql://vault:vault@postgres:5432/vault
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY_ID: vault
+      S3_SECRET_ACCESS_KEY: vaultvault
+      S3_BUCKET: vault-media
+      S3_REGION: us-east-1
+      S3_FORCE_PATH_STYLE: "true"
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "500"
+      # LOW_MEMORY=true halves all concurrency defaults (OCR: 4→2, Thumb: 8→4).
+      # THUMB_CONCURRENCY overrides the default (or LOW_MEMORY default) explicitly.
+      # Raise on hosts with more CPU; lower if S3 upload bandwidth is the bottleneck.
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
 volumes:
   minio:

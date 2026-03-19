@@ -176,7 +176,7 @@ export default function BundleDetailPage() {
                 onClick={() => { void toggleStar(); }}
                 disabled={isStarring}
                 aria-label={bundle.starred ? 'Unstar bundle' : 'Star bundle'}
-                className="shrink-0 text-muted-foreground hover:text-yellow-500 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-1"
+                className="shrink-0 h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-yellow-500 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
               >
                 <Star
                   className={cn(
@@ -274,6 +274,7 @@ export default function BundleDetailPage() {
             setBundle(prev => prev ? { ...prev, ...updated } : prev);
             setShowEditModal(false);
           }}
+          onDeleted={() => router.push('/bundles' as Route)}
         />
       )}
 

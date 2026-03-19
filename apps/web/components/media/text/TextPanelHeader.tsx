@@ -24,12 +24,14 @@ export function TextPanelHeader (props: {
   } = props
 
   const languageBadgeLabel = showMetadata
-    ? (languageStatus === 'error' ? 'Error' : languageLabel ?? null)
+    ? (languageStatus === 'error' ? 'Unknown language' : languageLabel ?? null)
     : null
   const languageVariant =
-    languageStatus === 'error' ? 'destructive' : 'outline'
+    languageStatus === 'error' ? 'outline' : 'outline'
   const languageTitle =
-    languageStatus === 'short'
+    languageStatus === 'error'
+      ? 'Language could not be detected.'
+      : languageStatus === 'short'
       ? languageOverride
         ? 'Short sample (<100 characters). Using selected language.'
         : 'Short sample (<100 characters). Detection may be inaccurate.'

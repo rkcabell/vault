@@ -45,6 +45,7 @@ export function MediaTextPanel (props: {
   id: string
   textState: MediaWorkerState | null | undefined
   textError?: string | null
+  mimeType?: string | null
   document: MediaDocument | null | undefined
   highlightTerms: string[]
   refreshKey: number
@@ -56,6 +57,7 @@ export function MediaTextPanel (props: {
     id,
     textState: mediaTextState,
     textError,
+    mimeType,
     document,
     highlightTerms,
     refreshKey,
@@ -116,6 +118,27 @@ export function MediaTextPanel (props: {
   const canShowViewer = isTextReady && hasAnyText && !showEmptyState
   const isCopyDisabled =
     !isTextReady || isCopying || textTotalLength === 0 || placeholder
+
+  const m = mimeType?.toLowerCase() ?? ''
+  const mimeUnsupported = Boolean(m) && !m.startsWith('image/') && !m.includes('pdf')
+
+  if (mimeUnsupported) {
+    return (
+      <Card>
+        <CardContent className='space-y-4'>
+          <TextPanelHeader
+            statusChip={{ label: 'Not supported', variant: 'secondary' }}
+            sourceLabel={null}
+            lastUpdatedText={null}
+            showMetadata={false}
+          />
+          <p className='text-sm text-muted-foreground'>
+            Text extraction is not available for this file type.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
 
   const statusChip = getStatusChip({ isErrorState, isRunning, canShowViewer })
   const sourceChipLabel = formatSourceChipLabel(textSource)

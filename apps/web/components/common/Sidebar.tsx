@@ -125,7 +125,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
 
   if (isLoading) {
     return (
-      <aside className={cn('w-64 border-r bg-background rounded-b-2xl', className)}>
+      <aside className={cn('w-64 h-full border-r bg-background rounded-b-2xl', className)}>
         <div className="flex h-full items-center justify-center">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
@@ -134,7 +134,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
   }
 
   return (
-    <aside className={cn('w-64 border-r bg-background rounded-b-2xl', className)}>
+    <aside className={cn('w-64 h-full border-r bg-background rounded-b-2xl', className)}>
       <ConfirmPopover
         open={confirmState !== null}
         x={confirmState?.x ?? 0}

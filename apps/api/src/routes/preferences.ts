@@ -13,6 +13,7 @@ const preferencesSchema = z
     extractMetadata: z.boolean().optional(),
     detectDuplicates: z.boolean().optional(),
     collapseMetadataByDefault: z.boolean().optional(),
+    lowMemoryMode: z.boolean().optional(),
     soonWindowDays: z.number().int().min(2).max(14).optional(),
     themePreference: z.enum(["system", "light", "dark"]).optional(),
     lightTheme: z.string().optional(),

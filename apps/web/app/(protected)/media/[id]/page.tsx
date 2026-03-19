@@ -69,11 +69,10 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
 
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [isEmailing, setIsEmailing] = useState(false);
   const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);
 
   const title = media?.title || media?.filename || "Media details";
-  const busy = isDeleting || isDownloading || isEmailing;
+  const busy = isDeleting || isDownloading;
   useEffect(() => {
     const es = new EventSource("/api/media/events");
 
@@ -131,25 +130,7 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
     }
   };
 
-  // Keep email short and synchronous; link to the Vault page (mail clients + URL length issues)
-  const handleEmail = () => {
-    if (busy) return;
-    setIsEmailing(true);
-    setErrorMessage(null);
-    try {
-      const subject = `Vault file: ${title}`;
-      const pageLink = `${window.location.origin}/media/${id}`;
-      const body = [`Here is a file from Vault.`, "", `Title: ${title}`, `Filename: ${media?.filename ?? "N/A"}`, `Link: ${pageLink}`].join("\n");
-      window.location.assign(`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unable to prepare email.";
-      setErrorMessage(msg);
-    } finally {
-      setIsEmailing(false);
-    }
-  };
-
-  const handleDelete = (e: React.MouseEvent) => {
+const handleDelete = (e: React.MouseEvent) => {
     if (isDeleting) return;
     setConfirmState({ x: e.clientX, y: e.clientY });
   };
@@ -274,6 +255,7 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
                   id={id}
                   textState={media.textState}
                   textError={media.textError}
+                  mimeType={media.mimeType}
                   document={document}
                   highlightTerms={highlightTerms}
                   refreshKey={0}
@@ -300,7 +282,6 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
                 <MediaInfoCard
                   busy={busy}
                   onDownload={handleDownload}
-                  onEmail={handleEmail}
                   onDelete={handleDelete}
                   onRegenerateThumbnail={handleRegenerateThumbnail}
                 />

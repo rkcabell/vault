@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Input } from "@/components/ui/Input";
 import { TagChip } from "@/components/ui/TagChip";
@@ -18,6 +18,7 @@ function splitInput(value: string): string[] {
 }
 
 export function TagEditor({ tags, onSave, disabled }: TagEditorProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
   const [tagInput, setTagInput] = useState("");
   const [localTags, setLocalTags] = useState<string[]>(tags);
   const [error, setError] = useState<string | null>(null);
@@ -46,22 +47,31 @@ export function TagEditor({ tags, onSave, disabled }: TagEditorProps) {
     if (disabled || isSaving) return localTags;
     const pending = splitInput(tagInput);
     if (pending.length === 0) return localTags;
-    const next = normalizeTags([...localTags, ...pending]);
+    let next: string[];
+    try {
+      const normalizedPending = normalizeTags(pending);
+      const duplicates = normalizedPending.filter(t => localTags.includes(t));
+      if (duplicates.length > 0) {
+        setError(`Tag already added: ${duplicates.join(", ")}`);
+        return localTags;
+      }
+      next = normalizeTags([...localTags, ...normalizedPending]);
+    } catch (err) {
+      if (err instanceof TagValidationError) setError(err.message);
+      return localTags;
+    }
     setLocalTags(next);
     setTagInput("");
     setError(null);
     await applyTags(next);
+    inputRef.current?.focus();
     return next;
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter" || event.key === "," || event.key === "Tab") {
       event.preventDefault();
-      try {
-        void commitInput();
-      } catch (err) {
-        if (err instanceof TagValidationError) setError(err.message);
-      }
+      void commitInput();
     }
   };
 
@@ -86,18 +96,13 @@ export function TagEditor({ tags, onSave, disabled }: TagEditorProps) {
 
       <div className="flex gap-2">
         <Input
+          ref={inputRef}
           value={tagInput}
           onChange={e => setTagInput(e.target.value)}
-          onBlur={() => {
-            try {
-              void commitInput();
-            } catch (err) {
-              if (err instanceof TagValidationError) setError(err.message);
-            }
-          }}
+          onBlur={() => { void commitInput(); }}
           onKeyDown={handleKeyDown}
           placeholder="Add tags (comma-separated)"
-          disabled={disabled || isSaving}
+          disabled={disabled}
         />
       </div>
 

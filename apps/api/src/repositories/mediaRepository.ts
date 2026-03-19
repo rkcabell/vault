@@ -51,9 +51,26 @@ export class MediaRepository {
   async listMedia (filters: MediaListFilters) {
     const { userId, queryText, tags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor } = filters;
 
+    // Tag filtering is case-insensitive so that existing items tagged "PNG"
+    // match the normalized filter value "png". Resolve matching IDs first via
+    // raw SQL (Prisma's hasEvery uses a case-sensitive Postgres @> operator),
+    // then pass those IDs into the main ORM query.
+    let tagFilterIds: string[] | null = null;
+    if (tags?.length) {
+      const placeholders = tags.map((_, i) => `$${i + 2}`).join(", ");
+      const rows = await this.prisma.$queryRawUnsafe<{ id: string }[]>(
+        `SELECT id FROM "Media" WHERE "userId" = $1 AND ARRAY(SELECT lower(t) FROM unnest("tags") AS t) @> ARRAY[${placeholders}]::text[]`,
+        userId,
+        ...tags,
+      );
+      tagFilterIds = rows.map(r => r.id);
+      if (tagFilterIds.length === 0) return [];
+    }
+
     return this.prisma.media.findMany({
       where: {
         userId,
+        ...(tagFilterIds !== null ? { id: { in: tagFilterIds } } : {}),
         ...(queryText
           ? {
               OR: [
@@ -62,7 +79,6 @@ export class MediaRepository {
               ],
             }
           : {}),
-        ...(tags?.length ? { tags: { hasEvery: tags } } : {}),
         ...(thumbState ? { thumbState } : {}),
         ...(textState ? { textState } : {}),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),

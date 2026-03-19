@@ -235,7 +235,10 @@ export default function LibraryPageInner() {
 
       if (!silent) {
         if (append) setIsLoadingMore(true);
-        else setIsLoading(true);
+        else {
+          setIsLoading(true);
+          setMediaItems([]);
+        }
       }
 
       if (process.env.NODE_ENV === "development") {
@@ -291,17 +294,15 @@ export default function LibraryPageInner() {
     [buildQuery, hydrateItems]
   );
 
-  // Handle /library?refresh=1 or ?uploaded=1
+  // Handle /library?refresh=1 or ?uploaded=1.
   useEffect(() => {
     const refresh = searchParams.get("refresh") ?? searchParams.get("uploaded");
     if (refresh) {
       setRefreshToken((v) => v + 1);
-
       const next = new URLSearchParams(searchParams.toString());
       next.delete("refresh");
       next.delete("uploaded");
       const nextQuery = next.toString();
-
       router.replace(nextQuery ? `${LIBRARY_PATH}?${nextQuery}` : LIBRARY_PATH);
     }
     setHasHandledRefreshParam(true);
@@ -312,7 +313,14 @@ export default function LibraryPageInner() {
     fetchMedia();
   }, [fetchMedia, hasHandledRefreshParam, q, refreshToken, sort, tag, textState, thumbState]);
 
-  // SSE: receive job-state updates pushed from the server instead of polling
+  // Keep a stable ref to the latest fetchMedia so the SSE effect never needs
+  // to re-run (and reconnect) just because gridCols or sort changed.
+  const fetchMediaRef = useRef(fetchMedia);
+  useEffect(() => { fetchMediaRef.current = fetchMedia; }, [fetchMedia]);
+
+  // SSE: receive job-state updates pushed from the server instead of polling.
+  // Empty deps — mounts once. Uses fetchMediaRef so it always calls the latest
+  // version without causing reconnects on every buildQuery/gridCols change.
   useEffect(() => {
     const es = new EventSource("/api/media/events");
 
@@ -320,7 +328,7 @@ export default function LibraryPageInner() {
     // re-fetch to catch any items that finished processing in the window between
     // the initial fetchMedia call and the SSE listener being registered.
     es.onopen = () => {
-      fetchMedia({ silent: true });
+      fetchMediaRef.current({ silent: true });
     };
 
     es.onmessage = (e: MessageEvent<string>) => {
@@ -341,11 +349,11 @@ export default function LibraryPageInner() {
 
     // On reconnect after a gap, re-fetch the full list to catch any missed updates
     es.onerror = () => {
-      fetchMedia({ silent: true });
+      fetchMediaRef.current({ silent: true });
     };
 
     return () => es.close();
-  }, [fetchMedia]);
+  }, []);
 
   const handleUploadClick = useCallback(() => {
     router.push("/upload");
@@ -600,7 +608,7 @@ export default function LibraryPageInner() {
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <input
-              type="search"
+              type="text"
               placeholder="Filter by title..."
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
@@ -659,7 +667,6 @@ export default function LibraryPageInner() {
 
           {DevPurgeButton && viewMode === "grid" && (
             <DevPurgeButton
-              buildQuery={buildQuery}
               onSuccess={() => { setMediaItems([]); setNextCursor(null); setError(null); emitTagsUpdated(); emitBundlesUpdated(); }}
               onError={setError}
             />
@@ -707,7 +714,7 @@ export default function LibraryPageInner() {
 
       {/* Unified drag-drop wrapper + overlay (single overlay, no custom globals needed) */}
       <div
-        className="relative"
+        className={isSelectMode && selectedIds.size > 0 ? "relative pb-20" : "relative"}
         onDragEnter={onDragEnter}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}

@@ -6,6 +6,7 @@ import type { S3Adapter } from "../../adapters/s3Adapter.js";
 import { deriveTitle } from "../../lib/media/deriveTitle.js";
 import { makeStorageKey } from "../../lib/media/keys.js";
 import { buildMimeTypeTag, normalizeMimeType } from "../../lib/tags/mimeTypeTag.js";
+import { normalizeTags } from "../../lib/tags/normalizeTags.js";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import {
   enqueueThumbBulk,
@@ -58,7 +59,7 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
     const id = crypto.randomUUID();
     const storageKey = makeStorageKey(userId, id, body.filename);
     const mimeType = normalizeMimeType(body.mimeType, body.filename);
-    const mimeTag = buildMimeTypeTag(mimeType, body.filename);
+    const mimeTag = normalizeTags(buildMimeTypeTag(mimeType, body.filename))[0]!;
     const uniqueTags = Array.from(
       new Set([...(body.tags ?? []), mimeTag]),
     );
@@ -97,7 +98,7 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
       const id = crypto.randomUUID();
       const storageKey = makeStorageKey(userId, id, item.filename);
       const mimeType = normalizeMimeType(item.mimeType, item.filename);
-      const mimeTag = buildMimeTypeTag(mimeType, item.filename);
+      const mimeTag = normalizeTags(buildMimeTypeTag(mimeType, item.filename))[0]!;
       const itemTags = Array.from(
         new Set([...(item.tags ?? []), mimeTag]),
       );

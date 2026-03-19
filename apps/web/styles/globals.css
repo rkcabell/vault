@@ -32,6 +32,10 @@
 
 @layer base {
   :root {
+    --color-destructive-hover: #b91c1c;
+    --color-destructive-item-hover-bg: #fee2e2;
+    --color-destructive-item-hover-text: #b91c1c;
+
     --background: 240 5% 99%;
     --foreground: 0 0% 3.9%;
 
@@ -53,7 +57,7 @@
     --muted: 240 4% 94%;
     --muted-foreground: 0 0% 35%;
 
-    --accent: 240 4% 94%;
+    --accent: 240 4% 85%;
     --accent-foreground: 0 0% 9%;
 
     --destructive: 0 84.2% 60.2%;
@@ -129,6 +133,10 @@
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
 
+    --color-destructive-hover: #ef4444;
+    --color-destructive-item-hover-bg: rgba(69, 10, 10, 0.7);
+    --color-destructive-item-hover-text: #fca5a5;
+
     --border: 0 0% 14.9%;
     --input: 0 0% 14.9%;
     --ring: 0 0% 83.1%;
@@ -146,7 +154,7 @@
     --card: 36 60% 95%;
     --secondary: 36 28% 89%;
     --muted: 36 28% 89%;
-    --accent: 36 28% 89%;
+    --accent: 36 32% 85%;
     --primary: 36 68% 22%;
     --primary-foreground: 0 0% 98%;
     --color-primary: hsl(36 68% 22%);
@@ -162,7 +170,7 @@
     --card: 28 55% 82%;
     --secondary: 28 42% 75%;
     --muted: 28 42% 75%;
-    --accent: 28 42% 75%;
+    --accent: 28 46% 69%;
     --primary: 28 72% 24%;
     --primary-foreground: 0 0% 98%;
     --color-primary: hsl(28 72% 24%);
@@ -178,7 +186,7 @@
     --card: 202 28% 94%;
     --secondary: 202 18% 90%;
     --muted: 202 18% 90%;
-    --accent: 202 18% 90%;
+    --accent: 202 24% 81%;
     --primary: 202 62% 20%;
     --primary-foreground: 0 0% 98%;
     --color-primary: hsl(202 62% 20%);
@@ -194,7 +202,7 @@
     --card: 263 28% 94%;
     --secondary: 263 18% 90%;
     --muted: 263 18% 90%;
-    --accent: 263 18% 90%;
+    --accent: 263 22% 81%;
     --primary: 263 52% 24%;
     --primary-foreground: 0 0% 98%;
     --color-primary: hsl(263 52% 24%);
@@ -210,7 +218,7 @@
     --card: 335 34% 95%;
     --secondary: 335 22% 91%;
     --muted: 335 22% 91%;
-    --accent: 335 22% 91%;
+    --accent: 335 32% 82%;
     --primary: 335 62% 24%;
     --primary-foreground: 0 0% 98%;
     --color-primary: hsl(335 62% 24%);
@@ -242,7 +250,7 @@
     --card: 145 26% 92%;
     --secondary: 150 14% 88%;
     --muted: 150 14% 88%;
-    --accent: 152 36% 85%;
+    --accent: 152 42% 76%;
     --primary: 148 52% 18%;
     --primary-foreground: 0 0% 98%;
     --color-primary: hsl(148 52% 18%);
@@ -280,8 +288,8 @@
     --input: 130 26% 46%;
 
     /* Reminder status — dark enough to pass WCAG AA on the garden green background */
-    --reminder-today: #78350f;     /* amber-900  ~5.3:1 */
-    --reminder-overdue: #7f1d1d;   /* red-950    ~5.7:1 */
+    --reminder-today: #b45309;     /* amber-700  — warm orange, clearly distinct from overdue */
+    --reminder-overdue: #991b1b;   /* red-800    — clearly red */
     --reminder-snoozed: #1e3a5f;   /* navy       ~7.0:1 */
   }
 
@@ -379,6 +387,32 @@
     background-color: hsl(var(--page-background));
     color: hsl(var(--foreground));
   }
+}
+
+/* --------------------------------------
+   Thin themed scrollbar utility
+   ------------------------------------ */
+.vault-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border)) transparent;
+}
+
+.vault-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.vault-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.vault-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 9999px;
+}
+
+.vault-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
 }
 
 /* --------------------------------------
@@ -643,10 +677,9 @@ html.dark .theme-toggle {
 }
 
 /* Apply this to the thumbnail card/container */
+
 .media-item {
   overflow: hidden;
-  border-radius: 12px;
-  /* optional */
   transition: transform 160ms ease, box-shadow 160ms ease;
   will-change: transform;
 }
@@ -1348,8 +1381,9 @@ html.dark.theme-matrix input[type="datetime-local"]::-webkit-calendar-picker-ind
    ------------------------------------ */
 .nav-overdue-badge {
   position: absolute;
-  top: 0.25rem;
-  right: 0.125rem;
+  top: 50%;
+  right: 0.25rem;
+  transform: translateY(-50%);
   min-width: 1.125rem;
   height: 1.125rem;
   padding: 0 0.3rem;

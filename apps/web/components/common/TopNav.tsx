@@ -173,7 +173,7 @@ export function TopNav({ onMenuClick }: TopNavProps) {
                   : 'text-muted-foreground'
               )}
             >
-              {link.label}
+              <span className={link.href === '/reminders' && overdueCount > 0 ? 'pr-4' : ''}>{link.label}</span>
               {link.href === '/reminders' && overdueCount > 0 && (
                 <span className="nav-overdue-badge">{overdueCount}</span>
               )}

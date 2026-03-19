@@ -69,11 +69,11 @@ function BundleCard({
             <img
               src={coverSrc}
               alt={bundle.name}
-              className="h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
+              className="h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-115"
               loading="lazy"
             />
           ) : (
-            <div className="flex h-full w-full items-center justify-center">
+            <div className="flex h-full w-full items-center justify-center transition-transform duration-300 ease-out group-hover:scale-115">
               <FallbackIcon className="h-12 w-12 text-muted-foreground/40" />
             </div>
           )}
@@ -227,6 +227,7 @@ export default function BundlesPage() {
           open={editingBundle !== null}
           onOpenChange={open => { if (!open) setEditingBundle(null); }}
           onSaved={handleEditSaved}
+          onDeleted={id => { setBundles(prev => prev.filter(b => b.id !== id)); setEditingBundle(null); }}
         />
       )}
 

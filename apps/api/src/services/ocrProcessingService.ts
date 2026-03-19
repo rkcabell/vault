@@ -100,6 +100,17 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
     return;
   }
 
+  const mimeTypeLower = media.mimeType?.toLowerCase() ?? "";
+  const isOcrSupported = mimeTypeLower === "" || mimeTypeLower.startsWith("image/") || mimeTypeLower.includes("pdf");
+  if (!isOcrSupported) {
+    logger.info({ ...logContext, mimeType: media.mimeType }, "ocr skipped: mime type not supported for text extraction");
+    await mediaRepository.setTextState(mediaId, "ERROR");
+    if (data.userId) {
+      deps.publishJobUpdate?.({ userId: data.userId, mediaId, field: "textState", value: "ERROR" });
+    }
+    return;
+  }
+
   const key = storageKey ?? media.storageKey;
   const timeoutMs = deps.timeoutMs ?? computeOcrTimeout(media.sizeBytes ?? 0);
   logger.info({ ...logContext, key, mimeType: media.mimeType, timeoutMs }, "media loaded");

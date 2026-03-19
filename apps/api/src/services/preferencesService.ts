@@ -8,6 +8,7 @@ export type Preferences = {
   extractMetadata: boolean;
   detectDuplicates: boolean;
   collapseMetadataByDefault: boolean;
+  lowMemoryMode: boolean;
   soonWindowDays: number;
   themePreference: "system" | "light" | "dark";
   lightTheme: string;
@@ -22,6 +23,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   extractMetadata: true,
   detectDuplicates: false,
   collapseMetadataByDefault: true,
+  lowMemoryMode: false,
   soonWindowDays: 7,
   themePreference: "system",
   lightTheme: "default",

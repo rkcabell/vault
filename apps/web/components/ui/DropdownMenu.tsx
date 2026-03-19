@@ -29,15 +29,15 @@ DropdownMenuContent.displayName = DropdownMenuPrimitive.Content.displayName;
 
 const DropdownMenuItem = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item>
->(({ className, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> & { variant?: "default" | "destructive" }
+>(({ className, variant = "default", ...props }, ref) => (
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
       "relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none transition-colors",
-      "hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground",
-      "data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      variant === "default" && "hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
+      variant === "destructive" && "text-[#dc2626] dark:text-[#f87171] hover:bg-[var(--color-destructive-item-hover-bg)] hover:text-[var(--color-destructive-item-hover-text)] data-[highlighted]:bg-[var(--color-destructive-item-hover-bg)] data-[highlighted]:text-[var(--color-destructive-item-hover-text)]",
       className
     )}
     {...props}
