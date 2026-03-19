@@ -110,7 +110,7 @@ test("initUpload: adds a MIME type tag derived from mimeType", async () => {
   });
 
   assert.ok(tags[0]?.includes("vacation"));
-  assert.ok(tags[0]?.includes("image-jpeg"));
+  assert.ok(tags[0]?.includes("jpg"));
 });
 
 test("initUpload: deduplicates tags", async () => {

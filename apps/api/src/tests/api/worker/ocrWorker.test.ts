@@ -76,6 +76,7 @@ function mockOcrDeps (): OcrDeps {
     s3,
     bucket: "test-bucket",
     enqueueOcr: async () => {},
+    sleep: async () => {},
     textDeps: {
       getObjectBuffer: async () => Buffer.from("image-bytes"),
       ocrWithOcrmypdf: async () => ({ ocrPdf: buildMinimalPdf("mock OCR text") }),
