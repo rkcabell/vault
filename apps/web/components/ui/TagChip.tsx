@@ -44,7 +44,7 @@ export function TagChip({
     <div
       className={cn(
         tagChipVariants({ variant }),
-        onRemove && "group relative pr-2 transition-all hover:pr-6",
+        onRemove && "group relative pr-2 transition-[padding] duration-200 delay-100 hover:pr-6 hover:delay-0",
         className,
       )}
       onClick={onClick}
@@ -55,7 +55,7 @@ export function TagChip({
         <button
           type="button"
           onClick={handleRemove}
-          className="absolute right-1 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-all hover:bg-foreground/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 group-hover:opacity-100"
+          className="absolute right-1 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground opacity-0 duration-0 transition-opacity hover:bg-foreground/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 group-hover:opacity-100 group-hover:duration-75"
           aria-label="Remove tag"
         >
           <X className="h-3 w-3" />

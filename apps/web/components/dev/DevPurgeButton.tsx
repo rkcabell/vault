@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/Button";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 
 type Props = {
-  buildQuery: (cursor?: string) => string;
   onSuccess: () => void;
   onError: (message: string) => void;
 };
@@ -25,7 +24,7 @@ async function readErrorMessage(response: Response) {
   return `Failed to load media (${response.status})`;
 }
 
-export default function DevPurgeButton({ buildQuery, onSuccess, onError }: Props) {
+export default function DevPurgeButton({ onSuccess, onError }: Props) {
   const [isPurging, setIsPurging] = useState(false);
   const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);
 
@@ -34,8 +33,8 @@ export default function DevPurgeButton({ buildQuery, onSuccess, onError }: Props
     try {
       let cursor: string | null = null;
       do {
-        const params = new URLSearchParams(buildQuery(cursor ?? undefined));
-        params.set("limit", "100");
+        const params = new URLSearchParams({ limit: "100" });
+        if (cursor) params.set("cursor", cursor);
         const res = await fetch(`/api/media?${params.toString()}`, {
           method: "GET",
           credentials: "include",

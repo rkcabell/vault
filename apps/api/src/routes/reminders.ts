@@ -66,7 +66,7 @@ const createReminderSchema = z
     note: z.string().trim().max(5000).nullable().optional(),
     mediaId: z.string().uuid().nullable().optional(),
     dueAt: dateSchema,
-    remindOffsetDays: z.number().int().min(0).nullable().optional(),
+    remindOffsetDays: z.number().int().min(0).max(3650).nullable().optional(),
     rrule: z.string().trim().min(1).max(1000).nullable().optional(),
   })
   .strict();
@@ -77,7 +77,7 @@ const updateReminderSchema = z
     note: z.string().trim().max(5000).nullable().optional(),
     mediaId: z.string().uuid().nullable().optional(),
     dueAt: dateSchema.optional(),
-    remindOffsetDays: z.number().int().min(0).nullable().optional(),
+    remindOffsetDays: z.number().int().min(0).max(3650).nullable().optional(),
     rrule: z.string().trim().min(1).max(1000).nullable().optional(),
   })
   .strict()

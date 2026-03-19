@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 export type LightTheme = "default" | "latte" | "solarize" | "mist" | "lavender" | "dream" | "cotton-candy" | "mint" | "garden";
 export type DarkTheme = "new-moon" | "matrix" | "charcoal";
@@ -13,6 +13,7 @@ export type Preferences = {
   extractMetadata: boolean;
   detectDuplicates: boolean;
   collapseMetadataByDefault: boolean;
+  lowMemoryMode: boolean;
   soonWindowDays: number;
   themePreference: "system" | "light" | "dark";
   lightTheme: LightTheme;
@@ -27,6 +28,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   extractMetadata: true,
   detectDuplicates: false,
   collapseMetadataByDefault: true,
+  lowMemoryMode: false,
   soonWindowDays: 7,
   themePreference: "system",
   lightTheme: "default",
@@ -41,6 +43,7 @@ const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
   extractMetadata: "prefs:extractMetadata",
   detectDuplicates: "prefs:detectDuplicates",
   collapseMetadataByDefault: "prefs:collapseMetadataByDefault",
+  lowMemoryMode: "prefs:lowMemoryMode",
   soonWindowDays: "prefs:soonWindowDays",
   themePreference: "prefs:themePreference",
   lightTheme: "prefs:lightTheme",
@@ -70,6 +73,9 @@ function readFromLocalStorage(): Partial<Preferences> {
 
     const collapseMeta = localStorage.getItem("prefs:collapseMetadataByDefault");
     if (collapseMeta !== null) out.collapseMetadataByDefault = collapseMeta === "true";
+
+    const lowMemory = localStorage.getItem("prefs:lowMemoryMode");
+    if (lowMemory !== null) out.lowMemoryMode = lowMemory === "true";
 
     const soonWindowDays = Number(localStorage.getItem("prefs:soonWindowDays"));
     if (soonWindowDays >= 2 && soonWindowDays <= 14) out.soonWindowDays = soonWindowDays;
@@ -163,17 +169,22 @@ export function hydratePreferences(prefs: Partial<Preferences>) {
   _notify();
 }
 
-export function usePreferences() {
-  const [, rerender] = useState(0);
+function _subscribe(callback: () => void) {
+  _listeners.add(callback);
+  return () => { _listeners.delete(callback); };
+}
 
-  useEffect(() => {
-    _initOnce();
-    const listener = () => rerender(n => n + 1);
-    _listeners.add(listener);
-    // Trigger a render now in case init already completed before we subscribed
-    rerender(n => n + 1);
-    return () => { _listeners.delete(listener); };
-  }, []);
+function _getSnapshot() {
+  if (!_initialized) _initOnce();
+  return _prefs;
+}
+
+function _getServerSnapshot() {
+  return DEFAULT_PREFERENCES;
+}
+
+export function usePreferences() {
+  const prefs = useSyncExternalStore(_subscribe, _getSnapshot, _getServerSnapshot);
 
   const updatePreferences = useCallback((patch: Partial<Preferences>) => {
     _set(patch);
@@ -181,5 +192,5 @@ export function usePreferences() {
     _debouncedSave(patch); // batches rapid slider changes; flushes 600ms after last call
   }, []);
 
-  return { prefs: _prefs, isLoaded: _isLoaded, updatePreferences };
+  return { prefs, isLoaded: _isLoaded, updatePreferences };
 }

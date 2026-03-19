@@ -12,9 +12,10 @@ export interface EditBundleModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: (updated: Partial<BundleListItem> & { id: string }) => void;
+  onDeleted?: (id: string) => void;
 }
 
-export function EditBundleModal({ bundle, open, onOpenChange, onSaved }: EditBundleModalProps) {
+export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted }: EditBundleModalProps) {
   const [name, setName] = useState(bundle.name);
   const [description, setDescription] = useState(bundle.description ?? '');
   const [starred, setStarred] = useState(bundle.starred);
@@ -22,10 +23,29 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved }: EditBun
   const [items, setItems] = useState<BundleDetail['items']>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState('');
+
+  const handleDelete = async () => {
+    setIsDeleting(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/bundles/${bundle.id}`, { method: 'DELETE', credentials: 'include' });
+      if (!res.ok) { setError('Failed to delete bundle.'); return; }
+      onDeleted?.(bundle.id);
+      onOpenChange(false);
+    } catch {
+      setError('Failed to delete bundle.');
+    } finally {
+      setIsDeleting(false);
+      setConfirmingDelete(false);
+    }
+  };
 
   useEffect(() => {
     if (open) {
+      setConfirmingDelete(false);
       setName(bundle.name);
       setDescription(bundle.description ?? '');
       setStarred(bundle.starred);
@@ -55,7 +75,7 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved }: EditBun
         body: JSON.stringify({ name: trimmed, description: description.trim() || null, starred, coverMediaId }),
       });
       if (!res.ok) { setError('Failed to save. Please try again.'); return; }
-      onSaved({ id: bundle.id, name: trimmed, starred, coverMediaId });
+      onSaved({ id: bundle.id, name: trimmed, description: description.trim() || null, starred, coverMediaId });
       onOpenChange(false);
     } catch {
       setError('Failed to save. Please try again.');
@@ -204,22 +224,59 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved }: EditBun
 
         {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
 
-        <DialogFooter>
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => { void handleSave(); }}
-            disabled={isSaving}
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            {isSaving ? 'Saving…' : 'Save'}
-          </button>
+        <DialogFooter className="flex-row items-center justify-between sm:justify-between">
+          {/* Delete — left side */}
+          <div className="flex items-center gap-2">
+            {confirmingDelete ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { void handleDelete(); }}
+                  disabled={isDeleting}
+                  className="inline-flex items-center justify-center rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-50"
+                >
+                  {isDeleting ? 'Deleting…' : 'Confirm delete'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(false)}
+                  disabled={isDeleting}
+                  className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(true)}
+                disabled={isSaving}
+                className="inline-flex items-center justify-center rounded-md border border-destructive px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 transition-colors"
+              >
+                Delete bundle
+              </button>
+            )}
+          </div>
+
+          {/* Save / Cancel — right side */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              disabled={isDeleting}
+              className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => { void handleSave(); }}
+              disabled={isSaving || isDeleting}
+              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {isSaving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

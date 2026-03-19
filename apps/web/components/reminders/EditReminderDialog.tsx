@@ -214,11 +214,13 @@ export function EditReminderDialog({ open, onOpenChange, reminder, onUpdated }: 
                 id="edit-reminder-offset"
                 type="number"
                 min={0}
+                max={3650}
                 step={1}
                 inputMode="numeric"
                 placeholder="Leave empty for default"
                 value={remindOffsetDays}
                 onChange={event => setRemindOffsetDays(event.target.value)}
+                onKeyDown={e => { if (['e', 'E', '-', '+'].includes(e.key)) e.preventDefault(); }}
                 disabled={updateReminder.isPending}
               />
             </div>

@@ -150,6 +150,7 @@ const GENERAL_PREF_KEYS = [
   "extractMetadata",
   "detectDuplicates",
   "collapseMetadataByDefault",
+  "lowMemoryMode",
   "soonWindowDays",
 ] as const;
 
@@ -206,6 +207,14 @@ function GeneralSettingsCard() {
           checked={prefs.collapseMetadataByDefault}
           disabled={!isLoaded}
           onChange={v => updatePreferences({ collapseMetadataByDefault: v })}
+        />
+        <SettingRow
+          id="low-memory-mode"
+          label="Low memory mode"
+          description="Halves thumbnail and text processing concurrency. Takes effect after docker restart."
+          checked={prefs.lowMemoryMode}
+          disabled={!isLoaded}
+          onChange={v => updatePreferences({ lowMemoryMode: v })}
         />
         <div className="flex items-start justify-between gap-6 py-3">
           <div className="space-y-0.5">

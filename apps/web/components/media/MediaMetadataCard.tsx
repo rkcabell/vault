@@ -125,6 +125,8 @@ export function MediaMetadataCard (props: {
   addRow(generalRows, 'Filename', media.filename, 'break-all')
   addRow(generalRows, 'Size', sizeLabel)
   addRow(generalRows, 'Type', media.mimeType, 'break-all')
+  const ext = media.filename?.includes('.') ? media.filename.split('.').pop()?.toUpperCase() : null
+  addRow(generalRows, 'Extension', ext ? `.${ext}` : null)
   addRow(generalRows, 'Uploaded', formatDateTime(media.createdAt))
   addRow(generalRows, 'Updated', formatDateTime(media.updatedAt))
 

@@ -5,7 +5,7 @@ import type { Route } from "next";
 import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from "react";
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Ban, Check, CheckCircle2, Circle, Download, ExternalLink, MoreVertical, Pencil, Trash2 } from 'lucide-react';
+import { Archive, Ban, BookOpen, Check, CheckCircle2, Circle, Download, ExternalLink, File as FileIcon, FileText, Film, MoreVertical, Music, Pencil, Trash2, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/ui/Button';
 import { Input } from '@/ui/Input';
@@ -48,12 +48,49 @@ interface MediaCardProps {
 }
 
 
-type FallbackKind = "image" | "pdf" | "file";
+type FallbackKind = "image" | "pdf" | "file" | "audio" | "document" | "archive";
+
+function getMediaTypeIcon (mimeType?: string | null): LucideIcon {
+  if (!mimeType) return FileIcon;
+  const m = mimeType.toLowerCase();
+  if (m.startsWith("audio/")) return Music;
+  if (m === "application/epub+zip") return BookOpen;
+  if (m.startsWith("video/")) return Film;
+  if (
+    m === "application/zip" ||
+    m === "application/x-zip-compressed" ||
+    m === "application/x-7z-compressed" ||
+    m === "application/x-rar-compressed" ||
+    m === "application/vnd.rar"
+  ) return Archive;
+  if (
+    m.startsWith("text/") ||
+    m === "application/json" ||
+    m.startsWith("application/vnd.oasis.opendocument") ||
+    m === "application/pdf"
+  ) return FileText;
+  return FileIcon;
+}
 
 function getFallbackKind (mimeType?: string | null): FallbackKind {
   if (!mimeType) return "file";
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType === "application/pdf") return "pdf";
+  const m = mimeType.toLowerCase();
+  if (m.startsWith("image/")) return "image";
+  if (m === "application/pdf") return "pdf";
+  if (m.startsWith("audio/")) return "audio";
+  if (
+    m === "application/zip" ||
+    m === "application/x-zip-compressed" ||
+    m === "application/x-7z-compressed" ||
+    m === "application/x-rar-compressed" ||
+    m === "application/vnd.rar"
+  ) return "archive";
+  if (
+    m.startsWith("application/vnd.oasis.opendocument") ||
+    m === "application/json" ||
+    m === "application/epub+zip" ||
+    m.startsWith("text/")
+  ) return "document";
   return "file";
 }
 
@@ -83,6 +120,7 @@ export function MediaCard({
   const fallbackKind = getFallbackKind(media.mimeType);
   const thumbVersion = media.thumbState === "READY" ? "ready" : "pending";
   const thumbnailSrc = `/api/media/${media.id}/thumbnail?v=${thumbVersion}`;
+  const MediaTypeIcon = getMediaTypeIcon(media.mimeType);
   const isCompact = density === "compact";
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(media.title);
@@ -236,14 +274,20 @@ export function MediaCard({
                 )}
                 onClick={handleSelectClick}
               >
-                <img
-                  key={`${media.id}-${thumbVersion}-list`}
-                  src={thumbnailSrc}
-                  alt={media.title}
-                  className="h-full w-full object-cover object-center"
-                  loading={loading}
-                  onError={handleThumbError}
-                />
+                {thumbError ? (
+                  <div className="flex h-full w-full items-center justify-center">
+                    <MediaTypeIcon className="h-8 w-8 text-muted-foreground" />
+                  </div>
+                ) : (
+                  <img
+                    key={`${media.id}-${thumbVersion}-list`}
+                    src={thumbnailSrc}
+                    alt={media.title}
+                    className="h-full w-full object-cover object-center"
+                    loading={loading}
+                    onError={handleThumbError}
+                  />
+                )}
               </div>
             ) : (
               <Link href={hrefWithQuery} className="flex-shrink-0 items-center">
@@ -253,14 +297,20 @@ export function MediaCard({
                     isCompact && "h-12 w-20",
                   )}
                 >
-                  <img
-                    key={`${media.id}-${thumbVersion}-list`}
-                    src={thumbnailSrc}
-                    alt={media.title}
-                    className="h-full w-full object-cover object-center"
-                    loading={loading}
-                    onError={handleThumbError}
-                  />
+                  {thumbError ? (
+                    <div className="flex h-full w-full items-center justify-center">
+                      <MediaTypeIcon className="h-8 w-8 text-muted-foreground" />
+                    </div>
+                  ) : (
+                    <img
+                      key={`${media.id}-${thumbVersion}-list`}
+                      src={thumbnailSrc}
+                      alt={media.title}
+                      className="h-full w-full object-cover object-center"
+                      loading={loading}
+                      onError={handleThumbError}
+                    />
+                  )}
                 </div>
               </Link>
             )}
@@ -342,7 +392,6 @@ export function MediaCard({
             </div>
 
             <div className={cn("flex items-center gap-2", isCompact && "gap-1")}>
-              {thumbError && <Badge variant="destructive">Thumb Error</Badge>}
               {!isSelectMode && (
                 <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
@@ -373,7 +422,7 @@ export function MediaCard({
                       <>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
+                          variant="destructive"
                           onClick={triggerDelete}
                         >
                           <Trash2 className="mr-2 h-4 w-4 shrink-0" />
@@ -401,18 +450,19 @@ export function MediaCard({
           className={cn("block cursor-pointer relative w-full overflow-hidden bg-muted media-item shrink-0", isCompact ? "aspect-square" : "aspect-[4/3]")}
           onClick={handleSelectClick}
         >
-          <img
-            key={`${media.id}-${thumbVersion}-grid`}
-            src={thumbnailSrc}
-            alt={media.title}
-            className="media-item__img h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
-            loading={loading}
-            onError={handleThumbError}
-          />
-          {thumbError && (
-            <div className="absolute media-status-badge">
-              <Badge variant="destructive">Thumb Error</Badge>
+          {thumbError ? (
+            <div className="flex h-full w-full items-center justify-center">
+              <MediaTypeIcon className="h-12 w-12 text-muted-foreground" />
             </div>
+          ) : (
+            <img
+              key={`${media.id}-${thumbVersion}-grid`}
+              src={thumbnailSrc}
+              alt={media.title}
+              className="media-item__img h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
+              loading={loading}
+              onError={handleThumbError}
+            />
           )}
           {/* Selection circle overlay */}
           <button
@@ -430,18 +480,19 @@ export function MediaCard({
       ) : (
         <Link href={hrefWithQuery} className="block cursor-zoom-in">
           <div className={cn("relative w-full overflow-hidden bg-muted media-item shrink-0", isCompact ? "aspect-square" : "aspect-[4/3]")}>
-            <img
-              key={`${media.id}-${thumbVersion}-grid`}
-              src={thumbnailSrc}
-              alt={media.title}
-              className="media-item__img h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
-              loading={loading}
-              onError={handleThumbError}
-            />
-            {thumbError && (
-              <div className="absolute media-status-badge">
-                <Badge variant="destructive">Thumb Error</Badge>
+            {thumbError ? (
+              <div className="flex h-full w-full items-center justify-center">
+                <MediaTypeIcon className="h-12 w-12 text-muted-foreground" />
               </div>
+            ) : (
+              <img
+                key={`${media.id}-${thumbVersion}-grid`}
+                src={thumbnailSrc}
+                alt={media.title}
+                className="media-item__img h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
+                loading={loading}
+                onError={handleThumbError}
+              />
             )}
           </div>
         </Link>
@@ -538,7 +589,7 @@ export function MediaCard({
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
-                      className="text-destructive focus:text-destructive"
+                      variant="destructive"
                       onClick={triggerDelete}
                     >
                       <Trash2 className="mr-2 h-4 w-4 shrink-0" />

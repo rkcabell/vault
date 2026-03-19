@@ -72,6 +72,7 @@ export function useMediaDetail (id: string) {
         }
 
         const data = (await res.json()) as MediaDetailResponse | null
+        if (controller.signal.aborted) return
         if (!data?.media?.id) {
           setLoadState('not-found')
           return

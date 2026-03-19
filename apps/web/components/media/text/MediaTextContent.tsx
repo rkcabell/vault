@@ -25,7 +25,7 @@ const PAGE_SIZE = 50
 export function MediaTextContent(props: {
   segments: TextSegment[]
   highlightTerms: string[]
-  containerRef?: RefObject<HTMLDivElement>
+  containerRef?: RefObject<HTMLDivElement | null>
   isCopying: boolean
   copyMessage: string | null
   copySelected: () => Promise<void>
