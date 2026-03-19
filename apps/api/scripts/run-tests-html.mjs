@@ -1,5 +1,5 @@
 // scripts/run-tests-html.mjs
-// Runs each test file individually, collects TAP output per file,
+// Runs each test file individually with TAP reporter, collects results,
 // and generates a self-contained HTML report grouped by file (suite).
 //
 // Usage: node scripts/run-tests-html.mjs <dir> [dir2 ...]
@@ -23,7 +23,7 @@ function findTests(dir) {
   return results;
 }
 
-// ── Run one file, resolve with { file, tap, exitCode, duration } ─────────────
+// ── Run a single file with TAP reporter ──────────────────────────────────────
 
 function runFile(file) {
   return new Promise((resolve_) => {
@@ -35,43 +35,59 @@ function runFile(file) {
       { stdio: ["ignore", "pipe", "pipe"] }
     );
     child.stdout.on("data", c => { tap += c.toString(); });
-    child.stderr.on("data", () => {}); // suppress
+    child.stderr.on("data", () => {});
     child.on("exit", code => {
-      resolve_({ file, tap, exitCode: code ?? 0, duration: Date.now() - start });
+      resolve_({ tap, exitCode: code ?? 0, duration: Date.now() - start });
     });
   });
 }
 
-// ── TAP parser → array of { name, pass, skip, diag[] } ───────────────────────
+// ── Bounded concurrency pool ──────────────────────────────────────────────────
 
-function parseTap(tap) {
-  const tests = [];
-  const lines = tap.split(/\r?\n/);
-  let diagBuf = [];
-  let inDiag = false;
-  let lastTestIdx = -1;
-
-  for (const line of lines) {
-    if (line.trim() === "---") { inDiag = !inDiag; continue; }
-    if (inDiag) { diagBuf.push(line.trim()); continue; }
-
-    const m = line.match(/^(ok|not ok) \d+ - (.+)$/);
-    if (m) {
-      if (diagBuf.length && lastTestIdx >= 0) {
-        tests[lastTestIdx].diag = [...diagBuf];
-      }
-      diagBuf = [];
-      const pass = m[1] === "ok";
-      const rawName = m[2];
-      const skip = /# SKIP/i.test(rawName);
-      const name = rawName.replace(/\s*#\s*(SKIP|TODO).*$/i, "").trim();
-      tests.push({ name, pass, skip, diag: [] });
-      lastTestIdx = tests.length - 1;
+async function runPool(items, fn, concurrency = 8) {
+  const results = new Array(items.length);
+  let idx = 0;
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i]);
     }
   }
-  if (diagBuf.length && lastTestIdx >= 0) {
-    tests[lastTestIdx].diag = [...diagBuf];
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
+// ── Single-file TAP parser ────────────────────────────────────────────────────
+// Single-file TAP has no file-level wrapper. Every col-0 ok/not ok line is a test.
+
+function parseSingleFileTap(tap) {
+  const tests = [];
+  let diagBuf = [];
+  let inDiag = false;
+  let lastTest = null;
+
+  for (const line of tap.split(/\r?\n/)) {
+    const trimmed = line.trimStart();
+
+    if (trimmed === "---") { inDiag = !inDiag; continue; }
+    if (inDiag) { diagBuf.push(trimmed); continue; }
+
+    // Only top-level (col 0) result lines
+    if (trimmed === line) {
+      const m = trimmed.match(/^(ok|not ok) \d+ - (.+)$/);
+      if (m) {
+        if (diagBuf.length && lastTest) lastTest.diag = [...diagBuf];
+        diagBuf = [];
+        const pass = m[1] === "ok";
+        const rawName = m[2].replace(/\s*#\s*time=[\d.]+ms\s*$/, "").trim();
+        const skip = /# SKIP/i.test(rawName);
+        const name = rawName.replace(/\s*#\s*(SKIP|TODO).*$/i, "").trim();
+        lastTest = { name, pass, skip, diag: [] };
+        tests.push(lastTest);
+      }
+    }
   }
+  if (diagBuf.length && lastTest) lastTest.diag = [...diagBuf];
   return tests;
 }
 
@@ -247,24 +263,24 @@ const files = dirs.flatMap(findTests);
 if (!files.length) { console.log("No test files found."); process.exit(0); }
 
 const root = resolve(".");
-console.log(`Running ${files.length} test files…`);
+console.log(`Generating report… (${files.length} files)`);
 const start = Date.now();
 
-// Run all files in parallel
-const results = await Promise.all(files.map(runFile));
+const runResults = await runPool(files, runFile, 8);
 
-const totalElapsed = Date.now() - start;
 let anyFail = false;
-
-const suites = results.map(({ file, tap, exitCode, duration }) => {
-  if (exitCode !== 0) anyFail = true;
-  const label = relative(root, file).replace(/\\/g, "/");
-  const tests = parseTap(tap);
-  return { label, tests, duration };
+const suites = runResults.map((r, i) => {
+  if (r.exitCode !== 0) anyFail = true;
+  return {
+    label: relative(root, resolve(files[i])).replace(/\\/g, "/"),
+    tests: parseSingleFileTap(r.tap),
+    duration: r.duration,
+  };
 });
 
+const totalElapsed = Date.now() - start;
 const html = buildHtml(suites, totalElapsed);
 const outputPath = resolve("test-results.html");
 writeFileSync(outputPath, html, "utf8");
-console.log(`Report → ${outputPath}`);
+console.log(`Report → file:///${outputPath.replace(/\\/g, "/")}`);
 process.exit(anyFail ? 1 : 0);
