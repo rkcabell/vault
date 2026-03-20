@@ -45,7 +45,7 @@ if ! command -v node &>/dev/null; then
   if command -v apt-get &>/dev/null; then
     echo "  Installing Node.js 20.x via NodeSource..."
     apt-get install -y ca-certificates curl gnupg -qq
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - -qq
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     apt-get install -y nodejs -qq
     ok "node installed"
   else
@@ -91,11 +91,15 @@ for entry in "ocrmypdf:ocrmypdf" "tesseract-ocr:tesseract" "ghostscript:gs" "qpd
 done
 
 # ---------------------------------------------------------------------------
-# 2. npm install
+# 2. npm install + build internal packages
 # ---------------------------------------------------------------------------
 step "Installing dependencies"
 npm install --prefix "$ROOT" --silent
 ok "node_modules ready"
+
+step "Building internal packages"
+npm run build --prefix "$ROOT" --workspace=packages/db
+ok "@vault/db built"
 
 # ---------------------------------------------------------------------------
 # 3. Create .env if missing
@@ -132,7 +136,12 @@ EOF
   ok "apps/api/.env created with generated JWT secrets"
 fi
 
-# Read values from .env for later steps
+# Load .env into the environment for all subsequent steps (Prisma, Node, etc.)
+set -a
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+set +a
+
 _env_val() { grep "^$1=" "$ENV_FILE" | cut -d= -f2-; }
 S3_ENDPOINT=$(_env_val S3_ENDPOINT)
 S3_ACCESS_KEY_ID=$(_env_val S3_ACCESS_KEY_ID)
