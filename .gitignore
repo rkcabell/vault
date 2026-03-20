@@ -136,6 +136,7 @@ screenshots/
 # Local dev docs
 ################################################################################
 docs/test-coverage-plan.md
+VaultTokenLogin.txt
 
 # Ignore local Claude workspace
 .claude/
