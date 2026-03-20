@@ -23,43 +23,83 @@ die()  { echo -e "\n${RED}${BOLD}Error: $1${NC}" >&2; exit 1; }
 STEP=0
 
 # ---------------------------------------------------------------------------
-# 1. Prerequisites
+# 1. System dependencies (auto-install on Debian/Ubuntu if apt is available)
 # ---------------------------------------------------------------------------
-step "Checking prerequisites"
+step "Checking system dependencies"
 
-require() {
-  if command -v "$1" &>/dev/null; then
-    ok "$1"
+install_apt() {
+  local pkg="$1"; local cmd="${2:-$1}"
+  if command -v "$cmd" &>/dev/null; then
+    ok "$cmd already installed"
+  elif command -v apt-get &>/dev/null; then
+    echo "  Installing $pkg via apt-get..."
+    apt-get install -y "$pkg" -qq
+    ok "$pkg installed"
   else
-    die "$1 is required but not found. $2"
+    warn "$cmd not found and apt-get unavailable — install manually"
   fi
 }
 
-soft_require() {
-  if command -v "$1" &>/dev/null; then
-    ok "$1"
+# Node.js >= 18.18
+if ! command -v node &>/dev/null; then
+  if command -v apt-get &>/dev/null; then
+    echo "  Installing Node.js 20.x via NodeSource..."
+    apt-get install -y ca-certificates curl gnupg -qq
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs -qq
+    ok "node installed"
   else
-    warn "$1 not found — OCR processing will be unavailable. Install with: $2"
+    die "node is required but not found. Install Node.js >=18.18 from https://nodejs.org"
   fi
-}
+else
+  ok "node"
+fi
 
-require node  "Install Node.js >=18.18 from https://nodejs.org"
-require npm   "Install npm >=10.5.0"
-require docker "Install Docker from https://docs.docker.com/get-docker/"
+# Docker + Docker Compose v2
+if ! command -v docker &>/dev/null; then
+  if command -v apt-get &>/dev/null; then
+    echo "  Installing Docker via apt-get..."
+    apt-get install -y ca-certificates curl gnupg -qq
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+      | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    apt-get update -qq
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin -qq
+    ok "docker installed"
+  else
+    die "docker is required but not found. Install from https://docs.docker.com/get-docker/"
+  fi
+else
+  ok "docker"
+fi
 docker compose version &>/dev/null || die "Docker Compose v2 is required. See https://docs.docker.com/compose/install/"
 ok "docker compose"
 
-soft_require ocrmypdf  "sudo apt install ocrmypdf  (or: brew install ocrmypdf)"
-soft_require tesseract "sudo apt install tesseract-ocr  (or: brew install tesseract)"
-soft_require gs        "sudo apt install ghostscript  (or: brew install ghostscript)"
-soft_require qpdf      "sudo apt install qpdf  (or: brew install qpdf)"
+# Optional OCR tools
+for entry in "ocrmypdf:ocrmypdf" "tesseract-ocr:tesseract" "ghostscript:gs" "qpdf:qpdf"; do
+  pkg="${entry%%:*}"; cmd="${entry##*:}"
+  if command -v "$cmd" &>/dev/null; then
+    ok "$cmd"
+  elif command -v apt-get &>/dev/null; then
+    echo "  Installing $pkg..."
+    apt-get install -y "$pkg" -qq && ok "$cmd installed"
+  else
+    warn "$cmd not found — OCR processing will be unavailable"
+  fi
+done
 
 # ---------------------------------------------------------------------------
-# 2. npm install
+# 2. npm install + build internal packages
 # ---------------------------------------------------------------------------
 step "Installing dependencies"
 npm install --prefix "$ROOT" --silent
 ok "node_modules ready"
+
+step "Building internal packages"
+npm run build --prefix "$ROOT" --workspace=packages/db
+ok "@vault/db built"
 
 # ---------------------------------------------------------------------------
 # 3. Create .env if missing
@@ -96,7 +136,12 @@ EOF
   ok "apps/api/.env created with generated JWT secrets"
 fi
 
-# Read values from .env for later steps
+# Load .env into the environment for all subsequent steps (Prisma, Node, etc.)
+set -a
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+set +a
+
 _env_val() { grep "^$1=" "$ENV_FILE" | cut -d= -f2-; }
 S3_ENDPOINT=$(_env_val S3_ENDPOINT)
 S3_ACCESS_KEY_ID=$(_env_val S3_ACCESS_KEY_ID)

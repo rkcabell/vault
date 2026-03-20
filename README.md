@@ -18,16 +18,16 @@ A self-hosted personal document archive. Upload files, extract text via OCR, tag
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js 16, React 18, TypeScript, Tailwind CSS 4, Radix UI |
-| Backend | Fastify 4, Node.js ≥18.18, TypeScript |
-| Database | PostgreSQL 16 (Prisma ORM) |
-| Queue | BullMQ + Redis 7 |
-| Storage | MinIO (S3-compatible) |
-| OCR | ocrmypdf, Tesseract, Ghostscript, qpdf |
-| Image processing | Sharp, heic-convert, @napi-rs/canvas |
-| Auth | JWT (access + refresh tokens), Argon2 password hashing |
+| Layer            | Technology                                                 |
+| ---------------- | ---------------------------------------------------------- |
+| Frontend         | Next.js 16, React 18, TypeScript, Tailwind CSS 4, Radix UI |
+| Backend          | Fastify 4, Node.js ≥18.18, TypeScript                      |
+| Database         | PostgreSQL 16 (Prisma ORM)                                 |
+| Queue            | BullMQ + Redis 7                                           |
+| Storage          | MinIO (S3-compatible)                                      |
+| OCR              | ocrmypdf, Tesseract, Ghostscript, qpdf                     |
+| Image processing | Sharp, heic-convert, @napi-rs/canvas                       |
+| Auth             | JWT (access + refresh tokens), Argon2 password hashing     |
 
 ---
 
@@ -51,49 +51,30 @@ vault/
 
 ## Local Setup
 
-### Prerequisites
+Should work right out of the box
 
-- **Node.js** ≥18.18 and **npm** ≥10.5.0
-- **Docker** and **Docker Compose**
-- **ocrmypdf**, **Tesseract**, **Ghostscript**, and **qpdf** (required for OCR workers)
+```bash
+1. git clone https://github.com/rkcabell/vault.git
+2. cd vault
+3. bash scripts/setup.sh
+4. npm run boot
+```
 
-  On Debian/Ubuntu:
-  ```bash
-  sudo apt install ocrmypdf tesseract-ocr ghostscript qpdf
-  ```
-  On macOS:
-  ```bash
-  brew install ocrmypdf tesseract ghostscript qpdf
-  ```
+Open [http://localhost:3000](http://localhost:3000).
+
+The setup script handles everything automatically on Debian/Ubuntu — Node.js, Docker, OCR tools, `.env` generation, Docker infrastructure, database migrations, and MinIO bucket creation. On other platforms, install prerequisites manually before running it.
+
+**Prerequisites (non-Debian/Ubuntu):**
+
+- Node.js ≥18.18, npm ≥10.5.0
+- Docker + Docker Compose v2
+- ocrmypdf, Tesseract, Ghostscript, qpdf (optional — required for OCR only)
+
+  macOS: `brew install ocrmypdf tesseract ghostscript qpdf`
 
 ---
 
-### Automated setup (recommended)
-
-Run the setup script to handle everything in one go:
-
-```bash
-chmod +x scripts/setup.sh
-./scripts/setup.sh
-```
-
-This will:
-1. Check prerequisites and warn about missing OCR tools
-2. Install npm dependencies
-3. Start Docker infrastructure (PostgreSQL, Redis, MinIO)
-4. Create `apps/api/.env` with auto-generated JWT secrets (skipped if it already exists)
-5. Create the MinIO bucket
-6. Generate the Prisma client and apply migrations
-
-Then start the dev servers:
-
-```bash
-npm run boot
-```
-
----
-
-### Manual setup
+### Manual setup (advanced)
 
 #### 1. Install dependencies
 
@@ -108,11 +89,11 @@ npm run localdocker
 # or: docker compose -f infra/docker/docker-minimal.yml up -d
 ```
 
-| Service | URL | Credentials |
-|---|---|---|
-| PostgreSQL | `localhost:5432` | see `docker-minimal.yml` |
-| Redis | `localhost:6379` | — |
-| MinIO API | `http://localhost:9000` | see `docker-minimal.yml` |
+| Service       | URL                     | Credentials              |
+| ------------- | ----------------------- | ------------------------ |
+| PostgreSQL    | `localhost:5432`        | see `docker-minimal.yml` |
+| Redis         | `localhost:6379`        | —                        |
+| MinIO API     | `http://localhost:9000` | see `docker-minimal.yml` |
 | MinIO Console | `http://localhost:9001` | see `docker-minimal.yml` |
 
 > **MinIO bucket:** Log into the console at `http://localhost:9001` and create a bucket named `vault-media`.
@@ -168,22 +149,21 @@ npm -w api run worker:dev    # OCR + thumbnail workers
 
 ## Available Scripts
 
-| Command | Description |
-|---|---|
-| `npm run boot` | Start API + web + worker (hot reload) |
-| `npm run api:dev` | Start API only |
-| `npm run web:dev` | Start web app only |
-| `npm -w api run worker:dev` | Start background workers |
-| `npm run build` | Build all packages |
-| `npm run lint` | Run ESLint across API and web |
-| `npm run test:api` | Run API test suite |
-| `npm run prismagen` | Regenerate Prisma client |
-| `npm run prismigrate` | Apply database migrations |
-| `npm run prismareset` | Reset database (destructive) |
-| `npm run localdocker` | Start infrastructure containers |
-| `npm run docker:build` | Build and start full Docker stack |
-| `npm run docker:logs` | Tail Docker logs |
-
+| Command                     | Description                           |
+| --------------------------- | ------------------------------------- |
+| `npm run boot`              | Start API + web + worker (hot reload) |
+| `npm run api:dev`           | Start API only                        |
+| `npm run web:dev`           | Start web app only                    |
+| `npm -w api run worker:dev` | Start background workers              |
+| `npm run build`             | Build all packages                    |
+| `npm run lint`              | Run ESLint across API and web         |
+| `npm run test:api`          | Run API test suite                    |
+| `npm run prismagen`         | Regenerate Prisma client              |
+| `npm run prismigrate`       | Apply database migrations             |
+| `npm run prismareset`       | Reset database (destructive)          |
+| `npm run localdocker`       | Start infrastructure containers       |
+| `npm run docker:build`      | Build and start full Docker stack     |
+| `npm run docker:logs`       | Tail Docker logs                      |
 
 ---
 
@@ -206,14 +186,14 @@ The REST API runs on `http://localhost:8000`. An OpenAPI specification is availa
 
 Key endpoint groups:
 
-| Prefix | Description |
-|---|---|
-| `/api/auth` | Registration, login, token refresh |
-| `/api/media` | Upload, list, search, update, delete files |
-| `/api/bundles` | Create and manage bundles |
-| `/api/reminders` | Create and manage reminders |
-| `/api/tags` | List tags with usage counts |
-| `/api/profile` | User profile management |
+| Prefix           | Description                                |
+| ---------------- | ------------------------------------------ |
+| `/api/auth`      | Registration, login, token refresh         |
+| `/api/media`     | Upload, list, search, update, delete files |
+| `/api/bundles`   | Create and manage bundles                  |
+| `/api/reminders` | Create and manage reminders                |
+| `/api/tags`      | List tags with usage counts                |
+| `/api/profile`   | User profile management                    |
 
 ---
 
