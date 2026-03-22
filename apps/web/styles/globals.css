@@ -777,6 +777,14 @@ html.dark .text-error-panel__detail,
   background-color: hsl(var(--accent));
 }
 
+.overview-card--muted {
+  background-color: hsl(var(--muted));
+}
+
+.overview-card--muted:hover {
+  background-color: hsl(var(--accent));
+}
+
 .overview-secondary-btn {
   background-color: hsl(var(--card));
   color: hsl(var(--foreground));
@@ -833,6 +841,7 @@ html.dark .reminders-open-link,
 }
 
 .reminders-panel {
+  background-color: hsl(var(--muted));
   border: 1px solid hsl(var(--border));
   border-radius: 1rem;
   padding: 1rem;
@@ -891,6 +900,7 @@ html.dark .reminders-error-text,
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  background-color: hsl(var(--card));
   border: 1px solid hsl(var(--border));
   border-radius: 0.75rem;
   padding: 0.75rem;
@@ -1242,7 +1252,7 @@ html.dark .reminders-completed-at,
 }
 
 .reminders-full-row--completed {
-  background: hsl(var(--muted) / 0.25);
+  background: hsl(var(--muted) / 0.6);
   border-radius: 0;
   padding: 0.75rem;
   gap: 0.25rem;
@@ -1310,6 +1320,16 @@ html.dark .reminders-cancel-btn,
 [data-theme="dark"] .reminders-cancel-btn {
   color: #f87171 !important;
   border-color: #f87171 !important;
+}
+
+.reminders-cancel-btn--confirm {
+  background-color: #dc2626 !important;
+  color: hsl(var(--background)) !important;
+}
+
+html.dark .reminders-cancel-btn--confirm,
+[data-theme="dark"] .reminders-cancel-btn--confirm {
+  background-color: #f87171 !important;
 }
 
 .reminders-empty-state {
