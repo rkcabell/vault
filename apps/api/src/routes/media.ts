@@ -255,6 +255,28 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     },
   );
 
+  // POST /media/bulk-download - zip and stream selected items
+  app.post(
+    "/bulk-download",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const body = z
+        .object({ ids: z.array(z.string().uuid()).min(1).max(50) })
+        .parse(req.body);
+
+      const items = await actionsService.getBulkDownloadItems(userId, body.ids);
+
+      if (items.length === 0) return reply.notFound();
+
+      reply.raw.setHeader("Content-Type", "application/zip");
+      reply.raw.setHeader("Content-Disposition", 'attachment; filename="vault-download.zip"');
+      reply.hijack();
+
+      await actionsService.streamBulkArchive(items, reply.raw, req.log);
+    },
+  );
+
   // GET /media/:id/download - presigned GET for the original file
   app.get<{ Params: { id: string } }>(
     "/:id/download",

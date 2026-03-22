@@ -1,9 +1,66 @@
+import type { Writable } from "node:stream";
+import archiver from "archiver";
 import type { Queue } from "bullmq";
 import type { OcrJobData } from "../ocrProcessingService.js";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { S3Adapter } from "../../adapters/s3Adapter.js";
 import type { ThumbJob } from "../../queues/enqueueThumbnail.js";
 import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
+
+const MIME_TO_EXT: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/png": ".png",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "image/heic": ".heic",
+  "image/heif": ".heif",
+  "image/tiff": ".tiff",
+  "image/bmp": ".bmp",
+  "image/svg+xml": ".svg",
+  "video/mp4": ".mp4",
+  "video/quicktime": ".mov",
+  "video/x-msvideo": ".avi",
+  "video/webm": ".webm",
+  "video/x-matroska": ".mkv",
+  "application/pdf": ".pdf",
+  "text/plain": ".txt",
+  "text/html": ".html",
+  "text/csv": ".csv",
+  "application/json": ".json",
+  "application/zip": ".zip",
+  "application/msword": ".doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+};
+
+function sanitizeTitle (title: string): string {
+  const cleaned = title.replace(/[/\\:*?"<>|]/g, "").trim().slice(0, 100);
+  return cleaned || "";
+}
+
+function buildFilename (
+  item: { id: string; title: string; mimeType: string | null },
+  usedNames: Set<string>,
+): string {
+  const ext = (item.mimeType && MIME_TO_EXT[item.mimeType]) ?? ".bin";
+  const base = sanitizeTitle(item.title) || item.id;
+  let name = `${base}${ext}`;
+  if (!usedNames.has(name)) {
+    usedNames.add(name);
+    return name;
+  }
+  let counter = 2;
+  while (usedNames.has(name)) {
+    name = `${base}_${counter}${ext}`;
+    counter++;
+  }
+  usedNames.add(name);
+  return name;
+}
 
 const MAX_PRESIGNED_SECONDS = 600;
 
@@ -116,6 +173,36 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     return { url };
   };
 
+  const getBulkDownloadItems = async (userId: string, ids: string[]) => {
+    return deps.repository.findBulkDownloadItems(userId, ids);
+  };
+
+  const streamBulkArchive = async (
+    items: { id: string; storageKey: string; title: string; mimeType: string | null }[],
+    dest: Writable,
+    logger: { error: (obj: unknown, msg: string) => void },
+  ) => {
+    const archive = archiver("zip", { zlib: { level: 0 } });
+
+    archive.on("error", (err) => {
+      logger.error(err, "bulk-download archive error");
+      if (!dest.writableEnded) dest.destroy(err);
+    });
+
+    archive.pipe(dest);
+
+    const usedNames = new Set<string>();
+    for (const item of items) {
+      const result = await deps.s3Adapter.getObjectStream({ bucket: deps.bucket, key: item.storageKey });
+      if (!result) continue;
+      const filename = buildFilename(item, usedNames);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      archive.append(result.body as any, { name: filename });
+    }
+
+    await archive.finalize();
+  };
+
   const regenerateThumbnail = async (userId: string, id: string) => {
     const media = await deps.repository.findMediaKeys(userId, id);
     if (!media) return null;
@@ -145,5 +232,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     cancelTextExtraction,
     getDownloadUrl,
     regenerateThumbnail,
+    getBulkDownloadItems,
+    streamBulkArchive,
   };
 }

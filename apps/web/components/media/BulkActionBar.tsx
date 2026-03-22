@@ -3,7 +3,7 @@
 
 import React from 'react';
 import { Button } from '@/components/ui/Button';
-import { Trash2, Tag, FolderPlus } from 'lucide-react';
+import { Trash2, Tag, FolderPlus, Download } from 'lucide-react';
 
 interface BulkActionBarProps {
   count: number;
@@ -11,9 +11,11 @@ interface BulkActionBarProps {
   onTag: () => void;
   onAddToBundle: () => void;
   onClear: () => void;
+  onDownload: () => void;
+  isDownloading?: boolean;
 }
 
-export function BulkActionBar({ count, onDelete, onTag, onAddToBundle, onClear }: BulkActionBarProps) {
+export function BulkActionBar({ count, onDelete, onTag, onAddToBundle, onClear, onDownload, isDownloading }: BulkActionBarProps) {
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background shadow-lg">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-3">
@@ -26,6 +28,10 @@ export function BulkActionBar({ count, onDelete, onTag, onAddToBundle, onClear }
           <Button size="sm" variant="outline" onClick={onAddToBundle}>
             <FolderPlus className="mr-2 h-4 w-4" />
             Add to Bundle
+          </Button>
+          <Button size="sm" variant="outline" onClick={onDownload} disabled={isDownloading}>
+            <Download className="mr-2 h-4 w-4" />
+            {isDownloading ? "Zipping…" : "Download"}
           </Button>
           <Button size="sm" variant="destructive" onClick={(e) => onDelete(e)}>
             <Trash2 className="mr-2 h-4 w-4" />
