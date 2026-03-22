@@ -14,6 +14,7 @@ export type MediaWorkerState = z.infer<typeof MediaWorkerStateSchema>;
 export const MediaListItemSchema = z.object({
   id: z.string(),
   title: z.string().nullable(),
+  filename: z.string(),
   thumbState: MediaWorkerStateSchema,
   textState: MediaWorkerStateSchema,
   createdAt: z.string(), // ISO date string

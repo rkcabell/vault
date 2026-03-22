@@ -149,17 +149,22 @@ export function formatMimeTag(mimeType?: string | null, filename?: string | null
 
   if (lower && lower !== "application/octet-stream") {
     if (MIME_TAGS[lower]) return MIME_TAGS[lower];
-    const subtype = lower.split("/")[1];
-    if (subtype) return subtype.replace(/^(x-|vnd\.)/, "").toUpperCase();
   }
 
-  // Fall back to file extension when MIME is missing or generic
+  // Filename extension before raw subtype extraction — gives "DLL" not "MSDOWNLOAD"
   if (filename) {
     const dot = filename.lastIndexOf(".");
     if (dot !== -1) {
       const ext = filename.slice(dot).toLowerCase();
       if (EXT_TAGS[ext]) return EXT_TAGS[ext];
+      return ext.slice(1).toUpperCase();
     }
+  }
+
+  // Last resort: raw subtype extraction
+  if (lower && lower !== "application/octet-stream") {
+    const subtype = lower.split("/")[1];
+    if (subtype) return subtype.replace(/^(x-|vnd\.)/, "").toUpperCase();
   }
 
   return "File";

@@ -113,11 +113,10 @@ export function buildMimeTypeTag(mimeType: string | undefined | null, filename?:
     return MIME_LABELS[lower];
   }
 
-  // Fall back to file extension
-  if (ext && EXT_LABELS[ext]) {
-    return EXT_LABELS[ext];
+  // Fall back to file extension (known label, or raw extension if unrecognized)
+  if (ext) {
+    return EXT_LABELS[ext] ?? ext;
   }
 
-  // Last resort: return unknown
   return "unknown";
 }

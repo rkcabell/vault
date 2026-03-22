@@ -89,6 +89,7 @@ export class MediaRepository {
       select: {
         id: true,
         title: true,
+        filename: true,
         thumbState: true,
         textState: true,
         createdAt: true,
@@ -150,7 +151,7 @@ export class MediaRepository {
   async findBulkDownloadItems (userId: string, ids: string[]) {
     return this.prisma.media.findMany({
       where: { id: { in: ids }, userId },
-      select: { id: true, storageKey: true, title: true, mimeType: true },
+      select: { id: true, storageKey: true, title: true, mimeType: true, filename: true },
     });
   }
 

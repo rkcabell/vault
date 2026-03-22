@@ -121,9 +121,11 @@ prisma/.cache/
 ################################################################################
 playwright-report/
 test-results/
+test-results.html
 screenshots/
 **/playwright-report/
 **/test-results/
+**/test-results.html
 **/screenshots/
 
 ################################################################################
@@ -137,6 +139,7 @@ screenshots/
 ################################################################################
 docs/test-coverage-plan.md
 VaultTokenLogin.txt
+OVERVIEW.md
 
 # Ignore local Claude workspace
 .claude/
