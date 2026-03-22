@@ -102,6 +102,7 @@ export default function LibraryPageInner() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [isBundleDialogOpen, setIsBundleDialogOpen] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   // Delete confirmation popover.
   const [confirmState, setConfirmState] = useState<{ x: number; y: number; message: string; action: () => void } | null>(null);
@@ -471,6 +472,36 @@ export default function LibraryPageInner() {
     });
   }, []);
 
+  const handleBulkDownload = useCallback(async () => {
+    if (selectedIds.size === 0 || isDownloading) return;
+    setIsDownloading(true);
+    try {
+      const res = await fetch("/api/media/bulk-download", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      if (!res.ok) {
+        const msg = await readErrorMessage(res);
+        setError(msg);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "vault-download.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to download.";
+      setError(message);
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [selectedIds, isDownloading]);
+
   const handleBulkDelete = useCallback((e: React.MouseEvent) => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
@@ -791,6 +822,8 @@ export default function LibraryPageInner() {
           onTag={() => setIsTagDialogOpen(true)}
           onAddToBundle={() => setIsBundleDialogOpen(true)}
           onClear={() => setSelectedIds(new Set())}
+          onDownload={handleBulkDownload}
+          isDownloading={isDownloading}
         />
       )}
 

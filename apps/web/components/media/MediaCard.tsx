@@ -478,7 +478,7 @@ export function MediaCard({
           </button>
         </div>
       ) : (
-        <Link href={hrefWithQuery} className="block cursor-zoom-in">
+        <Link href={hrefWithQuery} className="block cursor-pointer">
           <div className={cn("relative w-full overflow-hidden bg-muted media-item shrink-0", isCompact ? "aspect-square" : "aspect-[4/3]")}>
             {thumbError ? (
               <div className="flex h-full w-full items-center justify-center">

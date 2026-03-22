@@ -147,6 +147,13 @@ export class MediaRepository {
     });
   }
 
+  async findBulkDownloadItems (userId: string, ids: string[]) {
+    return this.prisma.media.findMany({
+      where: { id: { in: ids }, userId },
+      select: { id: true, storageKey: true, title: true, mimeType: true },
+    });
+  }
+
   async findDocumentForUser (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
