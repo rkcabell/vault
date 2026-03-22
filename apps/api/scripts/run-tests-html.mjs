@@ -5,9 +5,13 @@
 // Usage: node scripts/run-tests-html.mjs <dir> [dir2 ...]
 // Output: test-results.html in the cwd
 
-import { readdirSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve, relative } from "node:path";
+import { readdirSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { join, resolve, relative, dirname } from "node:path";
 import { spawn } from "node:child_process";
+
+// Resolve tsx from this script's own node_modules so it works regardless of cwd.
+// import.meta.resolve returns a file:// URL which --import accepts on all platforms.
+const TSX_ESM = import.meta.resolve("tsx/esm");
 
 // ── File discovery ────────────────────────────────────────────────────────────
 
@@ -23,6 +27,20 @@ function findTests(dir) {
   return results;
 }
 
+// ── Workspace root (nearest package.json) ────────────────────────────────────
+// tsx resolves tsconfig.json based on cwd, so each file must run in its own
+// workspace directory so that path aliases (e.g. @/*) resolve correctly.
+
+function findWorkspaceCwd(filePath) {
+  let dir = dirname(resolve(filePath));
+  while (true) {
+    if (existsSync(join(dir, "package.json"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return dir;
+    dir = parent;
+  }
+}
+
 // ── Run a single file with TAP reporter ──────────────────────────────────────
 
 function runFile(file) {
@@ -31,8 +49,8 @@ function runFile(file) {
     let tap = "";
     const child = spawn(
       process.execPath,
-      ["--import", "tsx/esm", "--test", "--test-reporter=tap", file],
-      { stdio: ["ignore", "pipe", "pipe"] }
+      ["--import", TSX_ESM, "--test", "--test-reporter=tap", file],
+      { stdio: ["ignore", "pipe", "pipe"], cwd: findWorkspaceCwd(file) }
     );
     child.stdout.on("data", c => { tap += c.toString(); });
     child.stderr.on("data", () => {});
@@ -69,7 +87,8 @@ function parseSingleFileTap(tap) {
   for (const line of tap.split(/\r?\n/)) {
     const trimmed = line.trimStart();
 
-    if (trimmed === "---") { inDiag = !inDiag; continue; }
+    if (trimmed === "---") { inDiag = true; continue; }
+    if (trimmed === "...") { inDiag = false; continue; }
     if (inDiag) { diagBuf.push(trimmed); continue; }
 
     // Only top-level (col 0) result lines
@@ -99,46 +118,153 @@ function esc(str) {
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// Known all-caps acronyms to restore after camelCase splitting.
+const ACRONYMS = ["OCR", "PDF", "EXIF", "URL", "API", "ID"];
+
+function fixAcronyms(str) {
+  return ACRONYMS.reduce((s, acr) => {
+    const title = acr[0] + acr.slice(1).toLowerCase();
+    return s.replace(new RegExp(`\\b${title}\\b`, "g"), acr);
+  }, str);
+}
+
+// Converts a relative file path like "apps/api/src/tests/api/services/mediaActionsService.test.ts"
+// into a readable breadcrumb like "API · Services · Media Actions Service".
+function suiteName(relPath) {
+  const p = relPath.replace(/\\/g, "/");
+  let app = "";
+  let rest = p;
+  if (p.startsWith("apps/api/src/tests/")) {
+    app = "API";
+    rest = p.slice("apps/api/src/tests/".length);
+    if (rest.startsWith("api/")) rest = rest.slice("api/".length);
+  } else if (p.startsWith("apps/web/lib/")) {
+    app = "Web";
+    rest = p.slice("apps/web/lib/".length);
+  }
+
+  const parts = rest.split("/");
+  const fileName = parts.pop().replace(/\.test\.ts$/, "");
+
+  // Split camelCase into words and capitalize
+  const filePart = fixAcronyms(
+    fileName
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .replace(/^[a-z]/, s => s.toUpperCase())
+  );
+
+  const dirParts = parts
+    .filter(Boolean)
+    .map(d => fixAcronyms(d.charAt(0).toUpperCase() + d.slice(1)));
+
+  return (app ? [app, ...dirParts, filePart] : [...dirParts, filePart]).join(" · ");
+}
+
+// Group key for a relative path — the category label shown on outer dropdowns.
+function groupKey(relPath) {
+  const p = relPath.replace(/\\/g, "/");
+  if (p.startsWith("apps/api/src/tests/api/")) {
+    const dir = p.slice("apps/api/src/tests/api/".length).split("/")[0];
+    return "API · " + fixAcronyms(dir.charAt(0).toUpperCase() + dir.slice(1));
+  }
+  if (p.startsWith("apps/web/lib/")) {
+    const dir = p.slice("apps/web/lib/".length).split("/")[0];
+    return "Web · " + fixAcronyms(dir.charAt(0).toUpperCase() + dir.slice(1));
+  }
+  return "Other";
+}
+
+// Just the file-level label (no breadcrumb prefix) for display inside a group.
+function fileLabel(relPath) {
+  const p = relPath.replace(/\\/g, "/");
+  const fileName = p.split("/").pop().replace(/\.test\.ts$/, "");
+  return fixAcronyms(
+    fileName
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .replace(/^[a-z]/, s => s.toUpperCase())
+  );
+}
+
 function buildHtml(suites, totalElapsed) {
-  const totalTests  = suites.reduce((n, s) => n + s.tests.length, 0);
-  const totalPassed = suites.reduce((n, s) => n + s.tests.filter(t => t.pass && !t.skip).length, 0);
-  const totalFailed = suites.reduce((n, s) => n + s.tests.filter(t => !t.pass && !t.skip).length, 0);
-  const totalSkipped= suites.reduce((n, s) => n + s.tests.filter(t => t.skip).length, 0);
-  const statusClass = totalFailed > 0 ? "fail" : "pass";
+  const totalTests   = suites.reduce((n, s) => n + s.tests.length, 0);
+  const totalPassed  = suites.reduce((n, s) => n + s.tests.filter(t =>  t.pass && !t.skip).length, 0);
+  const totalFailed  = suites.reduce((n, s) => n + s.tests.filter(t => !t.pass && !t.skip).length, 0);
+  const totalSkipped = suites.reduce((n, s) => n + s.tests.filter(t =>  t.skip).length, 0);
+  const statusClass  = totalFailed > 0 ? "fail" : "pass";
 
-  const suiteHtml = suites.map((s, i) => {
-    const failed = s.tests.filter(t => !t.pass && !t.skip).length;
-    const passed = s.tests.filter(t => t.pass && !t.skip).length;
-    const ok = failed === 0;
-    const icon = ok ? "✓" : "✗";
-    const cls  = ok ? "suite-pass" : "suite-fail";
+  // Group suites by category (e.g. "API · Lib", "API · Services", "Web · Theme")
+  const groupMap = new Map();
+  for (const s of suites) {
+    const key = groupKey(s.label);
+    if (!groupMap.has(key)) groupMap.set(key, { label: key, suites: [] });
+    groupMap.get(key).suites.push(s);
+  }
+  const groups = [...groupMap.values()];
 
-    const testRows = s.tests.map(t => {
-      const tIcon = t.skip ? "–" : t.pass ? "✓" : "✗";
-      const tCls  = t.skip ? "test-skip" : t.pass ? "test-pass" : "test-fail";
-      const diagHtml = !t.pass && t.diag?.length
-        ? `<tr class="diag-row"><td colspan="2"><pre class="diag">${esc(t.diag.join("\n"))}</pre></td></tr>`
-        : "";
-      return `<tr class="${tCls}"><td class="icon">${tIcon}</td><td class="test-name">${esc(t.name)}</td></tr>${diagHtml}`;
-    }).join("");
+  const groupsHtml = groups.map((g, gi) => {
+    const gPassed   = g.suites.reduce((n, s) => n + s.tests.filter(t =>  t.pass && !t.skip).length, 0);
+    const gFailed   = g.suites.reduce((n, s) => n + s.tests.filter(t => !t.pass && !t.skip).length, 0);
+    const gSkipped  = g.suites.reduce((n, s) => n + s.tests.filter(t =>  t.skip).length, 0);
+    const gDuration = g.suites.reduce((n, s) => n + s.duration, 0);
+    const gOk  = gFailed === 0;
+    const gCls = gOk ? "group-pass" : "group-fail";
 
-    return `<details class="suite ${cls}" ${ok ? "" : "open"}
-      data-status="${ok ? 1 : 0}"
-      data-name="${esc(s.label.toLowerCase())}"
-      data-duration="${s.duration}"
-      data-index="${i}">
-  <summary>
-    <span class="suite-icon">${icon}</span>
-    <span class="suite-label">${esc(s.label)}</span>
-    <span class="suite-counts">
-      ${failed > 0 ? `<span class="ct-fail">${failed} failed</span>` : ""}
-      <span class="ct-pass">${passed} passed</span>
-      ${s.tests.filter(t=>t.skip).length > 0 ? `<span class="ct-skip">${s.tests.filter(t=>t.skip).length} skipped</span>` : ""}
-      <span class="ct-time">${s.duration} ms</span>
-    </span>
-  </summary>
-  <table class="test-table"><tbody>${testRows}</tbody></table>
-</details>`;
+    // Sort suites within the group: failed first, then alphabetically
+    const sorted = [...g.suites].sort((a, b) => {
+      const af = a.tests.some(t => !t.pass && !t.skip) ? 0 : 1;
+      const bf = b.tests.some(t => !t.pass && !t.skip) ? 0 : 1;
+      return af !== bf ? af - bf : fileLabel(a.label).localeCompare(fileLabel(b.label));
+    });
+
+    const suitesHtml = sorted.map(s => {
+      const failed = s.tests.filter(t => !t.pass && !t.skip).length;
+      const passed = s.tests.filter(t =>  t.pass && !t.skip).length;
+      const ok   = failed === 0;
+      const sCls = ok ? "suite-pass" : "suite-fail";
+
+      const testRows = s.tests.map(t => {
+        const tIcon = t.skip ? "–" : t.pass ? "✓" : "✗";
+        const tCls  = t.skip ? "test-skip" : t.pass ? "test-pass" : "test-fail";
+        const diagHtml = !t.pass && t.diag?.length
+          ? `<tr class="diag-row"><td colspan="2"><pre class="diag">${esc(t.diag.join("\n"))}</pre></td></tr>`
+          : "";
+        return `<tr class="${tCls}"><td class="icon">${tIcon}</td><td class="test-name">${esc(t.name)}</td></tr>${diagHtml}`;
+      }).join("");
+
+      return `    <details class="suite ${sCls}" ${ok ? "" : "open"}>
+      <summary>
+        <span class="suite-icon">${ok ? "✓" : "✗"}</span>
+        <span class="suite-label" title="${esc(suiteName(s.label))}">${esc(fileLabel(s.label))}</span>
+        <span class="suite-counts">
+          ${failed > 0 ? `<span class="ct-fail">${failed} failed</span>` : ""}
+          <span class="ct-pass">${passed} passed</span>
+          ${s.tests.filter(t => t.skip).length > 0 ? `<span class="ct-skip">${s.tests.filter(t => t.skip).length} skipped</span>` : ""}
+          <span class="ct-time">${s.duration} ms</span>
+        </span>
+      </summary>
+      <table class="test-table"><tbody>${testRows}</tbody></table>
+    </details>`;
+    }).join("\n");
+
+    return `  <details class="group ${gCls}" ${gOk ? "" : "open"}
+    data-status="${gOk ? 1 : 0}"
+    data-name="${esc(g.label.toLowerCase())}"
+    data-duration="${gDuration}"
+    data-index="${gi}">
+    <summary>
+      <span class="group-icon">${gOk ? "✓" : "✗"}</span>
+      <span class="group-label">${esc(g.label)}</span>
+      <span class="group-counts">
+        ${gFailed  > 0 ? `<span class="ct-fail">${gFailed} failed</span>` : ""}
+        <span class="ct-pass">${gPassed} passed</span>
+        ${gSkipped > 0 ? `<span class="ct-skip">${gSkipped} skipped</span>` : ""}
+        <span class="ct-time">${gDuration} ms</span>
+      </span>
+    </summary>
+    <div class="group-suites">
+${suitesHtml}
+    </div>
+  </details>`;
   }).join("\n");
 
   return `<!DOCTYPE html>
@@ -146,16 +272,16 @@ function buildHtml(suites, totalElapsed) {
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Test Results — Vault API</title>
+<title>Test Results — Vault</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,-apple-system,sans-serif;background:#0d0d0d;color:#e0e0e0;padding:2rem;max-width:900px;margin:0 auto}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0d0d0d;color:#e0e0e0;padding:2rem;max-width:960px;margin:0 auto}
 h1{font-size:1.4rem;font-weight:600;color:#fff;margin-bottom:.2rem}
 .meta{font-size:.78rem;color:#555;margin-bottom:1.4rem}
 .status-bar{display:inline-flex;align-items:center;gap:.5rem;padding:.35rem .9rem;border-radius:6px;font-size:.8rem;font-weight:700;margin-bottom:1.2rem}
 .status-bar.pass{background:#1a3a1a;color:#4caf50}
 .status-bar.fail{background:#3a1a1a;color:#ef5350}
-.summary{display:flex;gap:.6rem;margin-bottom:1.4rem;flex-wrap:wrap}
+.chips{display:flex;gap:.6rem;margin-bottom:1.4rem;flex-wrap:wrap}
 .chip{padding:.3rem .8rem;border-radius:999px;font-size:.75rem;font-weight:600}
 .chip.pass {background:#1a3a1a;color:#4caf50;border:1px solid #2e7d32}
 .chip.fail {background:#3a1a1a;color:#ef5350;border:1px solid #b71c1c}
@@ -163,23 +289,39 @@ h1{font-size:1.4rem;font-weight:600;color:#fff;margin-bottom:.2rem}
 .chip.total{background:#1a1a2a;color:#90caf9;border:1px solid #1565c0}
 .chip.time {background:#1a1a1a;color:#666;   border:1px solid #2a2a2a}
 .sort-bar{display:flex;align-items:center;gap:.4rem;margin-bottom:.8rem;flex-wrap:wrap}
-.sort-bar span{font-size:.72rem;color:#555}
+.sort-bar>span{font-size:.72rem;color:#555}
 .sort-btn{background:#141414;border:1px solid #2a2a2a;color:#666;font-size:.72rem;padding:.25rem .6rem;border-radius:4px;cursor:pointer;transition:all .1s}
 .sort-btn:hover{border-color:#444;color:#bbb}
 .sort-btn.active{border-color:#4a6fa5;color:#90caf9;background:#0d1f35}
-.suites{display:flex;flex-direction:column;gap:.4rem}
-details.suite{border-radius:7px;overflow:hidden;border:1px solid #1e1e1e}
-.suite-pass{border-color:#1e1e1e}
-.suite-fail{border-color:#361b1b}
-summary{display:flex;align-items:center;gap:.6rem;padding:.6rem 1rem;cursor:pointer;list-style:none;user-select:none}
-summary::-webkit-details-marker{display:none}
-.suite-pass summary{background:#141414}
-.suite-fail summary{background:#1a0d0d}
-summary:hover{filter:brightness(1.3)}
-.suite-icon{font-size:.85rem;width:1rem;text-align:center;flex-shrink:0}
+/* ── Group (category) level ─────────────────────────────── */
+.groups{display:flex;flex-direction:column;gap:.6rem}
+details.group{border-radius:8px;overflow:hidden;border:1px solid #252525}
+.group-pass{border-color:#252525}
+.group-fail{border-color:#3a1a1a}
+details.group>summary{display:flex;align-items:center;gap:.6rem;padding:.75rem 1rem;cursor:pointer;list-style:none;user-select:none}
+details.group>summary::-webkit-details-marker{display:none}
+.group-pass>summary{background:#141414}
+.group-fail>summary{background:#1e0d0d}
+details.group>summary:hover{filter:brightness(1.3)}
+.group-icon{font-size:.9rem;width:1rem;text-align:center;flex-shrink:0}
+.group-pass .group-icon{color:#4caf50}
+.group-fail .group-icon{color:#ef5350}
+.group-label{flex:1;font-size:.88rem;font-weight:600;color:#ddd}
+.group-counts{display:flex;gap:.5rem;align-items:center;flex-shrink:0}
+/* ── Suite (file) level ──────────────────────────────────── */
+.group-suites{display:flex;flex-direction:column;gap:.3rem;padding:.5rem}
+details.suite{border-radius:6px;overflow:hidden;border:1px solid #1a1a1a}
+.suite-pass{border-color:#1a1a1a}
+.suite-fail{border-color:#2e1212}
+details.suite>summary{display:flex;align-items:center;gap:.6rem;padding:.55rem .9rem;cursor:pointer;list-style:none;user-select:none}
+details.suite>summary::-webkit-details-marker{display:none}
+.suite-pass>summary{background:#111}
+.suite-fail>summary{background:#1a0d0d}
+details.suite>summary:hover{filter:brightness(1.3)}
+.suite-icon{font-size:.82rem;width:1rem;text-align:center;flex-shrink:0}
 .suite-pass .suite-icon{color:#4caf50}
 .suite-fail .suite-icon{color:#ef5350}
-.suite-label{flex:1;font-size:.82rem;font-weight:500;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.suite-label{flex:1;font-size:.8rem;font-weight:500;color:#bbb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .suite-counts{display:flex;gap:.5rem;align-items:center;flex-shrink:0}
 .ct-fail{font-size:.7rem;color:#ef5350;font-weight:600}
 .ct-pass{font-size:.7rem;color:#388e3c}
@@ -200,12 +342,12 @@ pre.diag{font-size:.7rem;background:#150505;color:#ff8a80;padding:.5rem 1rem;ove
 </style>
 </head>
 <body>
-<h1>Vault API — Test Results</h1>
-<p class="meta">Generated ${new Date().toLocaleString()} &nbsp;·&nbsp; ${suites.length} suites</p>
+<h1>Vault — Test Results</h1>
+<p class="meta">Generated ${new Date().toLocaleString()} &nbsp;·&nbsp; ${groups.length} groups &nbsp;·&nbsp; ${suites.length} suites</p>
 
 <div class="status-bar ${statusClass}">${statusClass === "pass" ? "✓ All tests passed" : "✗ Tests failed"}</div>
 
-<div class="summary">
+<div class="chips">
   <span class="chip total">${totalTests} tests</span>
   <span class="chip pass">✓ ${totalPassed} passed</span>
   ${totalFailed  > 0 ? `<span class="chip fail">✗ ${totalFailed} failed</span>` : ""}
@@ -222,15 +364,15 @@ pre.diag{font-size:.7rem;background:#150505;color:#ff8a80;padding:.5rem 1rem;ove
   <button class="sort-btn" data-sort="duration-asc">Fastest first</button>
 </div>
 
-<div class="suites" id="suites">
-${suiteHtml}
+<div class="groups" id="suites">
+${groupsHtml}
 </div>
 
 <script>
 const container = document.getElementById('suites');
 const buttons = document.querySelectorAll('.sort-btn');
 function sort(key) {
-  const items = [...container.querySelectorAll('details.suite')];
+  const items = [...container.querySelectorAll(':scope > details.group')];
   items.sort((a, b) => {
     if (key === 'status') {
       const d = Number(a.dataset.status) - Number(b.dataset.status);

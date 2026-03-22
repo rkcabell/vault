@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { PassThrough } from "node:stream";
 import { createMediaActionsService } from "@/services/media/mediaActionsService.js";
 
 // ── mock builders ─────────────────────────────────────────────────────────────
 
 type MediaKeys = { storageKey: string; thumbnailKey?: string | null };
 type TextJobMedia = { id: string; storageKey: string; title?: string | null };
+type BulkItem = { id: string; storageKey: string; title: string; mimeType: string | null; filename: string };
 
 function makeRepo (overrides: {
   findMediaKeys?: (_userId: string, _id: string) => Promise<MediaKeys | null>;
@@ -17,6 +19,7 @@ function makeRepo (overrides: {
   setTextState?: (_id: string, _state: string) => Promise<void>;
   findStorageKey?: (_userId: string, _id: string) => Promise<{ storageKey: string } | null>;
   resetThumbState?: (_id: string) => Promise<void>;
+  findBulkDownloadItems?: (_userId: string, _ids: string[]) => Promise<BulkItem[]>;
 } = {}) {
   return {
     findMediaKeys: overrides.findMediaKeys ?? (async () => null),
@@ -28,16 +31,25 @@ function makeRepo (overrides: {
     setTextState: overrides.setTextState ?? (async () => {}),
     findStorageKey: overrides.findStorageKey ?? (async () => null),
     resetThumbState: overrides.resetThumbState ?? (async () => {}),
+    findBulkDownloadItems: overrides.findBulkDownloadItems ?? (async () => []),
   } as unknown as Parameters<typeof createMediaActionsService>[0]["repository"];
+}
+
+function makeReadableStream (data = "file-bytes") {
+  const s = new PassThrough();
+  s.end(Buffer.from(data));
+  return s;
 }
 
 function makeS3 (overrides: {
   deleteIfPresent?: (_args: unknown) => Promise<void>;
   presignGet?: (_args: unknown) => Promise<string>;
+  getObjectStream?: (_args: unknown) => Promise<{ body: PassThrough; etag: null; contentLength: null } | null>;
 } = {}) {
   return {
     deleteIfPresent: overrides.deleteIfPresent ?? (async () => {}),
     presignGet: overrides.presignGet ?? (async () => "https://example.com/presigned"),
+    getObjectStream: overrides.getObjectStream ?? (async () => ({ body: makeReadableStream(), etag: null, contentLength: null })),
   } as unknown as Parameters<typeof createMediaActionsService>[0]["s3Adapter"];
 }
 
@@ -325,4 +337,198 @@ test("regenerateThumbnail: resets thumb state and enqueues a thumb job", async (
   assert.equal(job.mediaId, "media-1");
   assert.equal(job.storageKey, "orig/key");
   assert.deepEqual(result, { ok: true });
+});
+
+// ── getBulkDownloadItems ──────────────────────────────────────────────────────
+
+test("getBulkDownloadItems: returns empty array when no owned items found", async () => {
+  const svc = makeService();
+  const result = await svc.getBulkDownloadItems("u", ["id-1", "id-2"]);
+  assert.deepEqual(result, []);
+});
+
+test("getBulkDownloadItems: forwards userId and ids to repository", async () => {
+  let calledWith: { userId: string; ids: string[] } | null = null;
+  const svc = makeService({
+    findBulkDownloadItems: async (userId, ids) => {
+      calledWith = { userId, ids };
+      return [];
+    },
+  });
+
+  await svc.getBulkDownloadItems("user-42", ["a", "b", "c"]);
+  assert.deepEqual(calledWith, { userId: "user-42", ids: ["a", "b", "c"] });
+});
+
+test("getBulkDownloadItems: returns items from repository", async () => {
+  const items: BulkItem[] = [
+    { id: "m1", storageKey: "k1", title: "Photo", mimeType: "image/jpeg", filename: "photo.jpg" },
+    { id: "m2", storageKey: "k2", title: "Doc", mimeType: "application/pdf", filename: "doc.pdf" },
+  ];
+  const svc = makeService({ findBulkDownloadItems: async () => items });
+  const result = await svc.getBulkDownloadItems("u", ["m1", "m2"]);
+  assert.deepEqual(result, items);
+});
+
+// ── streamBulkArchive ─────────────────────────────────────────────────────────
+
+function collectStream (dest: PassThrough): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    dest.on("data", (chunk: Buffer) => chunks.push(chunk));
+    dest.on("end", () => resolve(Buffer.concat(chunks)));
+    dest.on("error", reject);
+  });
+}
+
+const noopLogger = { error: () => {} };
+
+test("streamBulkArchive: produces non-empty zip output", async () => {
+  const items: BulkItem[] = [
+    { id: "m1", storageKey: "k1", title: "Photo", mimeType: "image/jpeg", filename: "photo.jpg" },
+  ];
+  const svc = makeService({}, { getObjectStream: async () => ({ body: makeReadableStream("image-data"), etag: null, contentLength: null }) });
+
+  const dest = new PassThrough();
+  const collected = collectStream(dest);
+  await svc.streamBulkArchive(items, dest, noopLogger);
+  const buf = await collected;
+
+  // Zip files begin with the PK magic bytes (0x50 0x4B)
+  assert.ok(buf.length > 0, "output is non-empty");
+  assert.equal(buf[0], 0x50, "starts with P (zip magic)");
+  assert.equal(buf[1], 0x4b, "starts with K (zip magic)");
+});
+
+test("streamBulkArchive: calls getObjectStream for each item", async () => {
+  const keys: string[] = [];
+  const items: BulkItem[] = [
+    { id: "m1", storageKey: "key/a", title: "A", mimeType: "image/png", filename: "a.png" },
+    { id: "m2", storageKey: "key/b", title: "B", mimeType: "image/png", filename: "b.png" },
+  ];
+  const svc = makeService({}, {
+    getObjectStream: async (args: unknown) => {
+      keys.push((args as { key: string }).key);
+      return { body: makeReadableStream(), etag: null, contentLength: null };
+    },
+  });
+
+  const dest = new PassThrough();
+  await svc.streamBulkArchive(items, dest, noopLogger);
+
+  assert.deepEqual(keys, ["key/a", "key/b"]);
+});
+
+test("streamBulkArchive: skips items where S3 returns null", async () => {
+  const items: BulkItem[] = [
+    { id: "missing", storageKey: "gone", title: "Gone", mimeType: null, filename: "gone.txt" },
+    { id: "present", storageKey: "here", title: "Here", mimeType: "text/plain", filename: "here.txt" },
+  ];
+  let streamCalls = 0;
+  const svc = makeService({}, {
+    getObjectStream: async (args: unknown) => {
+      streamCalls++;
+      const key = (args as { key: string }).key;
+      if (key === "gone") return null;
+      return { body: makeReadableStream("content"), etag: null, contentLength: null };
+    },
+  });
+
+  const dest = new PassThrough();
+  const collected = collectStream(dest);
+  await svc.streamBulkArchive(items, dest, noopLogger);
+  const buf = await collected;
+
+  assert.equal(streamCalls, 2, "attempted both items");
+  assert.ok(buf.length > 0, "still produced a zip (from the present item)");
+});
+
+test("streamBulkArchive: deduplicates filenames when two items share a title", async () => {
+  // We verify deduplication indirectly: the archive must finalize without error,
+  // meaning archiver accepted two distinct entry names (no collision crash).
+  const items: BulkItem[] = [
+    { id: "m1", storageKey: "k1", title: "Report", mimeType: "application/pdf", filename: "report.pdf" },
+    { id: "m2", storageKey: "k2", title: "Report", mimeType: "application/pdf", filename: "report2.pdf" },
+  ];
+  const svc = makeService({}, {
+    getObjectStream: async () => ({ body: makeReadableStream("data"), etag: null, contentLength: null }),
+  });
+
+  const dest = new PassThrough();
+  const collected = collectStream(dest);
+  await svc.streamBulkArchive(items, dest, noopLogger);
+  const buf = await collected;
+
+  // Zip contains both entries — a zip with 2 files is always larger than one with 1
+  assert.ok(buf.length > 0);
+  // The central directory contains filenames; check both expected names appear in the raw bytes
+  const content = buf.toString("binary");
+  assert.ok(content.includes("Report.pdf"), "first entry has plain name");
+  assert.ok(content.includes("Report_2.pdf"), "second entry has deduplicated name");
+});
+
+test("streamBulkArchive: falls back to original filename extension for unknown mimeType", async () => {
+  const items: BulkItem[] = [
+    { id: "m1", storageKey: "k1", title: "Mystery", mimeType: "application/octet-stream", filename: "mystery.dat" },
+  ];
+  const svc = makeService({}, {
+    getObjectStream: async () => ({ body: makeReadableStream(), etag: null, contentLength: null }),
+  });
+
+  const dest = new PassThrough();
+  const collected = collectStream(dest);
+  await svc.streamBulkArchive(items, dest, noopLogger);
+  const buf = await collected;
+
+  assert.ok(buf.toString("binary").includes("Mystery.dat"), "uses extension from original filename");
+});
+
+test("streamBulkArchive: falls back to original filename extension when mimeType is null", async () => {
+  const items: BulkItem[] = [
+    { id: "m1", storageKey: "k1", title: "NoType", mimeType: null, filename: "notype.heic" },
+  ];
+  const svc = makeService({}, {
+    getObjectStream: async () => ({ body: makeReadableStream(), etag: null, contentLength: null }),
+  });
+
+  const dest = new PassThrough();
+  const collected = collectStream(dest);
+  await svc.streamBulkArchive(items, dest, noopLogger);
+  const buf = await collected;
+
+  assert.ok(buf.toString("binary").includes("NoType.heic"), "uses extension from original filename");
+});
+
+test("streamBulkArchive: produces no extension when mimeType and filename both lack one", async () => {
+  const items: BulkItem[] = [
+    { id: "m1", storageKey: "k1", title: "Bare", mimeType: null, filename: "bare" },
+  ];
+  const svc = makeService({}, {
+    getObjectStream: async () => ({ body: makeReadableStream(), etag: null, contentLength: null }),
+  });
+
+  const dest = new PassThrough();
+  const collected = collectStream(dest);
+  await svc.streamBulkArchive(items, dest, noopLogger);
+  const buf = await collected;
+
+  // Entry is stored as just "Bare" with no extension
+  assert.ok(buf.toString("binary").includes("Bare"), "entry exists");
+  assert.ok(!buf.toString("binary").includes("Bare."), "no spurious extension appended");
+});
+
+test("streamBulkArchive: falls back to item id when title sanitizes to empty string", async () => {
+  const items: BulkItem[] = [
+    { id: "abc-123", storageKey: "k1", title: "///", mimeType: "image/png", filename: "img.png" },
+  ];
+  const svc = makeService({}, {
+    getObjectStream: async () => ({ body: makeReadableStream(), etag: null, contentLength: null }),
+  });
+
+  const dest = new PassThrough();
+  const collected = collectStream(dest);
+  await svc.streamBulkArchive(items, dest, noopLogger);
+  const buf = await collected;
+
+  assert.ok(buf.toString("binary").includes("abc-123.png"), "falls back to item id");
 });

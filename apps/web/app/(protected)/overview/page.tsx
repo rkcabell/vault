@@ -8,7 +8,13 @@ export default async function OverviewPage() {
   const recent = (await listMedia({ q: "" })).slice(0, 9);
 
   const inbox = recent
-    .filter((m) => deriveOverallState(m.thumbState, m.textState) !== "READY")
+    .filter((m) => {
+      if (m.thumbState === "PENDING" || m.textState === "PENDING") return true;
+      if (m.thumbState === "ERROR" || m.thumbState === "FAILED") return true;
+      if (m.textState === "ERROR") return true;
+      // textState FAILED = not supported / retries exhausted — not actionable
+      return false;
+    })
     .slice(0, 8);
 
   return (
@@ -81,7 +87,7 @@ export default async function OverviewPage() {
                 {m.title || m.id}
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {formatMimeTag(m.mimeType, m.title)}
+                {formatMimeTag(m.mimeType, m.filename)}
               </div>
             </Link>
           ))}

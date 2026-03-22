@@ -52,7 +52,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Fallback: hit /api/auth/me directly (used for focus re-auth and init failures).
   const refresh = useCallback(async () => {
-    setStatus('loading');
+    // Only show the loading state on the initial auth check, not on background
+    // re-validations (e.g. window focus). Flipping to 'loading' while already
+    // authenticated causes AuthGuard to unmount the page, resetting all state.
+    setStatus(prev => prev === 'authenticated' ? 'authenticated' : 'loading');
     try {
       const response = await fetch('/api/auth/me', { credentials: 'include' });
 

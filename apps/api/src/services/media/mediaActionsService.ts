@@ -42,11 +42,19 @@ function sanitizeTitle (title: string): string {
   return cleaned || "";
 }
 
+function extFromFilename (filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  return dot > 0 ? filename.slice(dot) : "";
+}
+
 function buildFilename (
-  item: { id: string; title: string; mimeType: string | null },
+  item: { id: string; title: string; mimeType: string | null; filename: string },
   usedNames: Set<string>,
 ): string {
-  const ext = (item.mimeType && MIME_TO_EXT[item.mimeType]) ?? ".bin";
+  const ext =
+    (item.mimeType && MIME_TO_EXT[item.mimeType]) ??
+    extFromFilename(item.filename) ??
+    "";
   const base = sanitizeTitle(item.title) || item.id;
   let name = `${base}${ext}`;
   if (!usedNames.has(name)) {
@@ -178,7 +186,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
   };
 
   const streamBulkArchive = async (
-    items: { id: string; storageKey: string; title: string; mimeType: string | null }[],
+    items: { id: string; storageKey: string; title: string; mimeType: string | null; filename: string }[],
     dest: Writable,
     logger: { error: (obj: unknown, msg: string) => void },
   ) => {
