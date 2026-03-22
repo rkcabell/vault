@@ -350,7 +350,7 @@ test("getBulkDownloadItems: returns empty array when no owned items found", asyn
 test("getBulkDownloadItems: forwards userId and ids to repository", async () => {
   let calledWith: { userId: string; ids: string[] } | null = null;
   const svc = makeService({
-    findBulkDownloadItems: async (userId, ids) => {
+    findBulkDownloadItems: async (userId: string, ids: string[]) => {
       calledWith = { userId, ids };
       return [];
     },
