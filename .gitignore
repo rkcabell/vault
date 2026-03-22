@@ -35,13 +35,9 @@ dist/
 build/
 out/
 .next/
+next-env.d.ts
 coverage/
 *.tsbuildinfo
-
-# Turborepo / Nx (safe even if you don't use them)
-.turbo/
-.nx/
-.cache/
 
 ################################################################################
 # Logs / temp
@@ -83,7 +79,7 @@ desktop.ini
 ################################################################################
 # Docker / local volumes
 ################################################################################
-# Compose overrides often contain machine-specific paths or creds
+# Compose overrides often contain machine-specific paths or credentials
 docker-compose.override.yml
 compose.override.yml
 
