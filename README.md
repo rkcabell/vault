@@ -43,7 +43,8 @@ vault/
 │   └── types/        # Shared TypeScript types
 ├── infra/
 │   └── docker/       # Dockerfiles and Compose configs
-├── docs/             # ADRs, OpenAPI spec, postmortems
+├── docs/             # OpenAPI spec and test coverage plan
+├── test-results/     # Generated HTML test reports
 └── scripts/          # setup.sh
 ```
 

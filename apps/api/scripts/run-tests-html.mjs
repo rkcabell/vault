@@ -3,10 +3,11 @@
 // and generates a self-contained HTML report grouped by file (suite).
 //
 // Usage: node scripts/run-tests-html.mjs <dir> [dir2 ...]
-// Output: test-results.html in the cwd
+// Output: test-results/test-results.html in the repo root
 
-import { readdirSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { readdirSync, statSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve, relative, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 // Resolve tsx from this script's own node_modules so it works regardless of cwd.
@@ -422,7 +423,10 @@ const suites = runResults.map((r, i) => {
 
 const totalElapsed = Date.now() - start;
 const html = buildHtml(suites, totalElapsed);
-const outputPath = resolve("test-results.html");
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const outDir = join(repoRoot, "test-results");
+mkdirSync(outDir, { recursive: true });
+const outputPath = join(outDir, "test-results.html");
 writeFileSync(outputPath, html, "utf8");
 console.log(`Report → file:///${outputPath.replace(/\\/g, "/")}`);
 process.exit(anyFail ? 1 : 0);

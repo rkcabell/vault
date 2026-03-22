@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "clean": "npm run -w web clean",
+    "sweep": "npm run clean && npm run lint && npm run build",
     "build": "npm run -ws build",
     "lint": "npm run lint --workspace=api --workspace=web",
     "test": "node scripts/test-all.mjs",
