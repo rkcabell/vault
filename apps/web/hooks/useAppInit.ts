@@ -30,6 +30,7 @@ export type AppInitData = {
 let _data: AppInitData | null = null;
 let _isLoaded = false;
 let _initialized = false;
+let _unauthenticated = false;
 const _listeners = new Set<() => void>();
 
 function _notify() {
@@ -41,7 +42,11 @@ function _initOnce() {
   _initialized = true;
 
   fetch("/api/init", { credentials: "include" })
-    .then(r => (r.ok ? r.json() : null))
+    .then(r => {
+      if (r.ok) return r.json() as Promise<AppInitData>;
+      if (r.status === 401) _unauthenticated = true;
+      return null;
+    })
     .then((data: AppInitData | null) => {
       if (!data) return;
       _data = data;
@@ -67,7 +72,7 @@ export function useAppInit() {
     return () => { _listeners.delete(listener); };
   }, []);
 
-  return { data: _data, isLoaded: _isLoaded };
+  return { data: _data, isLoaded: _isLoaded, unauthenticated: _unauthenticated };
 }
 
 /** Synchronous accessor for other modules that don't need reactivity. */

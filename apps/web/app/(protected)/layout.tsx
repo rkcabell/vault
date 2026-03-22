@@ -1,10 +1,13 @@
 // File: app/(protected)/layout.tsx
 import { AppShell } from "@/components/common/AppShell";
+import { AuthGuard } from "@/components/common/AuthGuard";
 
 export default function ProtectedLayout({ children }: { children: React.ReactNode }) {
   return (
-    <AppShell tags={null} savedViews={[]}>
-      {children}
-    </AppShell>
+    <AuthGuard>
+      <AppShell tags={null} savedViews={[]}>
+        {children}
+      </AppShell>
+    </AuthGuard>
   );
 }

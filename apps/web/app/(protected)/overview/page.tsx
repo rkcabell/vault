@@ -43,7 +43,7 @@ export default async function OverviewPage() {
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Inbox</h2>
         {inbox.length === 0 ? (
-          <div className="rounded-2xl border p-6 text-sm text-muted-foreground">
+          <div className="overview-card--muted rounded-2xl border p-6 text-sm text-muted-foreground">
             No items in the inbox.
           </div>
         ) : (
@@ -52,7 +52,7 @@ export default async function OverviewPage() {
               <Link
                 key={m.id}
                 href={`/media/${m.id}`}
-                className="overview-card rounded-2xl border p-4"
+                className="overview-card overview-card--muted rounded-2xl border p-4"
               >
                 <div className="truncate text-sm font-medium">
                   {m.title || m.id}

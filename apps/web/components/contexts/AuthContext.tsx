@@ -36,7 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
   const router = useRouter();
-  const { data: initData, isLoaded: initLoaded } = useAppInit();
+  const { data: initData, isLoaded: initLoaded, unauthenticated: initUnauthenticated } = useAppInit();
 
   const logout = useCallback(async () => {
     try {
@@ -90,8 +90,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (initData?.user) {
       setUserState(initData.user as User);
       setStatus('authenticated');
-    } else if (initData !== null) {
-      // Init succeeded but returned no user → unauthenticated.
+    } else if (initData !== null || initUnauthenticated) {
+      // Init succeeded but returned no user, or explicitly 401 → unauthenticated.
       setUserState(null);
       setStatus('unauthenticated');
     } else {
@@ -103,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Re-validate session on window focus (only when already authenticated).
   useEffect(() => {
     const handleFocus = () => {
-      if (status !== 'authenticated') void refresh();
+      if (status === 'authenticated') void refresh();
     };
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);

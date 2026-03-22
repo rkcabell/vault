@@ -44,7 +44,7 @@ vault/
 ├── infra/
 │   └── docker/       # Dockerfiles and Compose configs
 ├── docs/             # ADRs, OpenAPI spec, postmortems
-└── scripts/          # Dev scripts (setup.sh)
+└── scripts/          # setup.sh
 ```
 
 ---

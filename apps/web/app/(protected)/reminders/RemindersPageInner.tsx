@@ -126,6 +126,7 @@ function ReminderRow({
 }: ReminderRowProps) {
   const isSnoozed = isCurrentlySnoozed(row, nowMs);
   const isBusy = busyId === row.id;
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   const dueLabelClass = isSnoozed
     ? "reminders-row-due reminders-row-due--snoozed"
@@ -178,11 +179,19 @@ function ReminderRow({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => onCancel(row.id)}
+            onClick={() => {
+              if (confirmCancel) {
+                setConfirmCancel(false);
+                onCancel(row.id);
+              } else {
+                setConfirmCancel(true);
+              }
+            }}
+            onBlur={() => setConfirmCancel(false)}
             disabled={actionsDisabled}
-            className="reminders-cancel-btn"
+            className={confirmCancel ? "reminders-cancel-btn--confirm" : "reminders-cancel-btn"}
           >
-            Cancel
+            {confirmCancel ? "Confirm?" : "Cancel"}
           </Button>
         </div>
       </div>
