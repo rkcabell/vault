@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import type { BundleListItem } from '@vault/types';
 import { EditBundleModal } from '@/components/bundles/EditBundleModal';
 import { AddMediaDialog } from '@/components/bundles/AddMediaDialog';
+import { emitBundlesUpdated } from '@/lib/bundles';
 // ─── Bundle Card ──────────────────────────────────────────────────────────────
 
 function BundleCard({
@@ -43,6 +44,7 @@ function BundleCard({
       if (res.ok) {
         const data = (await res.json()) as { starred: boolean };
         onStarToggle(bundle.id, data.starred);
+        emitBundlesUpdated();
       }
     } finally {
       setIsStarring(false);
@@ -141,17 +143,16 @@ export default function BundlesPage() {
   }, []);
 
   const handleStarToggle = (id: string, starred: boolean) => {
-    setBundles(prev => {
-      const updated = prev.map(b => b.id === id ? { ...b, starred } : b);
-      return [...updated.filter(b => b.starred), ...updated.filter(b => !b.starred)];
-    });
+    // Optimistically update the star state, then refetch for correct starredAt ordering.
+    setBundles(prev => prev.map(b => b.id === id ? { ...b, starred } : b));
+    fetch('/api/bundles', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { bundles: BundleListItem[] } | null) => { if (d) setBundles(d.bundles ?? []); })
+      .catch(() => {});
   };
 
   const handleEditSaved = (updated: Partial<BundleListItem> & { id: string }) => {
-    setBundles(prev => {
-      const next = prev.map(b => b.id === updated.id ? { ...b, ...updated } : b);
-      return [...next.filter(b => b.starred), ...next.filter(b => !b.starred)];
-    });
+    setBundles(prev => prev.map(b => b.id === updated.id ? { ...b, ...updated } : b));
   };
 
   const handleMediaAdded = (ids: string[]) => {

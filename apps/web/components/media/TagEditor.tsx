@@ -6,7 +6,7 @@ import { normalizeTags, TagValidationError, emitTagsUpdated } from "@/lib/tags";
 
 type TagEditorProps = {
   tags: string[];
-  onSave: (tags: string[]) => Promise<void>;
+  onSave: (tags: string[], signal: AbortSignal) => Promise<void>;
   disabled?: boolean;
 };
 
@@ -19,6 +19,7 @@ function splitInput(value: string): string[] {
 
 export function TagEditor({ tags, onSave, disabled }: TagEditorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [tagInput, setTagInput] = useState("");
   const [localTags, setLocalTags] = useState<string[]>(tags);
   const [error, setError] = useState<string | null>(null);
@@ -29,16 +30,23 @@ export function TagEditor({ tags, onSave, disabled }: TagEditorProps) {
   }, [tags]);
 
   const applyTags = async (nextTags: string[]) => {
+    // Cancel any in-flight save so the latest state always wins.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setIsSaving(true);
     try {
-      await onSave(nextTags);
+      await onSave(nextTags, controller.signal);
+      if (controller.signal.aborted) return;
       setError(null);
       emitTagsUpdated();
     } catch (err) {
+      if (controller.signal.aborted) return;
       if (err instanceof Error) setError(err.message);
       else setError("Unable to save tags.");
     } finally {
-      setIsSaving(false);
+      if (!controller.signal.aborted) setIsSaving(false);
     }
   };
 

@@ -26,6 +26,8 @@
   --color-card: hsl(var(--card));
   --color-card-foreground: hsl(var(--card-foreground));
 
+  --color-modal: hsl(var(--modal-background));
+
   --color-popover: hsl(var(--popover));
   --color-popover-foreground: hsl(var(--popover-foreground));
 }
@@ -40,6 +42,7 @@
     --foreground: 0 0% 3.9%;
 
     --page-background: 240 5% 93%;
+    --modal-background: 240 8% 95%;
 
     --card: 240 5% 99%;
     --card-foreground: 0 0% 3.9%;
@@ -110,6 +113,7 @@
 
     --page-background: 220 28% 6%;
     /* #0b0f14 */
+    --modal-background: 220 12% 7%;
 
     --card: 0 0% 3.9%;
     --card-foreground: 0 0% 98%;
@@ -151,6 +155,7 @@
   html:not(.dark).theme-latte {
     --page-background: 36 38% 86%;
     --background: 36 60% 95%;
+    --modal-background: 36 66% 90%;
     --card: 36 60% 95%;
     --secondary: 36 28% 89%;
     --muted: 36 28% 89%;
@@ -167,6 +172,7 @@
   html:not(.dark).theme-solarize {
     --page-background: 28 50% 76%;
     --background: 28 55% 82%;
+    --modal-background: 28 62% 77%;
     --card: 28 55% 82%;
     --secondary: 28 42% 75%;
     --muted: 28 42% 75%;
@@ -183,6 +189,7 @@
   html:not(.dark).theme-mist {
     --page-background: 202 22% 87%;
     --background: 202 28% 94%;
+    --modal-background: 202 34% 89%;
     --card: 202 28% 94%;
     --secondary: 202 18% 90%;
     --muted: 202 18% 90%;
@@ -199,6 +206,7 @@
   html:not(.dark).theme-lavender {
     --page-background: 263 22% 87%;
     --background: 263 28% 94%;
+    --modal-background: 263 34% 89%;
     --card: 263 28% 94%;
     --secondary: 263 18% 90%;
     --muted: 263 18% 90%;
@@ -215,6 +223,7 @@
   html:not(.dark).theme-dream {
     --page-background: 335 28% 88%;
     --background: 335 34% 95%;
+    --modal-background: 335 40% 90%;
     --card: 335 34% 95%;
     --secondary: 335 22% 91%;
     --muted: 335 22% 91%;
@@ -231,6 +240,7 @@
   html:not(.dark).theme-cotton-candy {
     --page-background: 335 55% 82%;
     --background: 200 72% 88%;
+    --modal-background: 200 78% 83%;
     --card: 200 72% 88%;
     --secondary: 200 55% 84%;
     --muted: 200 55% 84%;
@@ -247,6 +257,7 @@
   html:not(.dark).theme-mint {
     --page-background: 148 20% 83%;
     --background: 145 26% 92%;
+    --modal-background: 145 32% 87%;
     --card: 145 26% 92%;
     --secondary: 150 14% 88%;
     --muted: 150 14% 88%;
@@ -275,6 +286,7 @@
      */
     --page-background: 130 26% 55%;
     --background: 137 32% 72%;
+    --modal-background: 137 38% 67%;
     --card: 137 32% 72%;
     --secondary: 137 28% 66%;
     --muted: 137 28% 66%;
@@ -287,6 +299,9 @@
     --border: 130 26% 46%;
     --input: 130 26% 46%;
 
+    /* Destructive — default red (60 % L) fails on this mid-value green; use red-800 instead */
+    --destructive: 0 70% 35%;      /* ≈ #991b1b  ~4.75:1 on bg, ~8:1 white-on-red */
+
     /* Reminder status — dark enough to pass WCAG AA on the garden green background */
     --reminder-today: #b45309;     /* amber-700  — warm orange, clearly distinct from overdue */
     --reminder-overdue: #991b1b;   /* red-800    — clearly red */
@@ -295,6 +310,7 @@
 
 /* ---- Dark theme variants ---- */
   html.dark.theme-new-moon {
+    --modal-background: 221 44% 8%;
     --card: 221 39% 11%;
     --card-foreground: 0 0% 98%;
     --popover: 221 39% 11%;
@@ -309,6 +325,7 @@
   html.dark.theme-charcoal {
     --page-background: 220 5% 13%;
     --background: 220 5% 17%;
+    --modal-background: 220 8% 14%;
     --foreground: 0 0% 88%;
 
     --card: 220 5% 20%;
@@ -337,6 +354,7 @@
   html.dark.theme-matrix {
     --page-background: 0 0% 2%;
     --background: 0 0% 4%;
+    --modal-background: 120 8% 5%;
     --foreground: 120 80% 60%;
     --card: 120 8% 7%;
     --card-foreground: 120 80% 60%;

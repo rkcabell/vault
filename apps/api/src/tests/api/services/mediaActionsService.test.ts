@@ -71,9 +71,20 @@ function makeThumbQueue (overrides: {
   } as unknown as Parameters<typeof createMediaActionsService>[0]["thumbQueue"];
 }
 
+function makeBundleRepo () {
+  return {
+    createBundle: async () => ({ id: "bundle-1" }),
+    addItemsToBundle: async () => {},
+    setCoverMedia: async () => {},
+    setSourceMedia: async () => {},
+    clearCoverMedia: async () => {},
+  } as unknown as Parameters<typeof createMediaActionsService>[0]["bundleRepository"];
+}
+
 function makeService (repoOverrides = {}, s3Overrides = {}, ocrQueueOverrides = {}, thumbQueueOverrides = {}) {
   return createMediaActionsService({
     repository: makeRepo(repoOverrides),
+    bundleRepository: makeBundleRepo(),
     s3Adapter: makeS3(s3Overrides),
     bucket: "test-bucket",
     ocrQueue: makeQueue(ocrQueueOverrides),

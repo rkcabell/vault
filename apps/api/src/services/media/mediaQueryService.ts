@@ -15,13 +15,14 @@ export const MEDIA_SORT_OPTIONS = SORT_OPTIONS;
 type ListMediaInput = {
   queryText?: string | null;
   tags?: string[];
+  excludeTags?: string[];
   thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED";
   textState?: "PENDING" | "READY" | "ERROR" | "FAILED";
   mimeTypePrefix?: string;
+  excludeUnpacked?: boolean;
   sort?: typeof SORT_OPTIONS[number];
   limit?: number;
   cursor?: string | null;
-  page?: number | null;
 };
 
 function buildOrderBy (sort?: typeof SORT_OPTIONS[number]) {
@@ -56,26 +57,23 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
       userId,
       queryText: query.queryText,
       tags: query.tags,
+      excludeTags: query.excludeTags,
       thumbState: query.thumbState,
       textState: query.textState,
       mimeTypePrefix: query.mimeTypePrefix,
+      excludeUnpacked: query.excludeUnpacked,
       orderBy,
       take: take + 1,
       cursor: query.cursor ?? null,
     };
-
-    if (!query.cursor && query.page) {
-      listFilters.skip = (query.page - 1) * take;
-    }
 
     const items = await deps.repository.listMedia(listFilters);
 
     const hasMore = items.length > take;
     const sliced = hasMore ? items.slice(0, take) : items;
     const nextCursor = hasMore ? sliced[sliced.length - 1]?.id ?? null : null;
-    const nextPage = query.page && hasMore ? query.page + 1 : null;
 
-    return { items: sliced, nextCursor, nextPage };
+    return { items: sliced, nextCursor };
   };
 
   const listTopTags = async (userId: string, limit: number) => {

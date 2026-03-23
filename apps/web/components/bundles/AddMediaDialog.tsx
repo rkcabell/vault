@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FileText, FolderOpen, Image as ImageIcon, Loader2, Search, Video, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { TagFilterChip, type TagFilterState } from '@/components/media/TagFilterChip';
 import { Dialog } from '@/components/ui/Dialog';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -28,10 +29,11 @@ const TYPE_FILTERS: { label: string; value: ActiveType; icon: React.ReactNode; m
   { label: 'Documents', value: 'document', icon: <FileText className="h-3.5 w-3.5" />, mimePrefix: 'application/pdf' },
 ];
 
-function buildQS(q: string, tags: Set<string>, type: ActiveType, cursor: string | null) {
+function buildQS(q: string, tags: Set<string>, excludeTags: Set<string>, type: ActiveType, cursor: string | null) {
   const qs = new URLSearchParams({ limit: '30' });
   if (q.trim()) qs.set('q', q.trim());
   if (tags.size > 0) qs.set('tags', [...tags].join(','));
+  if (excludeTags.size > 0) qs.set('excludeTags', [...excludeTags].join(','));
   if (type) qs.set('mimeType', TYPE_FILTERS.find(t => t.value === type)!.mimePrefix);
   if (cursor) qs.set('cursor', cursor);
   return qs.toString();
@@ -69,6 +71,7 @@ export function AddMediaDialog({
   const [isAdding, setIsAdding] = useState(false);
   const [tagOptions, setTagOptions] = useState<string[]>([]);
   const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
+  const [excludeActiveTags, setExcludeActiveTags] = useState<Set<string>>(new Set());
   const [tagSearch, setTagSearch] = useState('');
   const [activeType, setActiveType] = useState<ActiveType>(null);
   const [fetchedExistingIds, setFetchedExistingIds] = useState<Set<string>>(new Set());
@@ -78,7 +81,7 @@ export function AddMediaDialog({
 
   const existingIds = existingIdsProp ?? fetchedExistingIds;
 
-  const freshSearch = useCallback(async (q: string, tags: Set<string>, type: ActiveType) => {
+  const freshSearch = useCallback(async (q: string, tags: Set<string>, excludeTags: Set<string>, type: ActiveType) => {
     searchAbortRef.current?.abort();
     const controller = new AbortController();
     searchAbortRef.current = controller;
@@ -87,7 +90,7 @@ export function AddMediaDialog({
     setNextCursor(null);
     setHasMore(false);
     try {
-      const res = await fetch(`/api/media?${buildQS(q, tags, type, null)}`, {
+      const res = await fetch(`/api/media?${buildQS(q, tags, excludeTags, type, null)}`, {
         credentials: 'include',
         signal: controller.signal,
       });
@@ -104,12 +107,12 @@ export function AddMediaDialog({
     }
   }, []);
 
-  const loadMore = useCallback(async (cursor: string, q: string, tags: Set<string>, type: ActiveType) => {
+  const loadMore = useCallback(async (cursor: string, q: string, tags: Set<string>, excludeTags: Set<string>, type: ActiveType) => {
     if (loadingMoreRef.current) return;
     loadingMoreRef.current = true;
     setIsLoadingMore(true);
     try {
-      const res = await fetch(`/api/media?${buildQS(q, tags, type, cursor)}`, { credentials: 'include' });
+      const res = await fetch(`/api/media?${buildQS(q, tags, excludeTags, type, cursor)}`, { credentials: 'include' });
       if (!res.ok) return;
       const data = (await res.json()) as { items: PickerItem[]; nextCursor: string | null };
       setResults(prev => [...prev, ...(data.items ?? [])]);
@@ -129,12 +132,13 @@ export function AddMediaDialog({
       setQuery('');
       setSelected(new Set());
       setActiveTags(new Set());
+      setExcludeActiveTags(new Set());
       setTagSearch('');
       setActiveType(null);
-      void freshSearch('', new Set(), null);
-      fetch('/api/media/tags?limit=200', { credentials: 'include' })
+      void freshSearch('', new Set(), new Set(), null);
+      fetch('/api/tags?limit=200', { credentials: 'include' })
         .then(r => r.ok ? r.json() : { tags: [] })
-        .then((d: { tags: string[] }) => setTagOptions(d.tags ?? []))
+        .then((d: { tags: { name: string }[] }) => setTagOptions(d.tags?.map(t => t.name) ?? []))
         .catch(() => {});
       // Fetch existing IDs only when not provided by the parent
       if (!existingIdsProp) {
@@ -151,9 +155,9 @@ export function AddMediaDialog({
 
   // Re-search on filter changes (debounced)
   useEffect(() => {
-    const id = setTimeout(() => { void freshSearch(query, activeTags, activeType); }, 300);
+    const id = setTimeout(() => { void freshSearch(query, activeTags, excludeActiveTags, activeType); }, 300);
     return () => clearTimeout(id);
-  }, [query, activeTags, activeType, freshSearch]);
+  }, [query, activeTags, excludeActiveTags, activeType, freshSearch]);
 
   // Infinite scroll sentinel
   useEffect(() => {
@@ -161,19 +165,28 @@ export function AddMediaDialog({
     if (!sentinel) return;
     const observer = new IntersectionObserver(entries => {
       if (entries[0]?.isIntersecting && hasMore && !loadingMoreRef.current && nextCursor) {
-        void loadMore(nextCursor, query, activeTags, activeType);
+        void loadMore(nextCursor, query, activeTags, excludeActiveTags, activeType);
       }
     }, { threshold: 0.1 });
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMore, nextCursor, query, activeTags, activeType, loadMore]);
+  }, [hasMore, nextCursor, query, activeTags, excludeActiveTags, activeType, loadMore]);
 
-  const toggleTag = (tag: string) => {
-    setActiveTags(prev => {
-      const next = new Set(prev);
-      if (next.has(tag)) next.delete(tag); else next.add(tag);
-      return next;
-    });
+  const getTagFilterState = (tag: string): TagFilterState => {
+    if (activeTags.has(tag)) return 'include';
+    if (excludeActiveTags.has(tag)) return 'exclude';
+    return 'unselected';
+  };
+
+  const cycleTag = (tag: string) => {
+    if (activeTags.has(tag)) {
+      setActiveTags(prev => { const next = new Set(prev); next.delete(tag); return next; });
+      setExcludeActiveTags(prev => { const next = new Set(prev); next.add(tag); return next; });
+    } else if (excludeActiveTags.has(tag)) {
+      setExcludeActiveTags(prev => { const next = new Set(prev); next.delete(tag); return next; });
+    } else {
+      setActiveTags(prev => { const next = new Set(prev); next.add(tag); return next; });
+    }
   };
 
   const toggle = (id: string) => {
@@ -283,19 +296,12 @@ export function AddMediaDialog({
               )}
               <div className="flex flex-wrap gap-1.5">
                 {filteredTags.map(tag => (
-                  <button
+                  <TagFilterChip
                     key={tag}
-                    type="button"
-                    onClick={() => toggleTag(tag)}
-                    className={cn(
-                      'rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
-                      activeTags.has(tag)
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-input bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground',
-                    )}
-                  >
-                    {tag}
-                  </button>
+                    tag={tag}
+                    state={getTagFilterState(tag)}
+                    onCycle={cycleTag}
+                  />
                 ))}
               </div>
             </div>

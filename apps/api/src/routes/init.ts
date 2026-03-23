@@ -40,7 +40,7 @@ export const initRoutes: FastifyPluginAsync = async app => {
       await Promise.all([
         profileService.getProfile(userId),
         preferencesPromise,
-        mediaRepo.listTopTags(userId, 50),
+        mediaRepo.listTopTags(userId, 50, 0),
         bundleRepo.listBundles(userId),
         app.prisma.reminder.count({ where: { userId, status: "ACTIVE" } }),
         (async () => {
@@ -134,7 +134,7 @@ export const initRoutes: FastifyPluginAsync = async app => {
           }
         : null,
       preferences,
-      tags: rawTags.map(t => ({ name: t.tag, count: t.count })),
+      tags: rawTags.tags.map(t => ({ name: t.tag, count: t.count, color: t.color })),
       bundles,
       remindersSummary: { ...overviewResult.counts, totalActive, soonWindowDays: (preferences.soonWindowDays as number | undefined) ?? SOON_WINDOW_DAYS },
       overviewReminders: { items: overviewResult.items },

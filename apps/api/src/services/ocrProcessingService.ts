@@ -104,9 +104,9 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
   const isOcrSupported = mimeTypeLower === "" || mimeTypeLower.startsWith("image/") || mimeTypeLower.includes("pdf");
   if (!isOcrSupported) {
     logger.info({ ...logContext, mimeType: media.mimeType }, "ocr skipped: mime type not supported for text extraction");
-    await mediaRepository.setTextState(mediaId, "ERROR");
+    await mediaRepository.setTextState(mediaId, "FAILED");
     if (data.userId) {
-      deps.publishJobUpdate?.({ userId: data.userId, mediaId, field: "textState", value: "ERROR" });
+      deps.publishJobUpdate?.({ userId: data.userId, mediaId, field: "textState", value: "FAILED" });
     }
     return;
   }

@@ -9,17 +9,8 @@ import { looksLikeHeic, looksLikeMp4, looksLikePdf, looksLikePng } from "../../l
 import { renderPdfThumbnail } from "./renderPdfThumbnail.js";
 import { renderVideoThumbnail } from "./renderVideoThumbnail.js";
 import { renderHeicThumbnail } from "./renderHeicThumbnail.js";
-import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
+import { computeThumbKey, type ThumbJob } from "../../queues/enqueueThumbnail.js";
 import { extractMetadataFromBuffer } from "../media/metadata/extractMediaMetadata.js";
-
-export type ThumbJob = {
-  type: "thumb";
-  mediaId: string;
-  userId: string;
-  storageKey: string;
-  outKey?: string;
-  size?: number; // defaults to 512
-};
 
 export type ThumbDeps = {
   prismaMedia: MediaRepository;

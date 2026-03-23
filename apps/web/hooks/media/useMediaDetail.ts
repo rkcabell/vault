@@ -153,11 +153,12 @@ export function useMediaDetail (id: string) {
   )
 
   const updateTags = useCallback(
-    async (tags: string[]) => {
+    async (tags: string[], signal?: AbortSignal) => {
       const res = await fetch(`/api/media/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         credentials: 'include',
+        signal,
         body: JSON.stringify({ tags })
       })
 

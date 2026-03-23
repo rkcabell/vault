@@ -161,6 +161,14 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
       return { ok: true, count: 0 };
     }
 
+    const ocrSupported = (mimeType: string) => {
+      const m = mimeType.toLowerCase();
+      return m === "" || m.startsWith("image/") || m.includes("pdf");
+    };
+
+    const ocrItems = mediaItems.filter(item => ocrSupported(item.mimeType));
+    const unsupportedItems = mediaItems.filter(item => !ocrSupported(item.mimeType));
+
     await Promise.all([
       enqueueThumbBulk(
         deps.thumbQueue,
@@ -171,13 +179,16 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
           size: 512,
         })),
       ),
-      enqueueOcrBulk(
+      ocrItems.length > 0 && enqueueOcrBulk(
         deps.ocrQueue,
-        mediaItems.map(item => ({
+        ocrItems.map(item => ({
           mediaId: item.id,
           userId,
           storageKey: item.storageKey,
         })),
+      ),
+      unsupportedItems.length > 0 && deps.repository.markTextUnsupported(
+        unsupportedItems.map(item => item.id),
       ),
     ]);
 

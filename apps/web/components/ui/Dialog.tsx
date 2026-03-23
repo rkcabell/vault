@@ -53,7 +53,7 @@ function DialogContent({ className, children, ...props }: DialogContentProps) {
     <div
       className={cn(
         'relative z-50 w-full max-w-md my-auto',
-        'rounded-lg border bg-background p-6 shadow-lg',
+        'rounded-lg border bg-modal p-6 shadow-lg',
         className
       )}
       onClick={(e) => e.stopPropagation()}

@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/Dialog';
 import type { BundleListItem, BundleDetail } from '@vault/types';
 import { BUNDLE_ICONS } from '@/lib/bundleIcons';
+import { emitBundlesUpdated } from '@/lib/bundles';
 
 export interface EditBundleModalProps {
   bundle: BundleListItem;
@@ -33,6 +34,7 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
     try {
       const res = await fetch(`/api/bundles/${bundle.id}`, { method: 'DELETE', credentials: 'include' });
       if (!res.ok) { setError('Failed to delete bundle.'); return; }
+      emitBundlesUpdated();
       onDeleted?.(bundle.id);
       onOpenChange(false);
     } catch {
@@ -75,6 +77,7 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
         body: JSON.stringify({ name: trimmed, description: description.trim() || null, starred, coverMediaId }),
       });
       if (!res.ok) { setError('Failed to save. Please try again.'); return; }
+      emitBundlesUpdated();
       onSaved({ id: bundle.id, name: trimmed, description: description.trim() || null, starred, coverMediaId });
       onOpenChange(false);
     } catch {
@@ -91,7 +94,23 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
           <DialogTitle>Edit Bundle</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-1">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setStarred(s => !s)}
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Star
+              className={cn(
+                'h-4 w-4 transition-colors',
+                starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground',
+              )}
+            />
+            {starred ? 'Starred' : 'Star this bundle'}
+          </button>
+        </div>
+
+        <div className="space-y-1 mt-4">
           <label className="text-sm font-medium" htmlFor="bundle-name">Name</label>
           <input
             id="bundle-name"
@@ -114,22 +133,6 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
             placeholder="Optional description…"
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
           />
-        </div>
-
-        <div className="flex items-center gap-3 mt-4">
-          <button
-            type="button"
-            onClick={() => setStarred(s => !s)}
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Star
-              className={cn(
-                'h-4 w-4 transition-colors',
-                starred ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground',
-              )}
-            />
-            {starred ? 'Starred' : 'Star this bundle'}
-          </button>
         </div>
 
         <div className="mt-4 space-y-3">
@@ -186,11 +189,11 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
                   <div key={i} className="aspect-square rounded-md bg-muted animate-pulse" />
                 ))}
               </div>
-            ) : items.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No items in this bundle yet.</p>
+            ) : items.filter(i => i.thumbState === 'READY').length === 0 ? (
+              <p className="text-sm text-muted-foreground">No items with thumbnails yet.</p>
             ) : (
               <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
-                {items.map(item => (
+                {items.filter(i => i.thumbState === 'READY').map(item => (
                     <button
                       key={item.mediaId}
                       type="button"
@@ -203,18 +206,12 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
                       )}
                       title={item.title}
                     >
-                      {item.thumbState === 'READY' ? (
-                        <img
-                          src={`/api/media/${item.mediaId}/thumbnail?v=ready`}
-                          alt={item.title}
-                          className="h-full w-full object-cover"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="h-full w-full flex items-center justify-center bg-muted">
-                          <FolderOpen className="h-4 w-4 text-muted-foreground/40" />
-                        </div>
-                      )}
+                      <img
+                        src={`/api/media/${item.mediaId}/thumbnail?v=ready`}
+                        alt={item.title}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
                     </button>
                 ))}
               </div>

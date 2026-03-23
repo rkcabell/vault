@@ -15,12 +15,14 @@ export interface BundleMediaItem {
   addedAt: string;
   title: string;
   mimeType: string;
+  sizeBytes: number;
   thumbState: string;
   thumbnailKey?: string | null;
 }
 
 export interface BundleDetail extends Omit<BundleListItem, 'coverMediaId'> {
   coverMediaId?: string | null;
+  sourceMediaId?: string | null;
   items: BundleMediaItem[];
 }
 

@@ -14,6 +14,8 @@ const preferencesSchema = z
     detectDuplicates: z.boolean().optional(),
     collapseMetadataByDefault: z.boolean().optional(),
     lowMemoryMode: z.boolean().optional(),
+    autoUnpackArchives: z.boolean().optional(),
+    hideUnpackedItems: z.boolean().optional(),
     soonWindowDays: z.number().int().min(2).max(14).optional(),
     themePreference: z.enum(["system", "light", "dark"]).optional(),
     lightTheme: z.string().optional(),

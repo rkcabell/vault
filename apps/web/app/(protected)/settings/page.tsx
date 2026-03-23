@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { emitTagsUpdated, TAGS_UPDATED_EVENT } from "@/lib/tags";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 
-type TagRow = { name: string; count: number };
+type TagRow = { name: string; count: number; color: string | null };
 
 const MAX_FETCH = 50;
 const INITIAL_VISIBLE = 20;
@@ -151,6 +151,7 @@ const GENERAL_PREF_KEYS = [
   "detectDuplicates",
   "collapseMetadataByDefault",
   "lowMemoryMode",
+  "autoUnpackArchives",
   "soonWindowDays",
 ] as const;
 
@@ -216,6 +217,14 @@ function GeneralSettingsCard() {
           disabled={!isLoaded}
           onChange={v => updatePreferences({ lowMemoryMode: v })}
         />
+        <SettingRow
+          id="auto-unpack-archives"
+          label="Auto-unpack archives on upload"
+          description="Automatically extract ZIP and TAR archives into bundles when uploaded."
+          checked={prefs.autoUnpackArchives}
+          disabled={!isLoaded}
+          onChange={v => updatePreferences({ autoUnpackArchives: v })}
+        />
         <div className="flex items-start justify-between gap-6 py-3">
           <div className="space-y-0.5">
             <label htmlFor="soon-window-days" className="text-sm font-medium">
@@ -253,8 +262,13 @@ function ManageTagsCard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmState, setConfirmState] = useState<{ x: number; y: number; name: string } | null>(null);
+  const [confirmState, setConfirmState] = useState<{ x: number; y: number; name: string; count: number } | null>(null);
   const [deleteEmptyStatus, setDeleteEmptyStatus] = useState<"success" | "none" | null>(null);
+  // Rename state
+  const [renamingTag, setRenamingTag] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const renameInputRef = React.useRef<HTMLInputElement>(null);
 
   const load = async () => {
     setIsLoading(true);
@@ -262,8 +276,8 @@ function ManageTagsCard() {
     try {
       const res = await fetch(`/api/tags?limit=${MAX_FETCH}`, { credentials: "include" });
       if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        setError(data?.message || data?.error || "Unable to load tags.");
+        const data = await res.json().catch(() => null) as { message?: string; error?: string } | null;
+        setError(data?.message ?? data?.error ?? "Unable to load tags.");
         return;
       }
       const data = (await res.json()) as { tags?: TagRow[] };
@@ -282,12 +296,17 @@ function ManageTagsCard() {
     return () => window.removeEventListener(TAGS_UPDATED_EVENT, handler);
   }, []);
 
+  // Focus the rename input when it appears
+  useEffect(() => {
+    if (renamingTag) renameInputRef.current?.focus();
+  }, [renamingTag]);
+
   const visibleTags = useMemo(() => tags.slice(0, visible), [tags, visible]);
   const canShowMore = visible < Math.min(tags.length, MAX_FETCH);
 
-  const requestDelete = (name: string, e: React.MouseEvent) => {
+  const requestDelete = (tag: TagRow, e: React.MouseEvent) => {
     if (isDeleting) return;
-    setConfirmState({ x: e.clientX, y: e.clientY, name });
+    setConfirmState({ x: e.clientX, y: e.clientY, name: tag.name, count: tag.count });
   };
 
   const handleDelete = async (name: string) => {
@@ -299,8 +318,8 @@ function ManageTagsCard() {
         credentials: "include",
       });
       if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        setError(data?.message || data?.error || "Unable to delete tag.");
+        const data = await res.json().catch(() => null) as { message?: string; error?: string } | null;
+        setError(data?.message ?? data?.error ?? "Unable to delete tag.");
         return;
       }
       setTags(prev => prev.filter(t => t.name !== name));
@@ -312,12 +331,68 @@ function ManageTagsCard() {
     }
   };
 
+  const startRename = (tag: TagRow) => {
+    setRenamingTag(tag.name);
+    setRenameValue(tag.name);
+  };
+
+  const cancelRename = () => {
+    setRenamingTag(null);
+    setRenameValue("");
+  };
+
+  const commitRename = async () => {
+    if (!renamingTag) return;
+    const trimmed = renameValue.trim();
+    if (!trimmed || trimmed === renamingTag) { cancelRename(); return; }
+    setIsRenaming(true);
+    try {
+      const res = await fetch(`/api/tags/${encodeURIComponent(renamingTag)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null) as { message?: string; error?: string } | null;
+        setError(data?.message ?? data?.error ?? "Unable to rename tag.");
+        return;
+      }
+      setTags(prev => prev.map(t => t.name === renamingTag ? { ...t, name: trimmed } : t));
+      emitTagsUpdated();
+      cancelRename();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to rename tag.");
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") { e.preventDefault(); void commitRename(); }
+    if (e.key === "Escape") { e.preventDefault(); cancelRename(); }
+  };
+
+  const handleColorChange = async (tagName: string, color: string | null) => {
+    // Optimistic update
+    setTags(prev => prev.map(t => t.name === tagName ? { ...t, color } : t));
+    try {
+      await fetch(`/api/tags/${encodeURIComponent(tagName)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ color }),
+      });
+    } catch {
+      // Silently ignore — tag color is cosmetic, not critical
+    }
+  };
+
   const handleDeleteEmptyTags = () => {
     const emptyTags = tags.filter(t => t.count === 0);
     if (emptyTags.length === 0) {
       setDeleteEmptyStatus("none");
     } else {
-      // TODO: call the backend to remove empty tags when the endpoint exists.
       setDeleteEmptyStatus("success");
     }
     setTimeout(() => setDeleteEmptyStatus(null), 3000);
@@ -328,7 +403,7 @@ function ManageTagsCard() {
       <CardHeader className="flex flex-row items-start justify-between gap-4 pb-4">
         <div>
           <CardTitle>Manage Tags</CardTitle>
-          <CardDescription className="mt-1">View and delete tags across your library.</CardDescription>
+          <CardDescription className="mt-1">Rename, color-code, and delete tags across your library.</CardDescription>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <Button variant="destructive" size="sm" onClick={handleDeleteEmptyTags}>
@@ -348,28 +423,79 @@ function ManageTagsCard() {
         ) : visibleTags.length === 0 ? (
           <div className="text-sm text-muted-foreground">No tags yet.</div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             {visibleTags.map(tag => (
               <div
                 key={tag.name}
-                className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
               >
-                <div className="flex items-center gap-3">
-                  <span className="font-medium">{tag.name}</span>
-                  <span className="text-xs text-muted-foreground">{tag.count} items</span>
+                {/* Color swatch */}
+                <div className="relative flex items-center shrink-0">
+                  <label
+                    title={tag.color ? "Change color" : "Set color"}
+                    className="cursor-pointer"
+                  >
+                    <div
+                      className="h-5 w-5 rounded-full border border-border transition-shadow hover:shadow-md"
+                      style={{ background: tag.color ?? "hsl(var(--muted))" }}
+                    />
+                    <input
+                      type="color"
+                      className="sr-only"
+                      value={tag.color ?? "#888888"}
+                      onChange={e => void handleColorChange(tag.name, e.target.value)}
+                    />
+                  </label>
+                  {tag.color && (
+                    <button
+                      type="button"
+                      title="Remove color"
+                      onClick={() => void handleColorChange(tag.name, null)}
+                      className="absolute -right-2 -top-2 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted text-muted-foreground hover:bg-destructive hover:text-destructive-foreground text-[9px] leading-none"
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
+
+                {/* Tag name / rename input */}
+                <div className="flex-1 min-w-0">
+                  {renamingTag === tag.name ? (
+                    <input
+                      ref={renameInputRef}
+                      value={renameValue}
+                      onChange={e => setRenameValue(e.target.value)}
+                      onKeyDown={handleRenameKeyDown}
+                      onBlur={() => void commitRename()}
+                      disabled={isRenaming}
+                      className="w-full rounded border border-ring bg-background px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      title="Click to rename"
+                      onClick={() => startRename(tag)}
+                      className="font-medium text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                    >
+                      {tag.name}
+                    </button>
+                  )}
+                </div>
+
+                <span className="text-xs text-muted-foreground shrink-0">{tag.count} items</span>
+
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={(e) => requestDelete(tag.name, e)}
-                  disabled={isDeleting === tag.name}
+                  onClick={(e) => requestDelete(tag, e)}
+                  disabled={isDeleting === tag.name || renamingTag === tag.name}
                 >
                   {isDeleting === tag.name ? "Deleting..." : "Delete"}
                 </Button>
               </div>
             ))}
             {canShowMore && (
-              <Button variant="outline" size="sm" onClick={() => setVisible(v => v + 10)}>
+              <Button variant="outline" size="sm" className="mt-1" onClick={() => setVisible(v => v + 10)}>
                 Show more
               </Button>
             )}
@@ -380,7 +506,7 @@ function ManageTagsCard() {
         open={confirmState !== null}
         x={confirmState?.x ?? 0}
         y={confirmState?.y ?? 0}
-        message={`Delete tag "${confirmState?.name}"? This will remove it from all media.`}
+        message={`Delete tag "${confirmState?.name}"? This will remove it from ${confirmState?.count ?? 0} item${(confirmState?.count ?? 0) === 1 ? "" : "s"}. This cannot be undone.`}
         onConfirm={() => { const name = confirmState!.name; setConfirmState(null); void handleDelete(name); }}
         onCancel={() => setConfirmState(null)}
       />

@@ -7,7 +7,6 @@ import { TopNav } from "./TopNav";
 import { Sidebar, type TagItem, type SavedView } from "./Sidebar";
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { TAGS_UPDATED_EVENT } from "@/lib/tags";
-import { BUNDLES_UPDATED_EVENT } from "@/lib/bundles";
 import { ThemeApplier } from "./ThemeApplier";
 import { useAppInit } from "@/hooks/useAppInit";
 import { cn } from "@/lib/utils";
@@ -35,7 +34,6 @@ export function AppShell({
   const [tagsError, setTagsError] = useState<string | null>(null);
   const tagsAbortRef = useRef<AbortController | null>(null);
   const [sidebarBundles, setSidebarBundles] = useState<SavedView[] | null>(savedViews);
-  const bundlesAbortRef = useRef<AbortController | null>(null);
 
   const { data: initData, isLoaded: initLoaded } = useAppInit();
 
@@ -43,12 +41,11 @@ export function AppShell({
   useEffect(() => {
     if (!initLoaded) return;
     if (initData) {
-      setSidebarTags(initData.tags.map(t => ({ id: t.name, name: t.name, count: t.count })));
-      setSidebarBundles(initData.bundles.map(b => ({ id: b.id, name: b.name, count: b.itemCount })));
+      setSidebarTags(initData.tags.map(t => ({ id: t.name, name: t.name, count: t.count, color: t.color })));
+      setSidebarBundles(initData.bundles.map(b => ({ id: b.id, name: b.name, count: b.itemCount, starred: b.starred })));
     } else {
-      // Init failed — fall back to individual fetches.
+      // Init failed — fall back to individual tag fetch (bundles self-fetch in Sidebar).
       void fetchSidebarTags().catch(() => {});
-      void fetchSidebarBundles().catch(() => {});
     }
   }, [initLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -67,7 +64,7 @@ export function AppShell({
         throw new Error(`Unable to load tags (${res.status})`);
       }
       const data = (await res.json().catch(() => null)) as
-        | { tags?: { name: string; count: number }[] }
+        | { tags?: { name: string; count: number; color: string | null }[] }
         | null;
       if (!data?.tags) {
         throw new Error("Unable to load tags.");
@@ -78,6 +75,7 @@ export function AppShell({
           id: t.name,
           name: t.name,
           count: t.count,
+          color: t.color,
         })),
       );
     } catch (err) {
@@ -99,38 +97,6 @@ export function AppShell({
       tagsAbortRef.current?.abort();
     };
   }, [fetchSidebarTags]);
-
-  const fetchSidebarBundles = useCallback(async () => {
-    bundlesAbortRef.current?.abort();
-    const controller = new AbortController();
-    bundlesAbortRef.current = controller;
-    try {
-      const res = await fetch("/api/bundles", {
-        credentials: "include",
-        signal: controller.signal,
-      });
-      if (!res.ok) return;
-      const data = (await res.json().catch(() => null)) as
-        | { bundles?: { id: string; name: string; itemCount: number }[] }
-        | null;
-      if (!data?.bundles || bundlesAbortRef.current !== controller) return;
-      setSidebarBundles(
-        data.bundles.map(b => ({ id: b.id, name: b.name, count: b.itemCount })),
-      );
-    } catch {
-      // aborted or error — sidebar just stays with last known data
-    }
-  }, []);
-
-  // Refresh bundles when a mutation signals an update.
-  useEffect(() => {
-    const handler = () => { void fetchSidebarBundles().catch(() => {}); };
-    window.addEventListener(BUNDLES_UPDATED_EVENT, handler);
-    return () => {
-      window.removeEventListener(BUNDLES_UPDATED_EVENT, handler);
-      bundlesAbortRef.current?.abort();
-    };
-  }, [fetchSidebarBundles]);
 
   return (
     <div className="flex h-screen flex-col">

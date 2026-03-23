@@ -4,11 +4,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { Route } from 'next';
-import { ArrowLeft, FolderOpen, MoreHorizontal, Pencil, Plus, Star, Trash2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Download, FolderOpen, MoreHorizontal, Pencil, Plus, Star, Trash2 } from 'lucide-react';
 import { EditBundleModal } from '@/components/bundles/EditBundleModal';
 import { AddMediaDialog } from '@/components/bundles/AddMediaDialog';
 import { cn } from '@/lib/utils';
 import { emitBundlesUpdated } from '@/lib/bundles';
+import { emitTagsUpdated } from '@/lib/tags';
 import type { BundleDetail, BundleMediaItem } from '@vault/types';
 import { MediaCard } from '@/components/media/MediaCard';
 import { Button } from '@/components/ui/Button';
@@ -21,6 +22,34 @@ import {
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmPopover } from '@/components/ui/ConfirmPopover';
 import type { MediaWorkerState } from '@/lib/media/types';
+
+// ── Sort options ──────────────────────────────────────────────────────────────
+
+const SORT_OPTIONS = [
+  { value: "addedAt_desc",   label: "Newest" },
+  { value: "addedAt_asc",    label: "Oldest" },
+  { value: "title_asc",      label: "Name A-Z" },
+  { value: "title_desc",     label: "Name Z-A" },
+  { value: "size_desc",      label: "Largest" },
+  { value: "size_asc",       label: "Smallest" },
+  { value: "mimeType_asc",   label: "Type" },
+] as const;
+
+type SortValue = (typeof SORT_OPTIONS)[number]["value"];
+const DEFAULT_SORT: SortValue = "addedAt_desc";
+
+function sortItems(items: BundleDetail["items"], sort: SortValue): BundleDetail["items"] {
+  const sorted = [...items];
+  switch (sort) {
+    case "addedAt_desc":  return sorted.sort((a, b) => b.addedAt.localeCompare(a.addedAt));
+    case "addedAt_asc":   return sorted.sort((a, b) => a.addedAt.localeCompare(b.addedAt));
+    case "title_asc":     return sorted.sort((a, b) => a.title.localeCompare(b.title));
+    case "title_desc":    return sorted.sort((a, b) => b.title.localeCompare(a.title));
+    case "size_desc":     return sorted.sort((a, b) => b.sizeBytes - a.sizeBytes);
+    case "size_asc":      return sorted.sort((a, b) => a.sizeBytes - b.sizeBytes);
+    case "mimeType_asc":  return sorted.sort((a, b) => a.mimeType.localeCompare(b.mimeType));
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -51,10 +80,13 @@ export default function BundleDetailPage() {
 
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [isDeletingBundle, setIsDeletingBundle] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);
+  const [exportConfirmState, setExportConfirmState] = useState<{ x: number; y: number } | null>(null);
   const [isStarring, setIsStarring] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [sort, setSort] = useState<SortValue>(DEFAULT_SORT);
 
   const fetchBundle = useCallback(async () => {
     setIsLoading(true);
@@ -88,15 +120,14 @@ export default function BundleDetailPage() {
       setBundle(prev =>
         prev ? { ...prev, items: prev.items.filter(i => i.mediaId !== mediaId), itemCount: prev.itemCount - 1 } : prev
       );
+      emitBundlesUpdated();
     } finally {
       setRemovingId(null);
     }
   };
 
   const handleAdded = (mediaIds: string[]) => {
-    // Refetch to get the full items with metadata
     void fetchBundle();
-    // Optimistically bump count
     setBundle(prev => prev ? { ...prev, itemCount: prev.itemCount + mediaIds.length } : prev);
   };
 
@@ -111,9 +142,28 @@ export default function BundleDetailPage() {
       if (res.ok) {
         const data = (await res.json()) as { starred: boolean };
         setBundle(prev => prev ? { ...prev, starred: data.starred } : prev);
+        emitBundlesUpdated();
       }
     } finally {
       setIsStarring(false);
+    }
+  };
+
+  const handleExportZip = async () => {
+    if (isExporting || !bundle) return;
+    setIsExporting(true);
+    try {
+      const res = await fetch(`/api/bundles/${id}/export`, { credentials: 'include' });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${bundle.name}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -122,6 +172,7 @@ export default function BundleDetailPage() {
     try {
       await fetch(`/api/bundles/${id}`, { method: 'DELETE', credentials: 'include' });
       emitBundlesUpdated();
+      emitTagsUpdated();
       router.push('/bundles' as Route);
     } finally {
       setIsDeletingBundle(false);
@@ -202,6 +253,19 @@ export default function BundleDetailPage() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
                   <DropdownMenuItem
+                    onClick={(e) => {
+                      if (bundle && bundle.itemCount === 0) {
+                        setExportConfirmState({ x: e.clientX, y: e.clientY });
+                      } else {
+                        void handleExportZip();
+                      }
+                    }}
+                    disabled={isExporting}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    {isExporting ? 'Exporting…' : 'Export as ZIP'}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
                     onClick={(e) => { setConfirmState({ x: e.clientX, y: e.clientY }); }}
                     disabled={isDeletingBundle}
                     className="text-destructive focus:text-destructive"
@@ -216,6 +280,14 @@ export default function BundleDetailPage() {
               {bundle.itemCount} {bundle.itemCount === 1 ? 'item' : 'items'}
               {bundle.description && ` · ${bundle.description}`}
             </p>
+            {bundle.sourceMediaId && (
+              <Link
+                href={`/media/${bundle.sourceMediaId}` as Route}
+                className="mt-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Source archive →
+              </Link>
+            )}
           </div>
 
           <div className="shrink-0">
@@ -226,6 +298,31 @@ export default function BundleDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Sort toolbar */}
+      {bundle.items.length > 0 && (
+        <div className="flex items-center justify-start mb-3">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="flex items-center gap-2">
+                <span>{SORT_OPTIONS.find(o => o.value === sort)?.label ?? "Custom order"}</span>
+                <ChevronDown className="h-4 w-4 opacity-70" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-[12rem]">
+              {SORT_OPTIONS.map(option => (
+                <DropdownMenuItem
+                  key={option.value}
+                  onClick={() => setSort(option.value)}
+                  className={option.value === sort ? "font-semibold" : "text-muted-foreground"}
+                >
+                  {option.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
 
       {/* Items grid */}
       {bundle.items.length === 0 ? (
@@ -242,7 +339,7 @@ export default function BundleDetailPage() {
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-          {bundle.items.map(item => (
+          {sortItems(bundle.items, sort).map(item => (
             <div key={item.mediaId} className="relative group">
               <MediaCard
                 media={toMediaItem(item)}
@@ -285,6 +382,18 @@ export default function BundleDetailPage() {
         message="Delete this bundle? This cannot be undone."
         onConfirm={() => { setConfirmState(null); void deleteBundle(); }}
         onCancel={() => setConfirmState(null)}
+      />
+
+      <ConfirmPopover
+        open={exportConfirmState !== null}
+        x={exportConfirmState?.x ?? 0}
+        y={exportConfirmState?.y ?? 0}
+        message="This bundle is empty. Are you sure you want to export it?"
+        confirmLabel="Yes"
+        cancelLabel="Nevermind"
+        confirmVariant="default"
+        onConfirm={() => { setExportConfirmState(null); void handleExportZip(); }}
+        onCancel={() => setExportConfirmState(null)}
       />
     </div>
   );

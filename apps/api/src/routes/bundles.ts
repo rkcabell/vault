@@ -52,7 +52,41 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
   // DELETE /:id — delete bundle
   app.delete("/:id", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    await repo.deleteBundle(id, req.userId!);
+    const userId = req.userId!;
+
+    const bundle = await app.prisma.bundle.findFirst({
+      where: { id, userId },
+      select: {
+        sourceMediaId: true,
+        items: { select: { mediaId: true } },
+      },
+    });
+
+    await repo.deleteBundle(id, userId);
+
+    if (bundle?.sourceMediaId) {
+      await app.prisma.media.updateMany({
+        where: { id: bundle.sourceMediaId },
+        data: { linkedBundleId: null },
+      });
+    }
+
+    // If this bundle was created by unpacking an archive, delete all extracted
+    // media items that are not members of any other bundle.
+    if (bundle?.sourceMediaId && bundle.items.length > 0) {
+      const mediaIds = bundle.items.map(i => i.mediaId);
+      const stillMembered = await app.prisma.bundleItem.findMany({
+        where: { mediaId: { in: mediaIds } },
+        select: { mediaId: true },
+      });
+      const stillMemberedSet = new Set(stillMembered.map(r => r.mediaId));
+      const toDelete = mediaIds.filter(mid => !stillMemberedSet.has(mid));
+      await Promise.all(
+        toDelete.map(mid => app.mediaServices.actionsService.deleteMedia(userId, mid)),
+      );
+      req.log.info({ bundleId: id, deleted: toDelete.length }, "cleaned up extracted media");
+    }
+
     req.log.info({ bundleId: id }, "bundle deleted");
     reply.code(204);
   });
@@ -86,6 +120,26 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     if (starred === null) return reply.notFound();
     req.log.info({ bundleId: id, starred }, "bundle star toggled");
     return { ok: true, starred };
+  });
+
+  // GET /:id/export — stream all bundle items as a zip
+  app.get("/:id/export", { preHandler: [requireAuth] }, async (req, reply) => {
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    const userId = req.userId!;
+
+    const exportData = await repo.getBundleItemsForExport(id, userId);
+    if (!exportData) return reply.notFound();
+
+    const safeName = exportData.name.replace(/[/\\:*?"<>|]/g, "").trim() || "bundle";
+    reply.raw.setHeader("Content-Type", "application/zip");
+    reply.raw.setHeader("Content-Disposition", `attachment; filename="${safeName}.zip"`);
+    reply.hijack();
+
+    await app.mediaServices.actionsService.streamBulkArchive(
+      exportData.items,
+      reply.raw,
+      req.log,
+    );
   });
 
   // PUT /:id/items/order — reorder items

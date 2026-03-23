@@ -206,6 +206,7 @@ export function createMediaReadService (deps: MediaReadDeps) {
         textError: jobMeta?.textError ?? null,
         textAttemptsMade: jobMeta?.textAttemptsMade ?? null,
         textAttemptsTotal: jobMeta?.textAttemptsTotal ?? null,
+        memberBundles: media.bundleItems.map(bi => bi.bundle),
       },
       document: media.document
         ? {

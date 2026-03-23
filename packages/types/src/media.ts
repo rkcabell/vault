@@ -79,6 +79,8 @@ export const MediaDetailSchema = z.object({
   textError: z.string().nullable(),
   textAttemptsMade: z.number().nullable(),
   textAttemptsTotal: z.number().nullable(),
+  linkedBundleId: z.string().nullable().optional(),
+  memberBundles: z.array(z.object({ id: z.string(), name: z.string() })).optional(),
 });
 export type MediaDetail = z.infer<typeof MediaDetailSchema>;
 

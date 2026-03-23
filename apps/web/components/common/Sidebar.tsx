@@ -1,14 +1,16 @@
 //File: apps/web/components/common/Sidebar.tsx
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronDown, ChevronRight, Tag, Folder, Loader2, Plus, MoreVertical, Trash } from 'lucide-react';
+import { ChevronDown, ChevronRight, Tag, Folder, Loader2, Plus, MoreVertical, Pencil, Trash, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ScrollArea } from '@/ui/ScrollArea';
 import { Badge } from '@/ui/Badge';
 import type { Route } from "next";
 import { emitTagsUpdated } from '@/lib/tags';
+import { BUNDLES_UPDATED_EVENT } from '@/lib/bundles';
+import type { TagFilterState } from '@/components/media/TagFilterChip';
 import { ConfirmPopover } from '@/components/ui/ConfirmPopover';
 import {
   DropdownMenu,
@@ -21,12 +23,14 @@ export interface TagItem {
   id: string;
   name: string;
   count?: number;
+  color?: string | null;
 }
 
 export interface SavedView {
   id: string;
   name: string;
   count?: number;
+  starred?: boolean;
 }
 
 interface SidebarProps {
@@ -73,55 +77,227 @@ function SidebarSection({ title, icon, children, defaultOpen = true }: SidebarSe
   );
 }
 
+const PAGE_SIZE = 30;
+
 export function Sidebar({ tags, savedViews, tagsError, isLoading = false, className }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
   const [deletingTag, setDeletingTag] = useState<string | null>(null);
-  const [confirmState, setConfirmState] = useState<{ x: number; y: number; tag: string } | null>(null);
+  const [confirmState, setConfirmState] = useState<{ x: number; y: number; tag: string; count: number } | null>(null);
+  const [optimisticallyDeletedTags, setOptimisticallyDeletedTags] = useState<Set<string>>(new Set());
+  // Rename state
+  const [renamingTag, setRenamingTag] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [isRenamingSaving, setIsRenamingSaving] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  // Infinite scroll state
+  const [displayedTags, setDisplayedTags] = useState<TagItem[]>([]);
+  const [hasMoreTags, setHasMoreTags] = useState(false);
+  const [isFetchingMoreTags, setIsFetchingMoreTags] = useState(false);
+  const tagOffsetRef = useRef(0);
+  const hasMoreRef = useRef(false);
+  const fetchingRef = useRef(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const tagsScrollRef = useRef<HTMLDivElement>(null);
+  // Bundles self-managed state
+  const [displayedBundles, setDisplayedBundles] = useState<SavedView[]>(savedViews ?? []);
+  const bundlesAbortRef = useRef<AbortController | null>(null);
 
-  const activeTag = useMemo(() => {
-    const tagParam = searchParams.get("tag")?.trim() || "";
-    if (tagParam) return tagParam;
-
-    const tagsParam = searchParams.get("tags") || "";
-    const firstTag = tagsParam
-      .split(",")
-      .map(t => t.trim())
-      .find(Boolean);
-    return firstTag || "";
+  const includedTags = useMemo(() => {
+    const tagsParam = searchParams.get('tags') ?? '';
+    const tagParam = searchParams.get('tag') ?? '';
+    return new Set([
+      ...tagsParam.split(',').map(t => t.trim()).filter(Boolean),
+      ...tagParam.split(',').map(t => t.trim()).filter(Boolean),
+    ]);
   }, [searchParams]);
 
-  const selectTag = (tag: string) => {
-    const params = new URLSearchParams(searchParams.toString());
+  const excludedTags = useMemo(() => {
+    const param = searchParams.get('excludeTags') ?? '';
+    return new Set(param.split(',').map(t => t.trim()).filter(Boolean));
+  }, [searchParams]);
 
-    params.delete("tags");
-    if (activeTag === tag) params.delete("tag");
-    else params.set("tag", tag);
-
-    const targetPath = pathname.startsWith("/library") ? pathname : "/library";
-    const qs = params.toString();
-    router.push((qs ? `${targetPath}?${qs}` : targetPath)as Route);
+  const getTagState = (tagName: string): TagFilterState => {
+    if (includedTags.has(tagName)) return 'include';
+    if (excludedTags.has(tagName)) return 'exclude';
+    return 'unselected';
   };
 
-  const requestDeleteTag = (tag: string, e: React.MouseEvent) => {
+  const cycleTag = (tagName: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    const newIncluded = new Set(includedTags);
+    const newExcluded = new Set(excludedTags);
+
+    if (newIncluded.has(tagName)) {
+      newIncluded.delete(tagName);
+      newExcluded.add(tagName);
+    } else if (newExcluded.has(tagName)) {
+      newExcluded.delete(tagName);
+    } else {
+      newIncluded.add(tagName);
+    }
+
+    params.delete('tag');
+    if (newIncluded.size > 0) params.set('tags', [...newIncluded].join(','));
+    else params.delete('tags');
+    if (newExcluded.size > 0) params.set('excludeTags', [...newExcluded].join(','));
+    else params.delete('excludeTags');
+
+    const targetPath = pathname.startsWith('/library') ? pathname : '/library';
+    const qs = params.toString();
+    router.push((qs ? `${targetPath}?${qs}` : targetPath) as Route);
+  };
+
+  const requestDeleteTag = (tag: TagItem, e: React.MouseEvent) => {
     if (deletingTag) return;
-    setConfirmState({ x: e.clientX, y: e.clientY, tag });
+    setConfirmState({ x: e.clientX, y: e.clientY, tag: tag.name, count: tag.count ?? 0 });
   };
 
   const handleDeleteTag = async (tag: string) => {
     setDeletingTag(tag);
+    setOptimisticallyDeletedTags(prev => new Set([...prev, tag]));
     try {
       const res = await fetch(`/api/tags/${encodeURIComponent(tag)}`, {
         method: "DELETE",
         credentials: "include",
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        setOptimisticallyDeletedTags(prev => { const next = new Set(prev); next.delete(tag); return next; });
+        return;
+      }
       emitTagsUpdated({ deletedTag: tag });
+      if (includedTags.has(tag) || excludedTags.has(tag)) {
+        const params = new URLSearchParams(searchParams.toString());
+        const newIncluded = new Set(includedTags);
+        const newExcluded = new Set(excludedTags);
+        newIncluded.delete(tag);
+        newExcluded.delete(tag);
+        params.delete('tag');
+        if (newIncluded.size > 0) params.set('tags', [...newIncluded].join(','));
+        else params.delete('tags');
+        if (newExcluded.size > 0) params.set('excludeTags', [...newExcluded].join(','));
+        else params.delete('excludeTags');
+        const targetPath = pathname.startsWith('/library') ? pathname : '/library';
+        const qs = params.toString();
+        router.push((qs ? `${targetPath}?${qs}` : targetPath) as Route);
+      }
     } finally {
       setDeletingTag(null);
     }
   };
+
+  const startRename = (tag: TagItem) => {
+    setRenamingTag(tag.name);
+    setRenameValue(tag.name);
+  };
+
+  const cancelRename = () => {
+    setRenamingTag(null);
+    setRenameValue('');
+  };
+
+  const commitRename = async () => {
+    if (!renamingTag) return;
+    const trimmed = renameValue.trim();
+    if (!trimmed || trimmed === renamingTag) { cancelRename(); return; }
+    setIsRenamingSaving(true);
+    try {
+      const res = await fetch(`/api/tags/${encodeURIComponent(renamingTag)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (!res.ok) { cancelRename(); return; }
+      emitTagsUpdated();
+      cancelRename();
+    } finally {
+      setIsRenamingSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (renamingTag) renameInputRef.current?.focus();
+  }, [renamingTag]);
+
+  // Seed displayedBundles from prop, then self-refresh on BUNDLES_UPDATED_EVENT.
+  useEffect(() => {
+    if (savedViews !== null && savedViews !== undefined) {
+      setDisplayedBundles(savedViews);
+    }
+  }, [savedViews]);
+
+  const fetchBundles = useCallback(async () => {
+    bundlesAbortRef.current?.abort();
+    const controller = new AbortController();
+    bundlesAbortRef.current = controller;
+    try {
+      const res = await fetch('/api/bundles', { credentials: 'include', signal: controller.signal });
+      if (!res.ok || bundlesAbortRef.current !== controller) return;
+      const data = await res.json() as { bundles?: { id: string; name: string; itemCount: number; starred: boolean }[] };
+      if (!data.bundles || bundlesAbortRef.current !== controller) return;
+      setDisplayedBundles(data.bundles.map(b => ({ id: b.id, name: b.name, count: b.itemCount, starred: b.starred })));
+    } catch { /* aborted or network error — keep current state */ }
+  }, []);
+
+  useEffect(() => {
+    const handler = () => { void fetchBundles(); };
+    window.addEventListener(BUNDLES_UPDATED_EVENT, handler);
+    return () => {
+      window.removeEventListener(BUNDLES_UPDATED_EVENT, handler);
+      bundlesAbortRef.current?.abort();
+    };
+  }, [fetchBundles]);
+
+  // Seed displayedTags from the prop (set by AppShell via /api/init or tag refresh).
+  useEffect(() => {
+    if (tags === null || tags === undefined) {
+      setDisplayedTags([]);
+      tagOffsetRef.current = 0;
+      hasMoreRef.current = false;
+      setHasMoreTags(false);
+      return;
+    }
+    setDisplayedTags(tags);
+    tagOffsetRef.current = tags.length;
+    const more = tags.length >= PAGE_SIZE;
+    hasMoreRef.current = more;
+    setHasMoreTags(more);
+  }, [tags]);
+
+  const fetchMoreTags = useCallback(async () => {
+    if (fetchingRef.current || !hasMoreRef.current) return;
+    fetchingRef.current = true;
+    setIsFetchingMoreTags(true);
+    try {
+      const offset = tagOffsetRef.current;
+      const res = await fetch(`/api/tags?limit=${PAGE_SIZE}&offset=${offset}`, { credentials: 'include' });
+      if (!res.ok) { hasMoreRef.current = false; setHasMoreTags(false); return; }
+      const data = await res.json() as { tags: Array<{ name: string; count: number; color: string | null }> };
+      const newTags = data.tags.map(t => ({ id: t.name, name: t.name, count: t.count, color: t.color }));
+      tagOffsetRef.current += newTags.length;
+      const more = newTags.length === PAGE_SIZE;
+      hasMoreRef.current = more;
+      setDisplayedTags(prev => [...prev, ...newTags]);
+      setHasMoreTags(more);
+    } finally {
+      fetchingRef.current = false;
+      setIsFetchingMoreTags(false);
+    }
+  }, []); // stable — all mutable state accessed via refs
+
+  // IntersectionObserver: fire when sentinel scrolls into the tags container.
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      entries => { if (entries[0]?.isIntersecting) void fetchMoreTags(); },
+      { root: tagsScrollRef.current, threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [fetchMoreTags]);
 
   if (isLoading) {
     return (
@@ -139,7 +315,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
         open={confirmState !== null}
         x={confirmState?.x ?? 0}
         y={confirmState?.y ?? 0}
-        message={`Delete tag "${confirmState?.tag}"? This will remove it from all media.`}
+        message={`Delete tag "${confirmState?.tag}"? This will remove it from ${confirmState?.count ?? 0} item${(confirmState?.count ?? 0) === 1 ? '' : 's'}. This cannot be undone.`}
         onConfirm={() => { const tag = confirmState!.tag; setConfirmState(null); void handleDeleteTag(tag); }}
         onCancel={() => setConfirmState(null)}
       />
@@ -173,43 +349,74 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                     Loading tags...
                   </div>
                 )
-              ) : tags.length === 0 ? (
+              ) : displayedTags.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">
                   No tags yet
                 </div>
               ) : (
-                <div className="space-y-1">
-                  {tags.map((tag) => {
-                    const isActive = activeTag === tag.name;
+                <div
+                  ref={tagsScrollRef}
+                  className="max-h-64 overflow-y-auto space-y-1 pr-0.5"
+                >
+                  {displayedTags.filter(t => !optimisticallyDeletedTags.has(t.name)).map((tag) => {
+                    const isRenaming = renamingTag === tag.name;
 
+                    const tagState = getTagState(tag.name);
                     return (
                       <div
                         key={tag.id}
                         className={cn(
-                          'group flex min-w-0 items-center gap-2 rounded-md px-2 py-1 transition-colors',
-                          isActive
-                            ? 'bg-accent text-accent-foreground'
-                            : 'hover:bg-accent hover:text-accent-foreground text-muted-foreground'
+                          'group flex min-w-0 items-center gap-1 rounded-md transition-colors',
+                          tagState === 'include' && 'bg-emerald-500/10',
+                          tagState === 'exclude' && 'bg-destructive/10',
+                          tagState === 'unselected' && 'hover:bg-accent',
                         )}
                       >
-                        <button
-                          onClick={() => selectTag(tag.name)}
-                          className={cn(
-                            'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-                          )}
-                        >
-                          <span className="truncate">{tag.name}</span>
-                          {tag.count !== undefined && (
-                            <Badge variant="secondary" className="ml-auto shrink-0 h-5 px-1.5 text-xs">
-                              {tag.count}
-                            </Badge>
-                          )}
-                        </button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            asChild
-                            onClick={(e) => e.stopPropagation()}
+                        {/* Name button or rename input */}
+                        {isRenaming ? (
+                          <input
+                            ref={renameInputRef}
+                            value={renameValue}
+                            onChange={e => setRenameValue(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
+                              if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                            }}
+                            onBlur={() => void commitRename()}
+                            disabled={isRenamingSaving}
+                            className="flex-1 min-w-0 rounded border border-ring bg-background px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring ml-2"
+                          />
+                        ) : (
+                          <button
+                            onClick={() => cycleTag(tag.name)}
+                            title={
+                              tagState === 'include' ? `Click to exclude "${tag.name}"` :
+                              tagState === 'exclude' ? `Click to clear "${tag.name}"` :
+                              `Filter by "${tag.name}"`
+                            }
+                            className={cn(
+                              'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                              tagState === 'include' && 'text-emerald-700 dark:text-emerald-400',
+                              tagState === 'exclude' && 'text-destructive',
+                              tagState === 'unselected' && 'text-muted-foreground hover:text-accent-foreground',
+                            )}
                           >
+                            {tagState === 'include' && <span className="shrink-0 text-xs font-bold leading-none">+</span>}
+                            {tagState === 'exclude' && <span className="shrink-0 text-xs font-bold leading-none">−</span>}
+                            {tagState === 'unselected' && tag.color && (
+                              <span className="shrink-0 h-2 w-2 rounded-full" style={{ background: tag.color }} />
+                            )}
+                            <span className="truncate">{tag.name}</span>
+                            {tag.count !== undefined && (
+                              <Badge variant="secondary" className="ml-auto shrink-0 h-5 px-1.5 text-xs">
+                                {tag.count}
+                              </Badge>
+                            )}
+                          </button>
+                        )}
+
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
                             <button
                               className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               aria-label={`Actions for ${tag.name}`}
@@ -219,21 +426,31 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" side="right">
                             <DropdownMenuItem
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                requestDeleteTag(tag.name, e);
-                              }}
+                              onClick={e => { e.stopPropagation(); startRename(tag); }}
+                              disabled={!!deletingTag}
+                            >
+                              <Pencil className="mr-2 h-4 w-4" />
+                              Rename
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={e => { e.stopPropagation(); requestDeleteTag(tag, e); }}
                               disabled={deletingTag === tag.name}
                               className="text-destructive focus:text-destructive"
                             >
                               <Trash className="mr-2 h-4 w-4" />
-                              {deletingTag === tag.name ? "Deleting..." : "Delete Tag"}
+                              {deletingTag === tag.name ? 'Deleting…' : 'Delete Tag'}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
                     );
                   })}
+                  {hasMoreTags && <div ref={sentinelRef} />}
+                  {isFetchingMoreTags && (
+                    <div className="flex justify-center py-1">
+                      <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -256,18 +473,18 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                 + Add new bundle
               </Link>
 
-              {!savedViews ? (
+              {savedViews === null ? (
                 <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Loading saved bundles...
                 </div>
-              ) : savedViews.length === 0 ? (
+              ) : displayedBundles.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">
                   No saved bundles
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {savedViews.map((view) => {
+                  {displayedBundles.map((view) => {
                     const href = `/bundles/${view.id}`;
                     const isActive = pathname === href;
 
@@ -284,9 +501,14 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                             : 'text-muted-foreground'
                         )}
                       >
-                        <span className="truncate">{view.name}</span>
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          {view.starred && (
+                            <Star className="shrink-0 h-3 w-3 fill-yellow-400 text-yellow-400" />
+                          )}
+                          <span className="truncate">{view.name}</span>
+                        </span>
                         {view.count !== undefined && (
-                          <Badge variant="secondary" className="ml-2 h-5 px-1.5 text-xs">
+                          <Badge variant="secondary" className="ml-2 shrink-0 h-5 px-1.5 text-xs">
                             {view.count}
                           </Badge>
                         )}
