@@ -116,6 +116,16 @@ interface Theme {
    *  doesn't reach 4.5 : 1 on a saturated mid-value background. */
   mutedFgThreshold?: number;
   reminderColors?: ReminderColor[];
+  /**
+   * Override the destructive HSL value for themes where the default red
+   * (0 84.2% 60.2%) fails contrast. When provided, two tests are generated:
+   *   • destructive-foreground on destructive  (AA 4.5 : 1)
+   *   • destructive on background              (AA_LARGE 3.0 : 1)
+   * Omit for themes that use the inherited default without issue.
+   */
+  destructive?: string;
+  /** Override destructive-foreground HSL. Defaults to "0 0% 98%". */
+  destructiveForeground?: string;
 }
 
 const themes: Theme[] = [
@@ -202,6 +212,9 @@ const themes: Theme[] = [
     // only ~4.0 : 1 here — below AA (4.5) but above large-text threshold (3.0).
     // TODO: consider a darker muted-foreground override in theme-garden.
     mutedFgThreshold: AA_LARGE,
+    // Default red (0 84.2% 60.2%) only reaches ~2.1:1 on this background.
+    // Overridden to red-800 (≈ #991b1b) — ~4.75:1 on bg, ~8:1 white-on-red.
+    destructive: "0 70% 35%",
     reminderColors: [
       // Colours are specifically overridden in the CSS to pass AA on this background.
       { hex: "#78350f", label: "today"   }, // amber-900 ~5.3 : 1
@@ -287,5 +300,13 @@ for (const theme of themes) {
         rc.threshold ?? AA,
         `${name}/reminder-${rc.label}`,
       ));
+  }
+
+  if (theme.destructive !== undefined) {
+    const destructiveFg = theme.destructiveForeground ?? "0 0% 98%";
+    test(`${name} — destructive-foreground on destructive`, () =>
+      assertContrast(hsl(destructiveFg), hsl(theme.destructive!), AA, `${name}/destructive-fg`));
+    test(`${name} — destructive on background`, () =>
+      assertContrast(hsl(theme.destructive!), hsl(theme.background), AA_LARGE, `${name}/destructive-on-bg`));
   }
 }

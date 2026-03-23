@@ -5,9 +5,9 @@ import {
   createThumbProcessor,
   processThumb as processThumbInternal,
   sanitizeThumbError,
-  type ThumbJob,
   type ThumbDeps as ServiceThumbDeps,
 } from "../services/thumb/thumbnailService.js";
+import type { ThumbJob } from "../queues/enqueueThumbnail.js";
 import { createLogger } from "../lib/logger.js";
 
 export type ThumbDeps = {

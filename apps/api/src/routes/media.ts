@@ -6,6 +6,12 @@ import { MEDIA_SORT_OPTIONS } from "../services/media/mediaQueryService.js";
 import { getUploadSizeError } from "../lib/media/uploadLimits.js";
 import { normalizeTags, TagValidationError } from "../lib/tags/normalizeTags.js";
 import type { JobUpdateEvent } from "../plugins/queueEvents.js";
+import { Queue } from "bullmq";
+import { ARCHIVE_MIME_TYPES } from "../services/media/mediaActionsService.js";
+import { enqueueUnpack, type UnpackJob, UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
+import { buildRedisConnection } from "../lib/config/redis.js";
+import { PreferencesService } from "../services/preferencesService.js";
+import { PreferencesRepository } from "../repositories/preferencesRepository.js";
 
 const paramsSchema = z.object({ id: z.string().uuid() }).strict();
 const SORT_OPTIONS = MEDIA_SORT_OPTIONS;
@@ -17,6 +23,8 @@ const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
 
 export const mediaRoutes: FastifyPluginAsync = async app => {
   const { uploadService, queryService, readService, actionsService } = app.mediaServices;
+  const unpackQueue = new Queue<UnpackJob>(UNPACK_QUEUE, { connection: buildRedisConnection(app.config.REDIS_URL) });
+  const preferencesService = new PreferencesService(new PreferencesRepository(app.prisma));
   const assertUploadWithinLimit = (file: { filename: string; mimeType: string; sizeBytes: number }) => {
     const error = getUploadSizeError(file);
     if (error) throw app.httpErrors.badRequest(error);
@@ -85,8 +93,29 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       })
       .parse(req.body);
 
-    const result = await uploadService.finalizeBatch(req.userId!, body.ids);
+    const userId = req.userId!;
+    const result = await uploadService.finalizeBatch(userId, body.ids);
     req.log.info({ count: body.ids.length }, "batch upload finalized");
+
+    // Auto-unpack archives if the user preference is enabled
+    const prefs = await preferencesService.getPreferences(userId).catch(() => null);
+    if (prefs?.autoUnpackArchives) {
+      const archiveItems = await app.prisma.media.findMany({
+        where: { id: { in: body.ids }, userId },
+        select: { id: true, storageKey: true, mimeType: true },
+      });
+      for (const item of archiveItems) {
+        if (ARCHIVE_MIME_TYPES.has(item.mimeType)) {
+          await enqueueUnpack(unpackQueue, {
+            mediaId: item.id,
+            userId,
+            storageKey: item.storageKey,
+            mimeType: item.mimeType,
+          }).catch(err => req.log.warn({ err, mediaId: item.id }, "failed to enqueue unpack"));
+        }
+      }
+    }
+
     return result;
   });
 
@@ -100,6 +129,24 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
       const result = await uploadService.finalizeBatch(userId, [id]);
       req.log.info({ mediaId: id }, "upload finalized");
+
+      // Auto-unpack if archive and preference enabled
+      const prefs = await preferencesService.getPreferences(userId).catch(() => null);
+      if (prefs?.autoUnpackArchives) {
+        const mediaItem = await app.prisma.media.findFirst({
+          where: { id, userId },
+          select: { id: true, storageKey: true, mimeType: true },
+        });
+        if (mediaItem && ARCHIVE_MIME_TYPES.has(mediaItem.mimeType)) {
+          await enqueueUnpack(unpackQueue, {
+            mediaId: mediaItem.id,
+            userId,
+            storageKey: mediaItem.storageKey,
+            mimeType: mediaItem.mimeType,
+          }).catch(err => req.log.warn({ err, mediaId: id }, "failed to enqueue unpack"));
+        }
+      }
+
       return result;
     },
   );
@@ -113,15 +160,16 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       search: z.string().trim().optional(),
       tag: z.string().trim().optional(),
       tags: z.unknown().optional(),
+      excludeTags: z.string().trim().optional(),
       thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
       textState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
       mimeType: z.string().trim().optional(),
       sort: z.enum(SORT_OPTIONS).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
       cursor: z.string().optional(),
-      page: z.coerce.number().int().min(1).optional(),
+      excludeUnpacked: z.coerce.boolean().optional(),
     });
-    const { q, search, tag, tags, thumbState, textState, mimeType, sort, limit, cursor, page } = Query.parse(
+    const { q, search, tag, tags, excludeTags: excludeTagsRaw, thumbState, textState, mimeType, sort, limit, cursor, excludeUnpacked } = Query.parse(
       rawQuery,
     );
     const hasTagsParam = Object.prototype.hasOwnProperty.call(rawQuery, "tags");
@@ -133,43 +181,35 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     const tagFilters: string[] = [];
     if (hasTagsParam) {
-      const parsed = parseTags(tags);
+      const parsed = (typeof tags === "string" ? tags.split(",") : []).map(t => t.trim().toLowerCase()).filter(Boolean);
       if (parsed.length === 0) throw app.httpErrors.badRequest("Provide at least one tag");
       tagFilters.push(...parsed);
     } else if (hasTagParam) {
-      const parsed = parseTags(tag);
-      if (parsed.length !== 1)
-        throw app.httpErrors.badRequest("Use ?tags=... for multiple tag filters");
-      tagFilters.push(parsed[0]);
+      const parsed = typeof tag === "string" ? tag.trim().toLowerCase() : "";
+      if (!parsed) throw app.httpErrors.badRequest("Use ?tags=... for multiple tag filters");
+      tagFilters.push(parsed);
     }
+
+    const excludeTagFilters = excludeTagsRaw
+      ? excludeTagsRaw.split(",").map(t => t.trim().toLowerCase()).filter(Boolean)
+      : [];
 
     const queryText = q ?? search;
 
     return queryService.listMedia(userId, {
       queryText,
       tags: tagFilters,
+      excludeTags: excludeTagFilters,
       thumbState,
       textState,
       mimeTypePrefix: mimeType,
+      excludeUnpacked,
       sort,
       limit,
       cursor,
-      page,
     });
   });
 
-  // GET /media/tags - list top tags for the user
-  app.get("/tags", { preHandler: [requireAuth] }, async req => {
-    const userId = req.userId!;
-    const Query = z.object({
-      limit: z.coerce.number().int().min(1).max(200).default(50),
-    });
-    const { limit } = Query.parse(req.query);
-
-    const tags = await queryService.listTopTags(userId, limit);
-
-    return { tags: tags.map(t => t.tag) };
-  });
 
   // GET /media/events - Server-Sent Events stream for job state updates (thumb + text)
   app.get("/events", { preHandler: [requireAuth] }, (req, reply) => {
@@ -354,6 +394,36 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       if (!result) return reply.notFound();
 
       return reply.send(result);
+    },
+  );
+
+  // POST /media/:id/unpack — extract archive into a bundle
+  app.post<{ Params: { id: string } }>(
+    "/:id/unpack",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+
+      // Gate: must be a recognised archive type
+      const media = await app.prisma.media.findFirst({
+        where: { id, userId },
+        select: { mimeType: true },
+      });
+      if (!media) return reply.notFound();
+      if (!ARCHIVE_MIME_TYPES.has(media.mimeType)) {
+        return reply.badRequest("File is not a recognised archive type.");
+      }
+
+      const result = await actionsService.unpackArchive(userId, id);
+
+      if (!result) return reply.notFound();
+      if (result === "already-linked") {
+        return reply.code(409).send({ error: "Archive is already linked to a bundle." });
+      }
+
+      req.log.info({ mediaId: id, bundleId: result.bundleId }, "archive unpacked");
+      return reply.send({ bundleId: result.bundleId });
     },
   );
 

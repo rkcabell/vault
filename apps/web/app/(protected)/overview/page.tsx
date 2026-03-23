@@ -1,8 +1,23 @@
 import Link from "next/link";
 import { listMedia } from "@/lib/api.server";
-import { deriveOverallState } from "@/lib/media/status";
 import { formatMimeTag } from "@/lib/media/utils";
 import { OverviewRemindersCard } from "@/components/reminders/OverviewRemindersCard";
+import type { MediaWorkerState } from "@vault/types";
+
+function describeInboxStatus(thumbState: MediaWorkerState, textState: MediaWorkerState): string {
+  const thumbFailed = thumbState === "ERROR" || thumbState === "FAILED";
+  const textFailed = textState === "ERROR" || textState === "FAILED";
+  const thumbPending = thumbState === "PENDING";
+  const textPending = textState === "PENDING";
+
+  if (thumbFailed && textFailed) return "Thumbnail + text extraction failed";
+  if (thumbFailed) return "Thumbnail generation failed";
+  if (textFailed) return "Text extraction failed";
+  if (thumbPending && textPending) return "Processing…";
+  if (thumbPending) return "Generating thumbnail…";
+  if (textPending) return "Extracting text…";
+  return "Processing…";
+}
 
 export default async function OverviewPage() {
   const recent = (await listMedia({ q: "" })).slice(0, 9);
@@ -10,7 +25,7 @@ export default async function OverviewPage() {
   const inbox = recent
     .filter((m) => {
       if (m.thumbState === "PENDING" || m.textState === "PENDING") return true;
-      if (m.thumbState === "ERROR" || m.thumbState === "FAILED") return true;
+      // thumbState failure = icon fallback, not actionable
       if (m.textState === "ERROR") return true;
       // textState FAILED = not supported / retries exhausted — not actionable
       return false;
@@ -64,7 +79,7 @@ export default async function OverviewPage() {
                   {m.title || m.id}
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
-                  {deriveOverallState(m.thumbState, m.textState)}
+                  {describeInboxStatus(m.thumbState, m.textState)}
                 </div>
               </Link>
             ))}

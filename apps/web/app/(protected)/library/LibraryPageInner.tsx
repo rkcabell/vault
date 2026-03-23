@@ -100,12 +100,13 @@ export default function LibraryPageInner() {
   // Select mode.
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const lastSelectedIdRef = useRef<string | null>(null);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [isBundleDialogOpen, setIsBundleDialogOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
   // Delete confirmation popover.
-  const [confirmState, setConfirmState] = useState<{ x: number; y: number; message: string; action: () => void } | null>(null);
+  const [confirmState, setConfirmState] = useState<{ x: number; y: number; anchorWidth?: number; bottomOffset?: number; message: string; action: () => void } | null>(null);
 
   // Refresh control.
   const [refreshToken, setRefreshToken] = useState(0);
@@ -116,6 +117,7 @@ export default function LibraryPageInner() {
   const viewMode = prefs.libraryViewMode;
   const gridCols = prefs.libraryGridCols;
   const isCompactList = prefs.libraryIsCompactList;
+  const hideUnpackedItems = prefs.hideUnpackedItems;
   // Compact grid is derived: 7+ columns triggers compact card style.
   const isCompactGrid = gridCols >= 7;
 
@@ -142,15 +144,24 @@ export default function LibraryPageInner() {
   }, [searchInput]); // eslint-disable-line react-hooks/exhaustive-deps
   const tagsParam = searchParams.get("tags")?.trim() ?? "";
   const singleTag = searchParams.get("tag")?.trim() ?? "";
-  const tag = useMemo(() => {
-    if (singleTag) return singleTag;
-    return (
-      tagsParam
-        .split(",")
-        .map((t) => t.trim())
-        .find(Boolean) ?? ""
-    );
-  }, [singleTag, tagsParam]);
+  const excludeTagsParam = searchParams.get("excludeTags")?.trim() ?? "";
+
+  // All included tags (union of ?tags= and legacy ?tag=).
+  const includedTagsList = useMemo(() => {
+    const combined = [
+      ...tagsParam.split(",").map(t => t.trim()).filter(Boolean),
+      ...singleTag.split(",").map(t => t.trim()).filter(Boolean),
+    ];
+    return [...new Set(combined)];
+  }, [tagsParam, singleTag]);
+
+  // For backwards-compat with code that used a single `tag` string.
+  const tag = includedTagsList[0] ?? "";
+
+  const excludedTagsList = useMemo(
+    () => excludeTagsParam.split(",").map(t => t.trim()).filter(Boolean),
+    [excludeTagsParam],
+  );
   const thumbState = searchParams.get("thumbState")?.trim() ?? "";
   const textState = searchParams.get("textState")?.trim() ?? "";
   const sortParam = searchParams.get("sort")?.trim();
@@ -193,13 +204,15 @@ export default function LibraryPageInner() {
       params.set("limit", String(itemLimit));
       params.set("sort", sort);
       if (q) params.set("q", q);
-      if (tag) params.set("tags", tag);
+      if (includedTagsList.length > 0) params.set("tags", includedTagsList.join(","));
+      if (excludedTagsList.length > 0) params.set("excludeTags", excludedTagsList.join(","));
       if (thumbState) params.set("thumbState", thumbState);
       if (textState) params.set("textState", textState);
+      if (hideUnpackedItems && !q && includedTagsList.length === 0) params.set("excludeUnpacked", "1");
       if (cursor) params.set("cursor", cursor);
       return params.toString();
     },
-    [gridCols, isCompactGrid, q, sort, tag, textState, thumbState, viewMode]
+    [excludedTagsList, gridCols, hideUnpackedItems, includedTagsList, isCompactGrid, q, sort, textState, thumbState, viewMode]
   );
 
   const handleSortChange = useCallback(
@@ -312,7 +325,7 @@ export default function LibraryPageInner() {
   useEffect(() => {
     if (!hasHandledRefreshParam) return;
     fetchMedia();
-  }, [fetchMedia, hasHandledRefreshParam, q, refreshToken, sort, tag, textState, thumbState]);
+  }, [fetchMedia, hasHandledRefreshParam, q, refreshToken, sort, tag, excludeTagsParam, textState, thumbState]);
 
   // Keep a stable ref to the latest fetchMedia so the SSE effect never needs
   // to re-run (and reconnect) just because gridCols or sort changed.
@@ -461,16 +474,33 @@ export default function LibraryPageInner() {
   const toggleSelectMode = useCallback(() => {
     setIsSelectMode(prev => !prev);
     setSelectedIds(new Set());
+    lastSelectedIdRef.current = null;
   }, []);
 
-  const handleSelect = useCallback((id: string) => {
+  const handleSelect = useCallback((id: string, shiftKey: boolean) => {
+    if (shiftKey && lastSelectedIdRef.current) {
+      const ids = mediaItems.map(m => m.id);
+      const from = ids.indexOf(lastSelectedIdRef.current);
+      const to = ids.indexOf(id);
+      if (from !== -1 && to !== -1) {
+        const [start, end] = from < to ? [from, to] : [to, from];
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          for (let i = start; i <= end; i++) next.add(ids[i]);
+          return next;
+        });
+        lastSelectedIdRef.current = id;
+        return;
+      }
+    }
     setSelectedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }, []);
+    lastSelectedIdRef.current = id;
+  }, [mediaItems]);
 
   const handleBulkDownload = useCallback(async () => {
     if (selectedIds.size === 0 || isDownloading) return;
@@ -502,13 +532,16 @@ export default function LibraryPageInner() {
     }
   }, [selectedIds, isDownloading]);
 
-  const handleBulkDelete = useCallback((e: React.MouseEvent) => {
+  const handleBulkDelete = useCallback((info: { centerX: number; anchorWidth: number; bottomOffset: number }) => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
+    const count = ids.length;
     setConfirmState({
-      x: e.clientX,
-      y: e.clientY,
-      message: `Delete ${ids.length} item(s)? This cannot be undone.`,
+      x: info.centerX,
+      y: 0,
+      anchorWidth: info.anchorWidth,
+      bottomOffset: info.bottomOffset,
+      message: `Delete ${count} ${count === 1 ? "item" : "items"}? This cannot be undone.`,
       action: async () => {
 
     setDeletingIds(prev => {
@@ -634,111 +667,126 @@ export default function LibraryPageInner() {
         </div>
       )}
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-            <input
-              type="text"
-              placeholder="Filter by title..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              className="h-9 w-48 rounded-md border border-input bg-background pl-8 pr-8 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-            {searchInput && (
-              <button
-                type="button"
-                onClick={() => setSearchInput("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="Clear search"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="flex items-center gap-2">
-                <span>{sortLabel}</span>
-                <ChevronDown className="h-4 w-4 opacity-70" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="min-w-[12rem]">
-              {SORT_OPTIONS.map((option) => (
-                <DropdownMenuItem
-                  key={option.value}
-                  onClick={() => handleSortChange(option.value)}
-                  className={option.value === sort ? "font-semibold" : "text-muted-foreground"}
+      <div className="mb-4 flex flex-col gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Filter by title..."
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                className="h-9 w-48 rounded-md border border-input bg-background pl-8 pr-8 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              {searchInput && (
+                <button
+                  type="button"
+                  onClick={() => setSearchInput("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
                 >
-                  {option.label}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="flex items-center gap-2">
+                  <span>{sortLabel}</span>
+                  <ChevronDown className="h-4 w-4 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-[12rem]">
+                {SORT_OPTIONS.map((option) => (
+                  <DropdownMenuItem
+                    key={option.value}
+                    onClick={() => handleSortChange(option.value)}
+                    className={option.value === sort ? "font-semibold" : "text-muted-foreground"}
+                  >
+                    {option.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              updatePreferences({ libraryViewMode: viewMode === "grid" ? "list" : "grid" });
-            }}
-          >
-            {viewMode === "grid" ? (
-              <>
-                <LayoutList className="mr-2 h-4 w-4" suppressHydrationWarning />
-                List View
-              </>
-            ) : (
-              <>
-                <LayoutGrid className="mr-2 h-4 w-4" suppressHydrationWarning />
-                Grid View
-              </>
-            )}
-          </Button>
-
-          {DevPurgeButton && viewMode === "grid" && (
-            <DevPurgeButton
-              onSuccess={() => { setMediaItems([]); setNextCursor(null); setError(null); emitTagsUpdated(); emitBundlesUpdated(); }}
-              onError={setError}
-            />
-          )}
-
-          {viewMode === "list" && (
             <Button
-              variant={isCompactList ? "default" : "outline"}
+              variant="outline"
               size="sm"
-              aria-pressed={isCompactList}
               onClick={() => {
-                updatePreferences({ libraryIsCompactList: !isCompactList });
+                updatePreferences({ libraryViewMode: viewMode === "grid" ? "list" : "grid" });
               }}
             >
-              {isCompactList ? "Compact" : "Comfortable"}
+              {viewMode === "grid" ? (
+                <>
+                  <LayoutList className="mr-2 h-4 w-4" suppressHydrationWarning />
+                  List View
+                </>
+              ) : (
+                <>
+                  <LayoutGrid className="mr-2 h-4 w-4" suppressHydrationWarning />
+                  Grid View
+                </>
+              )}
             </Button>
-          )}
 
+            {DevPurgeButton && viewMode === "grid" && (
+              <DevPurgeButton
+                onSuccess={() => { setMediaItems([]); setNextCursor(null); setError(null); emitTagsUpdated(); emitBundlesUpdated(); }}
+                onError={setError}
+              />
+            )}
+
+            {viewMode === "list" && (
+              <Button
+                variant={isCompactList ? "default" : "outline"}
+                size="sm"
+                aria-pressed={isCompactList}
+                onClick={() => {
+                  updatePreferences({ libraryIsCompactList: !isCompactList });
+                }}
+              >
+                {isCompactList ? "Compact" : "Comfortable"}
+              </Button>
+            )}
+          </div>
+
+          {viewMode === "grid" && (
+            <div className="flex flex-col items-end gap-1">
+              <input
+                type="range"
+                min={DENSITY_OPTIONS[0]}
+                max={DENSITY_OPTIONS[DENSITY_OPTIONS.length - 1]}
+                step={1}
+                value={gridCols}
+                list="density-ticks"
+                onChange={(e) => {
+                  updatePreferences({ libraryGridCols: Number(e.target.value) as DensityValue });
+                }}
+                aria-label="Grid density"
+                className="w-72 h-4 accent-primary cursor-pointer"
+              />
+              <datalist id="density-ticks">
+                {DENSITY_OPTIONS.map(n => <option key={n} value={n} />)}
+              </datalist>
+              <span className="mt-1 text-xs font-medium text-foreground leading-none h-4">
+                {isCompactGrid ? "compact" : ""}
+              </span>
+            </div>
+          )}
         </div>
 
-        {viewMode === "grid" && (
-          <div className="flex flex-col items-end gap-1">
-            <input
-              type="range"
-              min={DENSITY_OPTIONS[0]}
-              max={DENSITY_OPTIONS[DENSITY_OPTIONS.length - 1]}
-              step={1}
-              value={gridCols}
-              list="density-ticks"
-              onChange={(e) => {
-                updatePreferences({ libraryGridCols: Number(e.target.value) as DensityValue });
-              }}
-              aria-label="Grid density"
-              className="w-72 h-4 accent-primary cursor-pointer"
-            />
-            <datalist id="density-ticks">
-              {DENSITY_OPTIONS.map(n => <option key={n} value={n} />)}
-            </datalist>
-            <span className="mt-1 text-xs font-medium text-foreground leading-none h-4">
-              {isCompactGrid ? "compact" : ""}
-            </span>
+        {!tag && (
+          <div>
+            <Button
+              variant={hideUnpackedItems ? "outline" : "default"}
+              size="sm"
+              aria-pressed={!hideUnpackedItems}
+              onClick={() => updatePreferences({ hideUnpackedItems: !hideUnpackedItems })}
+              className="h-7 px-2.5 text-xs"
+            >
+              {hideUnpackedItems ? "Show unpacked ZIPs" : "Hide unpacked ZIPs"}
+            </Button>
           </div>
         )}
       </div>
@@ -818,10 +866,10 @@ export default function LibraryPageInner() {
       {isSelectMode && selectedIds.size > 0 && (
         <BulkActionBar
           count={selectedIds.size}
-          onDelete={(e) => handleBulkDelete(e)}
+          onDelete={(info) => handleBulkDelete(info)}
           onTag={() => setIsTagDialogOpen(true)}
           onAddToBundle={() => setIsBundleDialogOpen(true)}
-          onClear={() => setSelectedIds(new Set())}
+          onClear={() => { setSelectedIds(new Set()); lastSelectedIdRef.current = null; }}
           onDownload={handleBulkDownload}
           isDownloading={isDownloading}
         />
@@ -831,6 +879,8 @@ export default function LibraryPageInner() {
         open={confirmState !== null}
         x={confirmState?.x ?? 0}
         y={confirmState?.y ?? 0}
+        anchorWidth={confirmState?.anchorWidth}
+        bottomOffset={confirmState?.bottomOffset}
         message={confirmState?.message ?? "Delete? This cannot be undone."}
         onConfirm={() => {
           const action = confirmState?.action;

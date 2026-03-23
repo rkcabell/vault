@@ -8,19 +8,25 @@ import { prisma } from "@vault/db";
 import { s3 } from "../plugins/s3Client.js";
 import { createOcrProcessor, type OcrJobData } from "./ocrWorker.js";
 import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumbWorker.js";
+import { createUnpackProcessor } from "./unpackWorker.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
+import { BundleRepository } from "../repositories/bundleRepository.js";
 import { MediaMetadataRepository } from "../repositories/mediaMetadataRepository.js";
 import { DocumentRepository } from "../repositories/documentRepository.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
 import { TextJobError } from "../lib/text/processTextJob.js";
 import { markStalledJobs } from "../services/stallDetectionService.js";
+import { createS3Adapter } from "../adapters/s3Adapter.js";
+import type { UnpackJob } from "../queues/enqueueUnpack.js";
+import { UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const BUCKET = requiredEnv("S3_BUCKET");
 
 const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
 const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
+const _UNPACK_QUEUE = UNPACK_QUEUE;
 const OCR_LOCK_DURATION_MS = parseEnvNumber("OCR_LOCK_DURATION_MS", 30 * 60 * 1000);
 const OCR_LOCK_RENEW_MS = parseEnvNumber(
   "OCR_LOCK_RENEW_MS",
@@ -43,7 +49,9 @@ async function main () {
       .catch(err => logger.warn({ err }, "failed to publish job update"));
   };
 
+  const s3Adapter = createS3Adapter(s3);
   const mediaRepository = new MediaRepository(prisma);
+  const bundleRepository = new BundleRepository(prisma);
   const metadataRepository = new MediaMetadataRepository(prisma);
   const documentRepository = new DocumentRepository(prisma);
 
@@ -51,6 +59,7 @@ async function main () {
   const thumbLogger = logger.child({ queue: THUMB_QUEUE, jobName: "thumb" });
 
   const ocrQueue = new Queue<OcrJobData>(OCR_QUEUE, { connection });
+  const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, { connection });
 
   const ocrWorker = new Worker<OcrJobData>(
     OCR_QUEUE,
@@ -87,8 +96,25 @@ async function main () {
     { connection, concurrency: 4 },
   );
 
+  const unpackLogger = logger.child({ queue: _UNPACK_QUEUE, jobName: "unpack" });
+
+  const unpackWorker = new Worker<UnpackJob>(
+    _UNPACK_QUEUE,
+    createUnpackProcessor({
+      mediaRepository,
+      bundleRepository,
+      s3Adapter,
+      bucket: BUCKET,
+      ocrQueue,
+      thumbQueue,
+      logger: unpackLogger,
+    }),
+    { connection, concurrency: 2 },
+  );
+
   ocrWorker.on("ready", () => ocrLogger.info({ queue: OCR_QUEUE }, "worker ready"));
   thumbWorker.on("ready", () => thumbLogger.info({ queue: THUMB_QUEUE }, "worker ready"));
+  unpackWorker.on("ready", () => unpackLogger.info({ queue: _UNPACK_QUEUE }, "worker ready"));
 
   // Run stall detection once on startup (catches records left over from a previous crash),
   // then on a recurring interval.
@@ -230,13 +256,30 @@ async function main () {
     ),
   );
 
-  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE] }, "worker started");
+  unpackWorker.on("failed", (job, err) => {
+    unpackLogger.error(
+      {
+        jobName: "unpack",
+        queue: _UNPACK_QUEUE,
+        jobId: job?.id ?? "unknown",
+        mediaId: job?.data?.mediaId ?? "unknown",
+        err,
+      },
+      "unpack job failed",
+    );
+  });
+
+  unpackWorker.on("error", err =>
+    unpackLogger.error({ jobName: "unpack", queue: _UNPACK_QUEUE, err }, "worker error"),
+  );
+
+  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE] }, "worker started");
 
   const shutdown = async () => {
     logger.info("worker shutting down...");
     clearInterval(stallInterval);
-    await Promise.all([ocrWorker.close(), thumbWorker.close()]);
-    await ocrQueue.close();
+    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close()]);
+    await Promise.allSettled([ocrQueue.close(), thumbQueue.close()]);
     await publisher.quit();
   };
 

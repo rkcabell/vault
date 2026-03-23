@@ -52,6 +52,22 @@ export async function finalizeUpload (id: string) {
   if (!res.ok) throw new Error(`finalizeUpload failed (${res.status})`)
 }
 
+export async function unpackMedia (id: string): Promise<{ bundleId: string }> {
+  const res = await fetch(`${API_BASE}/api/media/${id}/unpack`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error ?? `unpackMedia failed (${res.status})`)
+  }
+  return res.json()
+}
+
+export function exportBundleUrl (id: string): string {
+  return `${API_BASE}/api/bundles/${id}/export`
+}
+
 // Poll until thumb/text states are READY (or attempts exhausted)
 export async function pollReady (id: string, attempts = 12, delayMs = 1000) {
   for (let i = 0; i < attempts; i++) {

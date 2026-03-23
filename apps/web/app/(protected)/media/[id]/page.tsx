@@ -10,13 +10,15 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 
 import { parseSearchTerms, readErrorMessage } from "@/lib/media/utils";
-import { TAGS_UPDATED_EVENT } from "@/lib/tags";
+import { TAGS_UPDATED_EVENT, emitTagsUpdated } from "@/lib/tags";
+import { emitBundlesUpdated } from "@/lib/bundles";
 import { useMediaDetail } from "@/hooks/media/useMediaDetail";
 import { MediaPreviewCard } from "@/components/media/MediaPreviewCard";
 import { MediaInfoCard } from "@/components/media/MediaInfoCard";
 import { MediaTextPanel } from "@/components/media/MediaTextPanel";
 import { TagEditor } from "@/components/media/TagEditor";
 import { MediaMetadataCard } from "@/components/media/MediaMetadataCard";
+import { MediaBundlesPanel } from "@/components/media/MediaBundlesPanel";
 import MediaDetailSplit from "@/components/media/MediaDetailSplit";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 
@@ -69,10 +71,11 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
 
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isUnpacking, setIsUnpacking] = useState(false);
   const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);
 
   const title = media?.title || media?.filename || "Media details";
-  const busy = isDeleting || isDownloading;
+  const busy = isDeleting || isDownloading || isUnpacking;
   useEffect(() => {
     const es = new EventSource("/api/media/events");
 
@@ -152,6 +155,28 @@ const handleDelete = (e: React.MouseEvent) => {
       const msg = err instanceof Error ? err.message : "Failed to delete media.";
       setErrorMessage(msg);
       setIsDeleting(false);
+    }
+  };
+
+  const handleUnpackToBundle = async () => {
+    if (busy) return;
+    setIsUnpacking(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetch(`/api/media/${id}/unpack`, { method: "POST", credentials: "include" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setErrorMessage(data?.error ?? "Failed to unpack archive.");
+        return;
+      }
+      const { bundleId } = (await res.json()) as { bundleId: string };
+      emitBundlesUpdated();
+      emitTagsUpdated();
+      router.push(`/bundles/${bundleId}`);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to unpack archive.");
+    } finally {
+      setIsUnpacking(false);
     }
   };
 
@@ -284,8 +309,21 @@ const handleDelete = (e: React.MouseEvent) => {
                   onDownload={handleDownload}
                   onDelete={handleDelete}
                   onRegenerateThumbnail={handleRegenerateThumbnail}
+                  onUnpackToBundle={handleUnpackToBundle}
+                  mimeType={media.mimeType}
+                  linkedBundleId={media.linkedBundleId ?? null}
                 />
               </PanelCard>
+              {media.memberBundles && media.memberBundles.length > 0 && (
+                <PanelCard title="Bundles" storageKey="mediaDetails:bundles">
+                  <MediaBundlesPanel
+                    mediaId={id}
+                    memberBundles={media.memberBundles}
+                    disabled={busy}
+                    onRemoved={() => refresh({ silent: true })}
+                  />
+                </PanelCard>
+              )}
               <PanelCard title="Tags" storageKey="mediaDetails:tags">
                 <TagEditor
                   tags={media.tags ?? []}

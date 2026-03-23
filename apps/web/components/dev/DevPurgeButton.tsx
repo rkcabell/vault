@@ -63,7 +63,7 @@ export default function DevPurgeButton({ onSuccess, onError }: Props) {
   return (
     <>
       <Button
-        variant="outline"
+        variant="destructive"
         size="sm"
         onClick={(e) => { if (!isPurging) setConfirmState({ x: e.clientX, y: e.clientY }); }}
         disabled={isPurging}

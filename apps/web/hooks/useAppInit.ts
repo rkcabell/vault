@@ -14,7 +14,7 @@ export type InitUser = {
   avatarUrl?: string | null;
 };
 
-export type InitTag = { name: string; count: number };
+export type InitTag = { name: string; count: number; color: string | null };
 
 export type AppInitData = {
   user: InitUser | null;

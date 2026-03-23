@@ -9,6 +9,8 @@ export type Preferences = {
   detectDuplicates: boolean;
   collapseMetadataByDefault: boolean;
   lowMemoryMode: boolean;
+  autoUnpackArchives: boolean;
+  hideUnpackedItems: boolean;
   soonWindowDays: number;
   themePreference: "system" | "light" | "dark";
   lightTheme: string;
@@ -24,6 +26,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   detectDuplicates: false,
   collapseMetadataByDefault: true,
   lowMemoryMode: false,
+  autoUnpackArchives: false,
+  hideUnpackedItems: false,
   soonWindowDays: 7,
   themePreference: "system",
   lightTheme: "default",

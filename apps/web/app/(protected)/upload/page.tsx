@@ -290,7 +290,9 @@ export default function UploadPage() {
     setIsUploading(true);
     notifyUploadStart(pendingFiles.length);
 
+    const preErrorCount = files.filter(f => f.status === "error").length;
     const allFailed: FailedUpload[] = [];
+    const allCompleted: CompletedUpload[] = [];
 
     try {
       const chunks = chunkArray(pendingFiles, BATCH_CHUNK_SIZE);
@@ -335,6 +337,7 @@ export default function UploadPage() {
         if (completed.length > 0) {
           try {
             await batchFinalize(completed.map((item) => item.mediaId));
+            allCompleted.push(...completed);
           } catch (err) {
             const message = err instanceof Error ? err.message : "Upload finalize failed.";
             for (const item of completed) {
@@ -346,14 +349,17 @@ export default function UploadPage() {
         }
       }
 
-      if (allFailed.length === 0) {
+      const totalFailed = allFailed.length + preErrorCount;
+      if (totalFailed === 0) {
         emitTagsUpdated();
         notifyUploadSuccess();
         exitToLibrary(clearFiles, () => router.push(`${LIBRARY_PATH}?uploaded=1`));
         return;
       }
 
-      notifyUploadFailures(allFailed.length);
+      for (const item of allCompleted) removeFile(item.fileId);
+      if (allFailed.length < pendingFiles.length) emitTagsUpdated();
+      notifyUploadFailures(totalFailed);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload failed.";
       for (const pending of pendingFiles) {

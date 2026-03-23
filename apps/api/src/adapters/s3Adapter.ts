@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -23,6 +24,14 @@ type PresignGetInput = {
 type GetObjectStreamInput = {
   bucket: string;
   key: string;
+};
+
+type PutObjectInput = {
+  bucket: string;
+  key: string;
+  body: Readable | Buffer;
+  contentType: string;
+  contentLength?: number;
 };
 
 function isNotFoundError (err: unknown): boolean {
@@ -86,6 +95,18 @@ export function createS3Adapter (s3: S3Client) {
     }
   };
 
+  const putObject = async ({ bucket, key, body, contentType, contentLength }: PutObjectInput) => {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        ...(contentLength !== undefined ? { ContentLength: contentLength } : {}),
+      }),
+    );
+  };
+
   const deleteIfPresent = async ({ bucket, key }: { bucket: string; key: string }) => {
     try {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
@@ -100,6 +121,7 @@ export function createS3Adapter (s3: S3Client) {
     presignPut,
     presignGet,
     getObjectStream,
+    putObject,
     deleteIfPresent,
   };
 }

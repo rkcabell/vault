@@ -43,7 +43,7 @@ interface MediaCardProps {
   density?: "comfortable" | "compact";
   isSelectMode?: boolean;
   isSelected?: boolean;
-  onSelect?: (id: string) => void;
+  onSelect?: (id: string, shiftKey: boolean) => void;
   gridCols?: number;
 }
 
@@ -238,7 +238,7 @@ export function MediaCard({
   const handleSelectClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    onSelect?.(media.id);
+    onSelect?.(media.id, e.shiftKey);
   };
 
   if (variant === 'list') {

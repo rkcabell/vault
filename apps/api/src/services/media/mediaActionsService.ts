@@ -1,11 +1,18 @@
+import crypto from "node:crypto";
+import path from "node:path";
 import type { Writable } from "node:stream";
 import archiver from "archiver";
 import type { Queue } from "bullmq";
 import type { OcrJobData } from "../ocrProcessingService.js";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
+import type { BundleRepository } from "../../repositories/bundleRepository.js";
 import type { S3Adapter } from "../../adapters/s3Adapter.js";
 import type { ThumbJob } from "../../queues/enqueueThumbnail.js";
-import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
+import { computeThumbKey, enqueueThumbBulk } from "../../queues/enqueueThumbnail.js";
+import { enqueueOcrBulk } from "../../queues/enqueueOcr.js";
+import { makeStorageKey } from "../../lib/media/keys.js";
+import { extractArchive, isCoverCandidate } from "../archive/extractArchive.js";
+import { normalizeTag } from "../../lib/tags/normalizeTags.js";
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/jpeg": ".jpg",
@@ -36,6 +43,37 @@ const MIME_TO_EXT: Record<string, string> = {
   "application/vnd.ms-powerpoint": ".ppt",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
 };
+
+/**
+ * Coerce an arbitrary string into a valid tag by stripping invalid characters
+ * before passing through the canonical normalizeTag path. Returns null if the
+ * result cannot produce a valid tag (e.g. empty after stripping).
+ */
+function coerceTag(name: string): string | null {
+  const prepped = name
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  try {
+    return normalizeTag(prepped);
+  } catch {
+    return null;
+  }
+}
+
+function extTag(filename: string): string | null {
+  const ext = path.extname(filename).toLowerCase();
+  const candidate = ext.length > 1 ? ext.slice(1) : null;
+  if (!candidate) return null;
+  try {
+    return normalizeTag(candidate);
+  } catch {
+    return null;
+  }
+}
 
 function sanitizeTitle (title: string): string {
   const cleaned = title.replace(/[/\\:*?"<>|]/g, "").trim().slice(0, 100);
@@ -78,8 +116,20 @@ export type TextExtractionOptions = {
   forceOcr?: boolean;
 };
 
+export const ARCHIVE_MIME_TYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-tar",
+  "application/gzip",
+  "application/x-gzip",
+  "application/x-7z-compressed",
+  "application/x-rar-compressed",
+  "application/vnd.rar",
+]);
+
 type MediaActionsDeps = {
   repository: MediaRepository;
+  bundleRepository: BundleRepository;
   s3Adapter: S3Adapter;
   bucket: string;
   ocrQueue: Queue<OcrJobData>;
@@ -98,6 +148,9 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
 
     await deps.repository.deleteMedia(id);
 
+    // Clear coverMediaId on any bundle that used this media as its cover.
+    await deps.bundleRepository.clearCoverMedia(id);
+
     return { ok: true };
   };
 
@@ -109,7 +162,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     const media = await deps.repository.findMediaForUpdate(userId, id);
     if (!media) return null;
 
-    return deps.repository.updateMetadata(media.id, data);
+    return deps.repository.updateMetadata(media.id, data, userId);
   };
 
   const enqueueTextExtraction = async (
@@ -233,6 +286,110 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     return { ok: true };
   };
 
+  const unpackArchive = async (
+    userId: string,
+    mediaId: string,
+  ): Promise<{ bundleId: string } | null | "already-linked"> => {
+    // Load the media item including its mimeType and title
+    const media = await deps.repository.findDetail(userId, mediaId);
+    if (!media) return null;
+
+    // Already unpacked
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((media as any).linkedBundleId) return "already-linked";
+
+    // Only proceed for recognised archive types (ZIP, TAR, GZ)
+    if (!ARCHIVE_MIME_TYPES.has(media.mimeType)) return null;
+
+    // Fetch the archive stream from S3
+    const s3Result = await deps.s3Adapter.getObjectStream({ bucket: deps.bucket, key: media.storageKey });
+    if (!s3Result) return null;
+
+    // Derive bundle name from the archive title (strip extension)
+    const baseName = path.basename(media.title ?? media.filename, path.extname(media.filename));
+    const bundleName = baseName || media.title || "Unpacked Archive";
+
+    // Create the bundle
+    const bundle = await deps.bundleRepository.createBundle(userId, bundleName);
+    const bundleId = bundle.id;
+
+    const createdIds: string[] = [];
+    const thumbItems: { mediaId: string; userId: string; storageKey: string }[] = [];
+    const ocrItems: { mediaId: string; userId: string; storageKey: string }[] = [];
+    let coverCandidateId: string | null = null;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bodyStream = s3Result.body as any;
+
+    for await (const entry of extractArchive(bodyStream, media.mimeType)) {
+      const newId = crypto.randomUUID();
+      const filename = path.basename(entry.path);
+      if (!filename) continue;
+
+      const storageKey = makeStorageKey(userId, newId, filename);
+
+      // Upload extracted file to S3
+      await deps.s3Adapter.putObject({
+        bucket: deps.bucket,
+        key: storageKey,
+        body: entry.stream,
+        contentType: entry.mimeType,
+        contentLength: entry.size,
+      });
+
+      // Derive title from filename (strip extension)
+      const title = path.basename(filename, path.extname(filename)) || filename;
+
+      // Create Media record
+      await deps.repository.createMedia({
+        id: newId,
+        userId,
+        storageKey,
+        filename,
+        mimeType: entry.mimeType,
+        sizeBytes: entry.size ?? 0,
+        title,
+        tags: [coerceTag(bundleName), extTag(filename)].filter((t): t is string => t !== null),
+        sourceState: "READY",
+        thumbState: "PENDING",
+        textState: "PENDING",
+        sourceArchiveId: mediaId,
+      });
+
+      createdIds.push(newId);
+      thumbItems.push({ mediaId: newId, userId, storageKey });
+      ocrItems.push({ mediaId: newId, userId, storageKey });
+
+      if (!coverCandidateId && isCoverCandidate(entry.mimeType)) {
+        coverCandidateId = newId;
+      }
+    }
+
+    if (createdIds.length === 0) {
+      // Nothing was extracted — clean up the empty bundle
+      await deps.bundleRepository.deleteBundle(bundleId, userId);
+      return null;
+    }
+
+    // Enqueue thumbnail + OCR jobs
+    await enqueueThumbBulk(deps.thumbQueue, thumbItems);
+    await enqueueOcrBulk(deps.ocrQueue, ocrItems);
+
+    // Add all items to bundle
+    await deps.bundleRepository.addItems(bundleId, userId, createdIds);
+
+    // Set cover
+    if (coverCandidateId) {
+      await deps.bundleRepository.updateBundle(bundleId, userId, { coverMediaId: coverCandidateId });
+    }
+
+    // Link the archive to the bundle (bidirectionally)
+    await deps.repository.setLinkedBundle(mediaId, bundleId);
+    await deps.bundleRepository.setSourceMedia(bundleId, mediaId);
+
+    return { bundleId };
+  };
+
   return {
     deleteMedia,
     updateMediaMetadata,
@@ -242,5 +399,6 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     regenerateThumbnail,
     getBulkDownloadItems,
     streamBulkArchive,
+    unpackArchive,
   };
 }

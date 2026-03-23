@@ -23,44 +23,68 @@ model User {
   media        Media[]
   reminders    Reminder[]
   bundles      Bundle[]
+  tags         Tag[]
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  color     String?
+  count     Int      @default(0)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId, count(sort: Desc)])
 }
 
 model Media {
-  id           String      @id @default(cuid())
-  userId       String
-  thumbState   MediaWorkerState @default(PENDING)
-  thumbError   String?
-  textState    MediaWorkerState @default(PENDING)
-  sourceState  MediaWorkerState @default(PENDING)
-  storageKey   String
-  filename     String
-  mimeType     String
-  sizeBytes    Int
-  title        String
-  tags         String[]
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-  thumbnailKey String?
-  document          Document?
+  id              String           @id @default(cuid())
+  userId          String
+  thumbState      MediaWorkerState @default(PENDING)
+  thumbError      String?
+  textState       MediaWorkerState @default(PENDING)
+  sourceState     MediaWorkerState @default(PENDING)
+  storageKey      String
+  filename        String
+  mimeType        String
+  sizeBytes       Int
+  title           String
+  tags            String[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  thumbnailKey    String?
+  linkedBundleId  String?
+  linkedBundle    Bundle?          @relation("ArchiveLink", fields: [linkedBundleId], references: [id], onDelete: SetNull)
+  sourceArchiveId String?
+  sourceArchive   Media?           @relation("ExtractedFrom", fields: [sourceArchiveId], references: [id], onDelete: SetNull)
+  extractedItems  Media[]          @relation("ExtractedFrom")
+  sourcedBundles  Bundle[]         @relation("BundleSource")
+  document        Document?
   extractedMetadata MediaExtractedMetadata?
-  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reminders         Reminder[]
-  bundleItems       BundleItem[]
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminders       Reminder[]
+  bundleItems     BundleItem[]
 
   @@index([tags], type: Gin)
 }
 
 model Bundle {
-  id           String       @id @default(cuid())
-  userId       String
-  name         String
-  description  String?
-  starred      Boolean      @default(false)
-  coverMediaId String?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  items        BundleItem[]
+  id            String       @id @default(cuid())
+  userId        String
+  name          String
+  description   String?
+  starred       Boolean      @default(false)
+  starredAt     DateTime?
+  coverMediaId  String?
+  sourceMediaId String?
+  sourceMedia   Media?       @relation("BundleSource", fields: [sourceMediaId], references: [id], onDelete: SetNull)
+  linkedArchives Media[]     @relation("ArchiveLink")
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items         BundleItem[]
 
   @@index([userId])
 }

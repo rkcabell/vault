@@ -5,13 +5,14 @@ export type MediaListFilters = {
   userId: string;
   queryText?: string | null;
   tags?: string[];
+  excludeTags?: string[];
   thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED";
   textState?: "PENDING" | "READY" | "ERROR" | "FAILED";
   mimeTypePrefix?: string;
   orderBy: Prisma.MediaOrderByWithRelationInput[];
   take: number;
   cursor?: string | null;
-  skip?: number;
+  excludeUnpacked?: boolean;
 };
 
 export class MediaRepository {
@@ -19,15 +20,33 @@ export class MediaRepository {
 
   /** Insert a new Media row and return its id, storageKey, and title. */
   async createMedia (data: Prisma.MediaUncheckedCreateInput) {
-    return this.prisma.media.create({
+    const media = await this.prisma.media.create({
       data,
       select: { id: true, storageKey: true, title: true },
     });
+
+    // Sync Tag counts for initial tags.
+    const tags = (data.tags as string[] | undefined) ?? [];
+    await this.upsertTags(data.userId as string, tags);
+
+    return media;
   }
 
   /** Bulk-insert Media rows without returning individual ids (used in batch upload init). */
   async createBatch (items: Prisma.MediaCreateManyInput[]) {
     await this.prisma.media.createMany({ data: items });
+
+    // Sync Tag counts: aggregate tags per userId across all items.
+    const tagsByUser = new Map<string, string[]>();
+    for (const item of items) {
+      const uid = item.userId as string;
+      const tags = (item.tags as string[] | undefined) ?? [];
+      if (!tagsByUser.has(uid)) tagsByUser.set(uid, []);
+      tagsByUser.get(uid)!.push(...tags);
+    }
+    for (const [uid, tags] of tagsByUser) {
+      await this.upsertTags(uid, tags);
+    }
   }
 
   async markSourcesReady (userId: string, ids: string[]) {
@@ -35,42 +54,30 @@ export class MediaRepository {
     // and the returned rows (id + storageKey) are used by finalizeBatch to enqueue
     // OCR and thumbnail jobs. Switching to updateMany would silently drop those
     // values and break job enqueueing without a type error.
-    return this.prisma.$queryRaw<{ id: string; storageKey: string }[]>`
+    return this.prisma.$queryRaw<{ id: string; storageKey: string; mimeType: string }[]>`
       UPDATE "Media"
       SET "sourceState" = 'READY'
       WHERE "userId" = ${userId} AND "id" IN (${Prisma.join(ids)})
-      RETURNING "id", "storageKey"
+      RETURNING "id", "storageKey", "mimeType"
     `;
   }
 
   /**
-   * Paginated media listing with optional full-text search, tag filtering, and
-   * state filtering. Cursor-based pagination: pass `cursor` (last seen id) to
-   * fetch the next page; `skip: 1` drops the cursor row itself.
+   * Paginated media listing. When no tag filter is present the ORM path is
+   * used (cursor + skip:1). When tags are present a single raw SQL query is
+   * used so the case-insensitive array-containment check is inlined and no
+   * unbounded IN list is materialised. Keyset pagination is used in that path.
    */
   async listMedia (filters: MediaListFilters) {
-    const { userId, queryText, tags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor } = filters;
+    if (filters.tags?.length || filters.excludeTags?.length) return this._listMediaRaw(filters);
+    return this._listMediaOrm(filters);
+  }
 
-    // Tag filtering is case-insensitive so that existing items tagged "PNG"
-    // match the normalized filter value "png". Resolve matching IDs first via
-    // raw SQL (Prisma's hasEvery uses a case-sensitive Postgres @> operator),
-    // then pass those IDs into the main ORM query.
-    let tagFilterIds: string[] | null = null;
-    if (tags?.length) {
-      const placeholders = tags.map((_, i) => `$${i + 2}`).join(", ");
-      const rows = await this.prisma.$queryRawUnsafe<{ id: string }[]>(
-        `SELECT id FROM "Media" WHERE "userId" = $1 AND ARRAY(SELECT lower(t) FROM unnest("tags") AS t) @> ARRAY[${placeholders}]::text[]`,
-        userId,
-        ...tags,
-      );
-      tagFilterIds = rows.map(r => r.id);
-      if (tagFilterIds.length === 0) return [];
-    }
-
+  private async _listMediaOrm (filters: MediaListFilters) {
+    const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor, excludeUnpacked } = filters;
     return this.prisma.media.findMany({
       where: {
         userId,
-        ...(tagFilterIds !== null ? { id: { in: tagFilterIds } } : {}),
         ...(queryText
           ? {
               OR: [
@@ -79,24 +86,110 @@ export class MediaRepository {
               ],
             }
           : {}),
+        ...(excludeTags?.length
+          ? { AND: excludeTags.map(t => ({ NOT: { tags: { has: t } } })) }
+          : {}),
         ...(thumbState ? { thumbState } : {}),
         ...(textState ? { textState } : {}),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
+        ...(excludeUnpacked ? { sourceArchiveId: null } : {}),
       },
       orderBy,
       take,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       select: {
-        id: true,
-        title: true,
-        filename: true,
-        thumbState: true,
-        textState: true,
-        createdAt: true,
-        tags: true,
-        mimeType: true,
+        id: true, title: true, filename: true,
+        thumbState: true, textState: true, createdAt: true,
+        tags: true, mimeType: true,
       },
     });
+  }
+
+  private async _listMediaRaw (filters: MediaListFilters) {
+    const { userId, queryText, tags, excludeTags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor, excludeUnpacked } = filters;
+
+    // Derive sort column and direction from the Prisma orderBy structure.
+    // buildOrderBy always puts the primary column first; the tiebreaker id second.
+    const [[sortField, sortDir]] = Object.entries(orderBy[0]) as [[string, "asc" | "desc"]];
+
+    // Map camelCase field names to quoted Postgres column identifiers.
+    // These come from a closed enum in buildOrderBy — never from user input.
+    const COL: Record<string, string> = {
+      createdAt: '"createdAt"',
+      title: "title",
+      sizeBytes: '"sizeBytes"',
+      mimeType: '"mimeType"',
+    };
+    const col = COL[sortField] ?? '"createdAt"';
+    const dir = sortDir === "asc" ? "ASC" : "DESC";
+    const cmp = sortDir === "asc" ? ">" : "<";
+
+    // Keyset cursor: look up the cursor row's sort-column value by PK (fast).
+    let cursorSortVal: unknown = null;
+    let cursorId: string | null = null;
+    if (cursor) {
+      const row = await this.prisma.media.findFirst({
+        where: { id: cursor },
+        select: { id: true, [sortField]: true },
+      }) as Record<string, unknown> | null;
+      if (!row) return [];
+      cursorSortVal = row[sortField];
+      cursorId = row.id as string;
+    }
+
+    // Build WHERE conditions; all user-supplied values are bound as $n params.
+    const conditions: string[] = [`m."userId" = $1`];
+    const params: unknown[] = [userId];
+    let p = 2;
+
+    // Tag include condition: all specified tags must be present (case-insensitive).
+    if (tags?.length) {
+      const tagPlaceholders = tags.map(() => `$${p++}`).join(", ");
+      conditions.push(`ARRAY(SELECT lower(t) FROM unnest(m.tags) AS t) @> ARRAY[${tagPlaceholders}]::text[]`);
+      params.push(...tags.map(t => t.toLowerCase()));
+    }
+
+    // Tag exclude conditions: item must not have any of these tags.
+    if (excludeTags?.length) {
+      for (const t of excludeTags) {
+        conditions.push(`NOT ($${p++} = ANY(ARRAY(SELECT lower(x) FROM unnest(m.tags) AS x)))`);
+        params.push(t.toLowerCase());
+      }
+    }
+
+    if (queryText) {
+      // $p is used twice in the OR — Postgres reuses the same bound value.
+      conditions.push(`(m.title ILIKE $${p} OR EXISTS (SELECT 1 FROM "Document" d WHERE d."mediaId" = m.id AND d."rawText" ILIKE $${p}))`);
+      params.push(`%${queryText}%`);
+      p++;
+    }
+    if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
+    if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
+    if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
+    if (excludeUnpacked) conditions.push(`m."sourceArchiveId" IS NULL`);
+
+    if (cursorId !== null) {
+      // Keyset: (col, id) cmp (cursorColVal, cursorId). $p is reused for col equality.
+      conditions.push(`(m.${col} ${cmp} $${p} OR (m.${col} = $${p} AND m.id ${cmp} $${p + 1}))`);
+      params.push(cursorSortVal, cursorId);
+      p += 2;
+    }
+
+    params.push(take);
+
+    const sql = `
+      SELECT m.id, m.title, m.filename, m."thumbState", m."textState", m."createdAt", m.tags, m."mimeType"
+      FROM "Media" m
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY m.${col} ${dir}, m.id ${dir}
+      LIMIT $${p}
+    `;
+
+    return this.prisma.$queryRawUnsafe<Array<{
+      id: string; title: string; filename: string;
+      thumbState: string; textState: string;
+      createdAt: Date; tags: string[]; mimeType: string;
+    }>>(sql, ...params);
   }
 
   /** Return storageKey and thumbnailKey for a media item (used to delete S3 objects). */
@@ -122,7 +215,7 @@ export class MediaRepository {
     });
   }
 
-  async updateMetadata (id: string, data: { title?: string; tags?: string[] }) {
+  async updateMetadata (id: string, data: { title?: string; tags?: string[] }, userId?: string) {
     const update = {
       ...(data.title !== undefined ? { title: data.title } : {}),
       ...(data.tags !== undefined ? { tags: data.tags } : {}),
@@ -137,6 +230,35 @@ export class MediaRepository {
       textState: true,
       tags: true,
     };
+
+    // When tags are changing and we have a userId, sync Tag counts in a transaction.
+    if (data.tags !== undefined && userId !== undefined) {
+      return this.prisma.$transaction(async tx => {
+        const oldMedia = await tx.media.findUnique({ where: { id }, select: { tags: true } });
+        const oldTags = oldMedia?.tags ?? [];
+
+        const updated = await tx.media.update({ where: { id }, data: update, select });
+
+        const newSet = new Set(data.tags!);
+        const oldSet = new Set(oldTags);
+        const added   = data.tags!.filter(t => !oldSet.has(t));
+        const removed = oldTags.filter(t => !newSet.has(t));
+
+        for (const name of added) {
+          await tx.tag.upsert({
+            where: { userId_name: { userId, name } },
+            update: { count: { increment: 1 } },
+            create: { userId, name, count: 1 },
+          });
+        }
+        for (const name of removed) {
+          await tx.$executeRaw`UPDATE "Tag" SET count = count - 1 WHERE "userId" = ${userId} AND name = ${name}`;
+          await tx.$executeRaw`DELETE FROM "Tag" WHERE "userId" = ${userId} AND name = ${name} AND count <= 0`;
+        }
+
+        return updated;
+      });
+    }
 
     return this.prisma.media.update({ where: { id }, data: update, select });
   }
@@ -188,6 +310,13 @@ export class MediaRepository {
     return result.count > 0;
   }
 
+  async setLinkedBundle (id: string, bundleId: string) {
+    await this.prisma.media.update({
+      where: { id },
+      data: { linkedBundleId: bundleId },
+    });
+  }
+
   async findDetail (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
@@ -206,6 +335,14 @@ export class MediaRepository {
         thumbError: true,
         textState: true,
         thumbnailKey: true,
+        linkedBundleId: true,
+        bundleItems: {
+          select: {
+            bundle: {
+              select: { id: true, name: true },
+            },
+          },
+        },
         document: {
           select: {
             rawText: true,
@@ -281,7 +418,7 @@ export class MediaRepository {
     return media?.textState ?? null;
   }
 
-  async setTextState (mediaId: string, state: "PENDING" | "READY" | "ERROR"): Promise<boolean> {
+  async setTextState (mediaId: string, state: "PENDING" | "READY" | "ERROR" | "FAILED"): Promise<boolean> {
     // Guard: worker-initiated writes (including PDF intermediate PENDING→PENDING re-queues)
     // are only allowed from PENDING. This prevents a late worker from overwriting a cancel
     // or stall-detection ERROR with READY.
@@ -327,30 +464,100 @@ export class MediaRepository {
     return result.count;
   }
 
-  /**
-   * Return the most-used tags for a user, ordered by frequency descending then
-   * alphabetically. Uses raw SQL to unnest the Postgres array column.
-   */
-  async listTopTags (userId: string, limit: number) {
-    return this.prisma.$queryRaw<{ tag: string; count: number }[]>`
-      SELECT tag, COUNT(*)::int AS count
-      FROM (
-        SELECT unnest("tags") AS tag
-        FROM "Media"
-        WHERE "userId" = ${userId}
-      ) t
-      GROUP BY tag
-      ORDER BY count DESC, tag ASC
-      LIMIT ${limit}
-    `;
+  /** Marks textState PENDING → FAILED for items whose MIME type is not supported for text extraction. */
+  async markTextUnsupported (mediaIds: string[]): Promise<void> {
+    if (mediaIds.length === 0) return;
+    await this.prisma.media.updateMany({
+      where: { id: { in: mediaIds }, textState: "PENDING" },
+      data: { textState: "FAILED" },
+    });
   }
 
-  /** Remove a tag from every Media row owned by the user using array_remove. */
-  async deleteTag (userId: string, tag: string) {
-    await this.prisma.$executeRaw`
-      UPDATE "Media"
-      SET "tags" = array_remove("tags", ${tag})
-      WHERE "userId" = ${userId} AND ${tag} = ANY("tags")
-    `;
+  /**
+   * Return the most-used tags for a user, ordered by frequency descending then
+   * alphabetically. Queries the denormalized Tag table directly — O(limit) instead
+   * of a full Media table unnest scan.
+   */
+  async listTopTags (userId: string, limit: number, offset = 0) {
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.tag.findMany({
+        where: { userId },
+        orderBy: [{ count: 'desc' }, { name: 'asc' }],
+        take: limit,
+        skip: offset,
+        select: { name: true, count: true, color: true },
+      }),
+      this.prisma.tag.count({ where: { userId } }),
+    ]);
+    return {
+      tags: rows.map(r => ({ tag: r.name, count: r.count, color: r.color ?? null })),
+      total,
+    };
+  }
+
+  /**
+   * Remove a tag from every Media row owned by the user, and delete its Tag row.
+   * Returns the number of Media rows updated.
+   */
+  async deleteTag (userId: string, tag: string): Promise<number> {
+    return this.prisma.$transaction(async tx => {
+      const affected = await tx.$executeRaw`
+        UPDATE "Media"
+        SET "tags" = array_remove("tags", ${tag})
+        WHERE "userId" = ${userId} AND ${tag} = ANY("tags")
+      `;
+      await tx.tag.deleteMany({ where: { userId, name: tag } });
+      return affected;
+    });
+  }
+
+  /**
+   * Rename a tag across all Media rows and update the Tag row.
+   * Returns the number of Media rows updated.
+   */
+  async renameTag (userId: string, oldName: string, newName: string): Promise<number> {
+    return this.prisma.$transaction(async tx => {
+      const affected = await tx.$executeRaw`
+        UPDATE "Media"
+        SET "tags" = array_replace("tags", ${oldName}, ${newName})
+        WHERE "userId" = ${userId} AND ${oldName} = ANY("tags")
+      `;
+      // Rename the Tag row. If newName already exists, merge counts then delete old.
+      const existing = await tx.tag.findUnique({ where: { userId_name: { userId, name: newName } } });
+      const oldRow   = await tx.tag.findUnique({ where: { userId_name: { userId, name: oldName } } });
+      if (existing && oldRow) {
+        await tx.tag.update({
+          where: { userId_name: { userId, name: newName } },
+          data: { count: existing.count + oldRow.count },
+        });
+        await tx.tag.delete({ where: { userId_name: { userId, name: oldName } } });
+      } else if (oldRow) {
+        await tx.tag.update({
+          where: { userId_name: { userId, name: oldName } },
+          data: { name: newName },
+        });
+      }
+      return affected;
+    });
+  }
+
+  /** Set or clear the color on a tag row. */
+  async setTagColor (userId: string, name: string, color: string | null): Promise<void> {
+    await this.prisma.tag.updateMany({ where: { userId, name }, data: { color } });
+  }
+
+  /**
+   * Increment (or create) Tag rows for each tag name.
+   * Called after createMedia / createBatch to keep Tag counts in sync.
+   */
+  async upsertTags (userId: string, tags: string[]): Promise<void> {
+    for (const name of tags) {
+      if (!name) continue;
+      await this.prisma.tag.upsert({
+        where: { userId_name: { userId, name } },
+        update: { count: { increment: 1 } },
+        create: { userId, name, count: 1 },
+      });
+    }
   }
 }

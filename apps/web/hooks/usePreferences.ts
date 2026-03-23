@@ -14,6 +14,8 @@ export type Preferences = {
   detectDuplicates: boolean;
   collapseMetadataByDefault: boolean;
   lowMemoryMode: boolean;
+  autoUnpackArchives: boolean;
+  hideUnpackedItems: boolean;
   soonWindowDays: number;
   themePreference: "system" | "light" | "dark";
   lightTheme: LightTheme;
@@ -29,6 +31,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   detectDuplicates: false,
   collapseMetadataByDefault: true,
   lowMemoryMode: false,
+  autoUnpackArchives: false,
+  hideUnpackedItems: false,
   soonWindowDays: 7,
   themePreference: "system",
   lightTheme: "default",
@@ -44,6 +48,8 @@ const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
   detectDuplicates: "prefs:detectDuplicates",
   collapseMetadataByDefault: "prefs:collapseMetadataByDefault",
   lowMemoryMode: "prefs:lowMemoryMode",
+  autoUnpackArchives: "prefs:autoUnpackArchives",
+  hideUnpackedItems: "prefs:hideUnpackedItems",
   soonWindowDays: "prefs:soonWindowDays",
   themePreference: "prefs:themePreference",
   lightTheme: "prefs:lightTheme",
@@ -76,6 +82,12 @@ function readFromLocalStorage(): Partial<Preferences> {
 
     const lowMemory = localStorage.getItem("prefs:lowMemoryMode");
     if (lowMemory !== null) out.lowMemoryMode = lowMemory === "true";
+
+    const autoUnpack = localStorage.getItem("prefs:autoUnpackArchives");
+    if (autoUnpack !== null) out.autoUnpackArchives = autoUnpack === "true";
+
+    const hideZip = localStorage.getItem("prefs:hideUnpackedItems");
+    if (hideZip !== null) out.hideUnpackedItems = hideZip === "true";
 
     const soonWindowDays = Number(localStorage.getItem("prefs:soonWindowDays"));
     if (soonWindowDays >= 2 && soonWindowDays <= 14) out.soonWindowDays = soonWindowDays;

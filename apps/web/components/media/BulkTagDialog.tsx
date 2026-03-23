@@ -31,20 +31,21 @@ export function BulkTagDialog({ open, onOpenChange, selectedItems, onDone }: Bul
   const [isSaving, setIsSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const commitInput = () => {
+  // Returns the new pending tags list synchronously so handleSave can use it
+  // without waiting for a React state flush.
+  const commitInput = (): string[] => {
     const raw = tagInput.trim();
-    if (!raw) return;
+    if (!raw) return pendingTags;
     try {
       const normalized = normalizeTags(raw);
-      setPendingTags(prev => {
-        const merged = [...prev, ...normalized];
-        // deduplicate
-        return [...new Set(merged)];
-      });
+      const merged = [...new Set([...pendingTags, ...normalized])];
+      setPendingTags(merged);
       setTagInput('');
       setError(null);
+      return merged;
     } catch (err) {
       if (err instanceof TagValidationError) setError(err.message);
+      return pendingTags;
     }
   };
 
@@ -60,11 +61,7 @@ export function BulkTagDialog({ open, onOpenChange, selectedItems, onDone }: Bul
   };
 
   const handleSave = async () => {
-    commitInput();
-    // Give React a tick to flush the pending tag from commitInput above
-    await new Promise(r => setTimeout(r, 0));
-
-    const tags = pendingTags.length > 0 ? pendingTags : normalizeTags(tagInput.trim() || []);
+    const tags = commitInput(); // synchronous — no setTimeout needed
     if (tags.length === 0) {
       setError('Enter at least one tag.');
       return;
@@ -72,12 +69,10 @@ export function BulkTagDialog({ open, onOpenChange, selectedItems, onDone }: Bul
 
     setIsSaving(true);
     setError(null);
-    const updatedItems: MediaItem[] = [];
+    setProgress(`Saving ${selectedItems.length} item${selectedItems.length === 1 ? '' : 's'}…`);
 
-    for (let i = 0; i < selectedItems.length; i++) {
-      const item = selectedItems[i];
-      setProgress(`Saving ${i + 1} of ${selectedItems.length}…`);
-      try {
+    const results = await Promise.allSettled(
+      selectedItems.map(async item => {
         const merged = normalizeTags([...(item.tags ?? []), ...tags]);
         const res = await fetch(`/api/media/${item.id}`, {
           method: 'PATCH',
@@ -89,22 +84,30 @@ export function BulkTagDialog({ open, onOpenChange, selectedItems, onDone }: Bul
           const data = await res.json().catch(() => ({})) as { error?: string };
           throw new Error(data.error ?? `Failed for "${item.title}"`);
         }
-        updatedItems.push({ ...item, tags: merged });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-        setIsSaving(false);
-        setProgress(null);
-        return;
-      }
-    }
+        const updated: MediaItem = { ...item, tags: merged };
+        return updated;
+      })
+    );
+
+    const updatedItems = results
+      .filter((r): r is PromiseFulfilledResult<MediaItem> => r.status === 'fulfilled')
+      .map(r => r.value);
+    const failCount = results.filter(r => r.status === 'rejected').length;
 
     setIsSaving(false);
     setProgress(null);
-    setPendingTags([]);
-    setTagInput('');
-    emitTagsUpdated();
-    onDone(updatedItems);
-    onOpenChange(false);
+
+    if (failCount > 0) {
+      setError(`${failCount} of ${selectedItems.length} items failed to update.`);
+    }
+
+    if (updatedItems.length > 0) {
+      setPendingTags([]);
+      setTagInput('');
+      emitTagsUpdated();
+      onDone(updatedItems);
+      if (failCount === 0) onOpenChange(false);
+    }
   };
 
   const handleClose = () => {
