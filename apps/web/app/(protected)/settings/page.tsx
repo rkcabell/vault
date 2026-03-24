@@ -261,6 +261,7 @@ function ManageTagsCard() {
   const [visible, setVisible] = useState(INITIAL_VISIBLE);
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [isDeletingEmpty, setIsDeletingEmpty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmState, setConfirmState] = useState<{ x: number; y: number; name: string; count: number } | null>(null);
   const [deleteEmptyStatus, setDeleteEmptyStatus] = useState<"success" | "none" | null>(null);
@@ -268,6 +269,7 @@ function ManageTagsCard() {
   const [renamingTag, setRenamingTag] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
+  const [pendingColorChanges, setPendingColorChanges] = useState<Record<string, string>>({});
   const renameInputRef = React.useRef<HTMLInputElement>(null);
 
   const load = async () => {
@@ -373,29 +375,77 @@ function ManageTagsCard() {
     if (e.key === "Escape") { e.preventDefault(); cancelRename(); }
   };
 
-  const handleColorChange = async (tagName: string, color: string | null) => {
-    // Optimistic update
-    setTags(prev => prev.map(t => t.name === tagName ? { ...t, color } : t));
+  const persistTagColor = async (tagName: string, color: string | null) => {
     try {
-      await fetch(`/api/tags/${encodeURIComponent(tagName)}`, {
+      const res = await fetch(`/api/tags/${encodeURIComponent(tagName)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ color }),
       });
+      if (res.ok) emitTagsUpdated();
     } catch {
-      // Silently ignore — tag color is cosmetic, not critical
+      // Silently ignore - tag color is cosmetic, not critical
     }
   };
 
-  const handleDeleteEmptyTags = () => {
-    const emptyTags = tags.filter(t => t.count === 0);
-    if (emptyTags.length === 0) {
-      setDeleteEmptyStatus("none");
-    } else {
-      setDeleteEmptyStatus("success");
+  const handleColorPreview = (tagName: string, color: string) => {
+    setTags(prev => prev.map(t => t.name === tagName ? { ...t, color } : t));
+    setPendingColorChanges(prev => ({ ...prev, [tagName]: color }));
+  };
+
+  const handleColorPickerClose = async (tagName: string) => {
+    const nextColor = pendingColorChanges[tagName];
+    if (nextColor === undefined) return;
+    setPendingColorChanges(prev => {
+      const copy = { ...prev };
+      delete copy[tagName];
+      return copy;
+    });
+    await persistTagColor(tagName, nextColor);
+  };
+
+  const handleColorClear = async (tagName: string) => {
+    setTags(prev => prev.map(t => t.name === tagName ? { ...t, color: null } : t));
+    setPendingColorChanges(prev => {
+      const copy = { ...prev };
+      delete copy[tagName];
+      return copy;
+    });
+    await persistTagColor(tagName, null);
+  };
+
+  const handleDeleteEmptyTags = async () => {
+    if (isDeletingEmpty) return;
+    setIsDeletingEmpty(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/tags/orphaned", {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null) as { message?: string; error?: string } | null;
+        setError(data?.message ?? data?.error ?? "Unable to delete empty tags.");
+        return;
+      }
+
+      const data = await res.json().catch(() => ({ deleted: 0 })) as { deleted?: number };
+      const deleted = Number(data.deleted ?? 0);
+
+      if (deleted > 0) {
+        setDeleteEmptyStatus("success");
+        await load();
+        emitTagsUpdated();
+      } else {
+        setDeleteEmptyStatus("none");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete empty tags.");
+    } finally {
+      setIsDeletingEmpty(false);
+      setTimeout(() => setDeleteEmptyStatus(null), 3000);
     }
-    setTimeout(() => setDeleteEmptyStatus(null), 3000);
   };
 
   return (
@@ -406,8 +456,8 @@ function ManageTagsCard() {
           <CardDescription className="mt-1">Rename, color-code, and delete tags across your library.</CardDescription>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <Button variant="destructive" size="sm" onClick={handleDeleteEmptyTags}>
-            Delete empty tags
+          <Button variant="destructive" size="sm" onClick={() => void handleDeleteEmptyTags()} disabled={isDeletingEmpty}>
+            {isDeletingEmpty ? "Deleting..." : "Delete empty tags"}
           </Button>
           {deleteEmptyStatus && (
             <p className="text-xs text-muted-foreground">
@@ -443,14 +493,15 @@ function ManageTagsCard() {
                       type="color"
                       className="sr-only"
                       value={tag.color ?? "#888888"}
-                      onChange={e => void handleColorChange(tag.name, e.target.value)}
+                      onInput={e => handleColorPreview(tag.name, e.currentTarget.value)}
+                      onBlur={() => void handleColorPickerClose(tag.name)}
                     />
                   </label>
                   {tag.color && (
                     <button
                       type="button"
                       title="Remove color"
-                      onClick={() => void handleColorChange(tag.name, null)}
+                      onClick={() => void handleColorClear(tag.name)}
                       className="absolute -right-2 -top-2 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted text-muted-foreground hover:bg-destructive hover:text-destructive-foreground text-[9px] leading-none"
                     >
                       ×
@@ -541,3 +592,4 @@ export default function SettingsPage() {
     </div>
   );
 }
+

@@ -72,6 +72,12 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
     return { ok: true, tag };
   });
 
+  // Delete tags that are not referenced by any media rows for this user.
+  app.delete("/orphaned", { preHandler: [requireAuth] }, async req => {
+    const deleted = await repository.deleteOrphanTags(req.userId!);
+    return { ok: true, deleted };
+  });
+
   app.delete("/:tag", { preHandler: [requireAuth] }, async req => {
     const Params = z.object({ tag: z.string().min(1) });
     const { tag: rawTag } = Params.parse(req.params);

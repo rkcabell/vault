@@ -13,6 +13,7 @@ interface PrismaMockOpts {
   tagCount?: () => Promise<number>;
   tagUpdateMany?: (_args: unknown) => Promise<unknown>;
   // Interactive-transaction overrides (used by renameTag / deleteTag)
+  txQueryRaw?: (..._args: unknown[]) => Promise<unknown>;
   txExecuteRaw?: (..._args: unknown[]) => Promise<number>;
   txTagFindUnique?: (_args: unknown) => Promise<{ name: string; count: number } | null>;
   txTagUpdate?: (_args: unknown) => Promise<unknown>;
@@ -24,6 +25,7 @@ function makePrisma({
   tagFindMany = async () => [],
   tagCount = async () => 0,
   tagUpdateMany = async () => ({}),
+  txQueryRaw = async () => [],
   txExecuteRaw = async () => 0,
   txTagFindUnique = async () => null,
   txTagUpdate = async () => ({}),
@@ -32,6 +34,7 @@ function makePrisma({
 }: PrismaMockOpts = {}) {
   // The tx object passed into interactive ($transaction(fn)) callbacks.
   const tx = {
+    $queryRaw: txQueryRaw,
     $executeRaw: txExecuteRaw,
     tag: {
       findUnique: txTagFindUnique,
@@ -126,6 +129,45 @@ test("GET /: applies limit and offset query params", async () => {
 test("GET /: unauthenticated returns 401", async () => {
   const app = await buildApp();
   const res = await app.inject({ method: "GET", url: "/" });
+  assert.equal(res.statusCode, 401);
+});
+test("DELETE /orphaned: removes orphan tags and returns deleted count", async () => {
+  let capturedDeleteManyArgs: unknown;
+  const app = await buildApp({
+    txQueryRaw: async () => [{ name: "orphan-a" }, { name: "orphan-b" }],
+    txTagDeleteMany: async (args) => {
+      capturedDeleteManyArgs = args;
+      return { count: 2 };
+    },
+  });
+
+  const res = await app.inject({ method: "DELETE", url: "/orphaned", headers: AUTH });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { ok: true, deleted: 2 });
+  assert.deepEqual(capturedDeleteManyArgs, {
+    where: { userId: "user-1", name: { in: ["orphan-a", "orphan-b"] } },
+  });
+});
+
+test("DELETE /orphaned: returns 0 when no orphan tags exist", async () => {
+  let deleteManyCalled = false;
+  const app = await buildApp({
+    txQueryRaw: async () => [],
+    txTagDeleteMany: async () => {
+      deleteManyCalled = true;
+      return { count: 0 };
+    },
+  });
+
+  const res = await app.inject({ method: "DELETE", url: "/orphaned", headers: AUTH });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { ok: true, deleted: 0 });
+  assert.equal(deleteManyCalled, false);
+});
+
+test("DELETE /orphaned: unauthenticated returns 401", async () => {
+  const app = await buildApp();
+  const res = await app.inject({ method: "DELETE", url: "/orphaned" });
   assert.equal(res.statusCode, 401);
 });
 
@@ -297,3 +339,5 @@ test("PATCH /:tag: returns 400 when neither name nor color is provided", async (
   });
   assert.equal(res.statusCode, 400);
 });
+
+

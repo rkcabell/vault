@@ -353,6 +353,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
         sourceState: "READY",
         thumbState: "PENDING",
         textState: "PENDING",
+        isExtractedFromArchive: true,
         sourceArchiveId: mediaId,
       });
 

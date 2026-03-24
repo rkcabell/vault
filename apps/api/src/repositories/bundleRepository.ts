@@ -12,6 +12,8 @@ export class BundleRepository {
         name: true,
         description: true,
         starred: true,
+        isUnpackedArchive: true,
+        sourceMediaId: true,
         coverMediaId: true,
         createdAt: true,
         updatedAt: true,
@@ -31,6 +33,8 @@ export class BundleRepository {
       starred: b.starred,
       itemCount: b._count.items,
       coverMediaId: b.coverMediaId ?? b.items[0]?.mediaId ?? null,
+      isUnpackedArchive: b.isUnpackedArchive,
+      sourceMediaId: b.sourceMediaId ?? null,
       createdAt: b.createdAt.toISOString(),
       updatedAt: b.updatedAt.toISOString(),
     }));
@@ -45,6 +49,7 @@ export class BundleRepository {
         description: true,
         starred: true,
         coverMediaId: true,
+        isUnpackedArchive: true,
         sourceMediaId: true,
         createdAt: true,
         updatedAt: true,
@@ -78,6 +83,7 @@ export class BundleRepository {
       starred: bundle.starred,
       itemCount: bundle._count.items,
       coverMediaId: bundle.coverMediaId ?? bundle.items[0]?.mediaId ?? null,
+      isUnpackedArchive: bundle.isUnpackedArchive,
       sourceMediaId: bundle.sourceMediaId ?? null,
       createdAt: bundle.createdAt.toISOString(),
       updatedAt: bundle.updatedAt.toISOString(),
@@ -97,7 +103,7 @@ export class BundleRepository {
   async setSourceMedia (bundleId: string, mediaId: string) {
     await this.prisma.bundle.update({
       where: { id: bundleId },
-      data: { sourceMediaId: mediaId },
+      data: { sourceMediaId: mediaId, isUnpackedArchive: true },
     });
   }
 
