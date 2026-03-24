@@ -4,7 +4,7 @@
 import type { Route } from "next";
 import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from "react";
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Archive, Ban, BookOpen, Check, CheckCircle2, Circle, Download, ExternalLink, File as FileIcon, FileText, Film, MoreVertical, Music, Pencil, Trash2, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/ui/Button';
@@ -111,6 +111,7 @@ export function MediaCard({
   onSelect,
   gridCols,
 }: MediaCardProps) {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const id = media?.id;
   const q = searchParams.get("q") ?? searchParams.get("search");
@@ -241,6 +242,14 @@ export function MediaCard({
     onSelect?.(media.id, e.shiftKey);
   };
 
+  const handleInfoAreaClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (isSelectMode || isRenaming) return;
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest("a,button,input,textarea,select,[role='menuitem']")) return;
+    router.push(hrefWithQuery);
+  };
+
   if (variant === 'list') {
     return (
       <Card
@@ -315,7 +324,7 @@ export function MediaCard({
               </Link>
             )}
 
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 cursor-pointer" onClick={handleInfoAreaClick}>
               {isRenaming ? (
                 <div className={cn("flex items-center gap-2", isCompact && "gap-1")}>
                   <Input
@@ -498,7 +507,10 @@ export function MediaCard({
         </Link>
       )}
 
-      <CardContent className={cn("flex flex-col gap-1 px-2 py-2", isCompact && "gap-0 px-1 py-0.5")}>
+      <CardContent
+        className={cn("flex flex-col gap-1 px-2 py-2", isCompact && "gap-0 px-1 py-0.5")}
+        onClick={handleInfoAreaClick}
+      >
         <div className={cn("flex items-center gap-1", isCompact && "gap-0.5")}>
           <div className="min-w-0 flex-1">
             {isRenaming ? (
