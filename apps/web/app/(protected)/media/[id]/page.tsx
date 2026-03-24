@@ -2,6 +2,7 @@
 
 import React, { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { Container, PanelCard } from "@/components/common";
@@ -152,8 +153,8 @@ const handleDelete = (e: React.MouseEvent) => {
       }
       emitTagsUpdated();
       emitBundlesUpdated();
-      const libraryTarget = searchQuery
-        ? `/library?q=${encodeURIComponent(searchQuery)}`
+      const libraryTarget: Route = searchQuery
+        ? (`/library?q=${encodeURIComponent(searchQuery)}` as Route)
         : "/library";
       router.push(libraryTarget);
     } catch (err) {
