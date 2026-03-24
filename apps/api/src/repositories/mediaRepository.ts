@@ -210,22 +210,21 @@ export class MediaRepository {
 
       await tx.media.delete({ where: { id } });
 
-      for (const name of new Set(media.tags ?? [])) {
-        const counts = await tx.$queryRaw<Array<{ count: number }>>`
-          SELECT COUNT(*)::int AS count
-          FROM "Media"
-          WHERE "userId" = ${media.userId}
-            AND ${name} = ANY("tags")
+      const tagNames = [...new Set(media.tags ?? [])];
+      if (tagNames.length > 0) {
+        // Single query to count remaining media per tag instead of N queries
+        const rows = await tx.$queryRaw<Array<{ name: string; count: number }>>`
+          SELECT tag_name AS name, COUNT(m.id)::int AS count
+          FROM unnest(${tagNames}::text[]) AS tag_name
+          LEFT JOIN "Media" m ON m."userId" = ${media.userId} AND tag_name = ANY(m.tags)
+          GROUP BY tag_name
         `;
-        const nextCount = Number(counts[0]?.count ?? 0);
-
-        if (nextCount <= 0) {
-          await tx.tag.deleteMany({ where: { userId: media.userId, name } });
-        } else {
-          await tx.tag.updateMany({
-            where: { userId: media.userId, name },
-            data: { count: nextCount },
-          });
+        const toDelete = rows.filter(r => r.count === 0).map(r => r.name);
+        if (toDelete.length > 0) {
+          await tx.tag.deleteMany({ where: { userId: media.userId, name: { in: toDelete } } });
+        }
+        for (const { name, count } of rows.filter(r => r.count > 0)) {
+          await tx.tag.updateMany({ where: { userId: media.userId, name }, data: { count } });
         }
       }
     });

@@ -177,7 +177,7 @@
     --input: 36 24% 80%;
   }
 
-  html:not(.dark).theme-solarize {
+  html:not(.dark).theme-sandstone {
     --page-background: 28 50% 76%;
     --background: 28 55% 82%;
     --modal-background: 28 62% 77%;
@@ -193,6 +193,7 @@
     --border: 28 36% 67%;
     --input: 28 36% 67%;
     --tag-filter-include: #064e3b;          /* emerald-900 — AA on warm tan background */
+    --color-star: #92400e;                  /* amber-800 — yellow-400 is invisible on warm tan */
   }
 
   html:not(.dark).theme-mist {
@@ -333,6 +334,10 @@
     --input: 215 20% 18%;
   }
 
+html.dark.theme-new-moon {
+  --muted: 215 24% 14%;
+}
+
   html.dark.theme-charcoal {
     --page-background: 220 5% 13%;
     --background: 220 5% 17%;
@@ -384,6 +389,38 @@
     --border: 120 20% 16%;
     --input: 120 20% 16%;
     --ring: 120 90% 52%;
+  }
+
+  html.dark.theme-solarized {
+    --page-background: 193 100% 8%;
+    --background: 193 100% 11%;       /* base03 #002b36 */
+    --modal-background: 192 81% 13%;
+    --foreground: 180 7% 63%;          /* base1  #93a1a1 — 6.3:1 on bg */
+
+    --card: 192 81% 14%;              /* base02 #073642 */
+    --card-foreground: 180 7% 63%;    /* base1  #93a1a1 — 6.3:1 on card */
+
+    --popover: 192 81% 14%;
+    --popover-foreground: 180 7% 63%;
+
+    --primary: 205 69% 49%;           /* blue   #268bd2 */
+    --primary-foreground: 193 100% 8%;
+    --color-primary: hsl(205 69% 49%);
+    --color-primary-foreground: hsl(193 100% 8%);
+    --color-primary-hover: hsl(205 69% 59%);
+
+    --secondary: 192 60% 18%;
+    --secondary-foreground: 180 7% 63%; /* base1 #93a1a1 */
+
+    --muted: 192 60% 18%;
+    --muted-foreground: 186 8% 55%;    /* base0 #839496 — 4.67:1 on bg */
+
+    --accent: 192 60% 18%;
+    --accent-foreground: 180 7% 63%;
+
+    --border: 192 50% 22%;
+    --input: 192 50% 22%;
+    --ring: 205 69% 49%;
   }
 
   html.dark.theme-matrix button:hover {
@@ -802,16 +839,8 @@ html.dark .text-error-panel__detail,
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-.overview-card:hover {
-  background-color: hsl(var(--accent));
-}
-
 .overview-card--muted {
   background-color: hsl(var(--muted));
-}
-
-.overview-card--muted:hover {
-  background-color: hsl(var(--accent));
 }
 
 .overview-secondary-btn {
@@ -856,17 +885,12 @@ html.dark .text-error-panel__detail,
   padding: 0 0.5rem;
   font-size: 0.75rem;
   font-weight: 500;
-  color: #404040;
+  color: hsl(var(--muted-foreground));
   text-underline-offset: 2px;
 }
 
 .reminders-open-link:hover {
   text-decoration: underline;
-}
-
-html.dark .reminders-open-link,
-[data-theme="dark"] .reminders-open-link {
-  color: #e5e5e5;
 }
 
 .reminders-panel {
@@ -880,25 +904,7 @@ html.dark .reminders-open-link,
 .reminders-empty-text,
 .reminders-loading-text,
 .reminders-row-note {
-  color: #525252;
-}
-
-html.dark .reminders-summary-text,
-html.dark .reminders-empty-text,
-html.dark .reminders-loading-text,
-html.dark .reminders-row-note,
-[data-theme="dark"] .reminders-summary-text,
-[data-theme="dark"] .reminders-empty-text,
-[data-theme="dark"] .reminders-loading-text,
-[data-theme="dark"] .reminders-row-note {
-  color: #a3a3a3;
-}
-
-html.dark.theme-charcoal .reminders-summary-text,
-html.dark.theme-charcoal .reminders-empty-text,
-html.dark.theme-charcoal .reminders-loading-text,
-html.dark.theme-charcoal .reminders-row-note {
-  color: #c4c4c4;
+  color: hsl(var(--muted-foreground));
 }
 
 .reminders-summary-text,
@@ -975,12 +981,7 @@ html.dark .reminders-error-text,
 }
 
 .reminders-row-due--default {
-  color: #525252;
-}
-
-html.dark .reminders-row-due--default,
-[data-theme="dark"] .reminders-row-due--default {
-  color: #a3a3a3;
+  color: hsl(var(--muted-foreground));
 }
 
 .reminders-row-note {
@@ -1134,12 +1135,7 @@ html.dark .reminder-form-error,
 .reminders-page-summary {
   margin-top: 0.25rem;
   font-size: 0.875rem;
-  color: #525252;
-}
-
-html.dark .reminders-page-summary,
-[data-theme="dark"] .reminders-page-summary {
-  color: #a3a3a3;
+  color: hsl(var(--muted-foreground));
 }
 
 .reminders-groups {
@@ -1215,16 +1211,11 @@ html.dark .reminders-bucket-heading--soon .reminders-bucket-dot,
 }
 
 .reminders-bucket-heading--later {
-  color: #525252;
-}
-
-html.dark .reminders-bucket-heading--later,
-[data-theme="dark"] .reminders-bucket-heading--later {
-  color: #a3a3a3;
+  color: hsl(var(--muted-foreground));
 }
 
 .reminders-bucket-heading--later .reminders-bucket-dot {
-  background: #a3a3a3;
+  background: hsl(var(--muted-foreground));
 }
 
 .reminders-bucket-rows {
@@ -1261,12 +1252,7 @@ html.dark .reminders-bucket-heading--later,
 .reminders-completed-at {
   font-size: 0.75rem;
   font-weight: 500;
-  color: #525252;
-}
-
-html.dark .reminders-completed-at,
-[data-theme="dark"] .reminders-completed-at {
-  color: #a3a3a3;
+  color: hsl(var(--muted-foreground));
 }
 
 .reminders-full-row {
@@ -1321,23 +1307,13 @@ html.dark .reminders-full-row:hover,
 }
 
 .reminders-row-media {
-  color: #525252;
-}
-
-html.dark .reminders-row-media,
-[data-theme="dark"] .reminders-row-media {
-  color: #a3a3a3;
+  color: hsl(var(--muted-foreground));
 }
 
 .reminders-full-row-note {
   font-size: 0.8125rem;
-  color: #525252;
+  color: hsl(var(--muted-foreground));
   line-height: 1.5;
-}
-
-html.dark .reminders-full-row-note,
-[data-theme="dark"] .reminders-full-row-note {
-  color: #a3a3a3;
 }
 
 .reminders-cancel-btn {
@@ -1373,32 +1349,10 @@ html.dark .reminders-cancel-btn--confirm,
 
 .reminders-empty-subtext {
   font-size: 0.875rem;
-  color: #737373;
-}
-
-html.dark .reminders-empty-subtext,
-[data-theme="dark"] .reminders-empty-subtext {
-  color: #737373;
+  color: hsl(var(--muted-foreground));
 }
 
 /* Matrix: override all hardcoded gray/white reminder text to Matrix green */
-html.dark.theme-matrix .reminders-open-link {
-  color: hsl(120 80% 60%);
-}
-
-html.dark.theme-matrix .reminders-summary-text,
-html.dark.theme-matrix .reminders-empty-text,
-html.dark.theme-matrix .reminders-loading-text,
-html.dark.theme-matrix .reminders-row-note,
-html.dark.theme-matrix .reminders-row-due--default,
-html.dark.theme-matrix .reminders-page-summary,
-html.dark.theme-matrix .reminders-bucket-heading--later,
-html.dark.theme-matrix .reminders-completed-at,
-html.dark.theme-matrix .reminders-full-row-note,
-html.dark.theme-matrix .reminders-row-media,
-html.dark.theme-matrix .reminders-empty-subtext {
-  color: hsl(120 40% 48%);
-}
 
 html.dark.theme-matrix .reminders-bucket-heading--soon {
   color: hsl(180 70% 50%);

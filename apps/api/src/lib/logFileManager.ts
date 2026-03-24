@@ -34,10 +34,12 @@ function buildLogHeader (): string {
 }
 
 /** Called by the worker process to find the server's active log file.
+ *  Pass logsDir to match the directory used in initLogFile; defaults to the
+ *  same default directory so existing callers don't need to change.
  *  Returns null if the server hasn't started yet. */
-export function getActiveLogFile (): string | null {
+export function getActiveLogFile (logsDir = DEFAULT_LOGS_DIR): string | null {
   try {
-    const p = fs.readFileSync(CURRENT_PTR, "utf8").trim();
+    const p = fs.readFileSync(path.join(logsDir, ".current"), "utf8").trim();
     return p || null;
   } catch {
     return null;

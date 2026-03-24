@@ -6,7 +6,7 @@ import { usePreferences, type LightTheme, type DarkTheme } from "@/hooks/usePref
 const LIGHT_THEME_CLASSES: Record<LightTheme, string | null> = {
   default: null,
   latte: "theme-latte",
-  solarize: "theme-solarize",
+  sandstone: "theme-sandstone",
   mist: "theme-mist",
   lavender: "theme-lavender",
   dream: "theme-dream",
@@ -19,12 +19,13 @@ const DARK_THEME_CLASSES: Record<DarkTheme, string | null> = {
   "new-moon": "theme-new-moon",
   matrix: "theme-matrix",
   charcoal: "theme-charcoal",
+  solarized: "theme-solarized",
 };
 
 const ALL_THEME_CLASSES = [
-  "theme-latte", "theme-solarize",
+  "theme-latte", "theme-sandstone",
   "theme-mist", "theme-lavender", "theme-dream", "theme-cotton-candy", "theme-mint", "theme-garden",
-  "theme-new-moon", "theme-matrix", "theme-charcoal",
+  "theme-new-moon", "theme-matrix", "theme-charcoal", "theme-solarized",
 ];
 
 export function ThemeApplier() {

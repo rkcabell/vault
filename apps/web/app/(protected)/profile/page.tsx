@@ -196,15 +196,15 @@ export default function ProfilePage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/40 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 flex items-center justify-center">
-        <Loader2 className="w-8 h-8 text-blue-600 dark:text-blue-400 animate-spin" />
+      <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/40 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
       </div>
     );
   }
 
   if (!profile) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/40 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/40 flex items-center justify-center">
         <div className="text-center">
           <p className="text-muted-foreground">Profile not found</p>
           {error && <p className="mt-2 text-sm text-red-600 dark:text-red-300">{error}</p>}
@@ -220,15 +220,15 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/30 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/30">
       <div className="max-w-4xl mx-auto px-4 py-8">
         <div className="bg-card text-foreground rounded-2xl shadow-lg shadow-black/10 dark:shadow-black/30 overflow-hidden border border-border/60">
-          <div className="h-48 bg-gradient-to-r from-blue-500 via-blue-600 to-cyan-500 dark:from-slate-800 dark:via-slate-900 dark:to-black relative">
+          <div className="h-48 bg-gradient-to-r from-blue-500 via-blue-600 to-cyan-500 dark:from-secondary dark:via-background dark:to-background relative">
             <div className="absolute top-4 right-4">
               {!isEditing ? (
                 <button
                   onClick={() => setIsEditing(true)}
-                  className="px-4 py-2 bg-white text-blue-600 dark:bg-slate-900 dark:text-blue-200 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors flex items-center gap-2 font-medium shadow-md border border-border/60"
+                  className="px-4 py-2 bg-card text-primary dark:bg-secondary dark:text-secondary-foreground rounded-lg hover:bg-muted dark:hover:bg-secondary/80 transition-colors flex items-center gap-2 font-medium shadow-md border border-border/60"
                 >
                   <Edit2 className="w-4 h-4" />
                   Edit Profile
@@ -238,7 +238,7 @@ export default function ProfilePage() {
                   <button
                     onClick={handleCancel}
                     disabled={saving}
-                    className="px-4 py-2 bg-white text-slate-600 dark:bg-slate-900 dark:text-slate-200 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center gap-2 font-medium shadow-md disabled:opacity-50 border border-border/60"
+                    className="px-4 py-2 bg-card text-muted-foreground dark:bg-secondary dark:text-secondary-foreground rounded-lg hover:bg-muted dark:hover:bg-secondary/80 transition-colors flex items-center gap-2 font-medium shadow-md disabled:opacity-50 border border-border/60"
                   >
                     <X className="w-4 h-4" />
                     Cancel
@@ -246,7 +246,7 @@ export default function ProfilePage() {
                   <button
                     onClick={handleSave}
                     disabled={saving}
-                    className="px-4 py-2 bg-white text-blue-600 dark:bg-slate-900 dark:text-blue-200 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors flex items-center gap-2 font-medium shadow-md disabled:opacity-50 border border-border/60"
+                    className="px-4 py-2 bg-card text-primary dark:bg-secondary dark:text-secondary-foreground rounded-lg hover:bg-muted dark:hover:bg-secondary/80 transition-colors flex items-center gap-2 font-medium shadow-md disabled:opacity-50 border border-border/60"
                   >
                     {saving ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -277,7 +277,7 @@ export default function ProfilePage() {
 
             <div className="space-y-6">
               {error && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-destructive/40 dark:bg-destructive/20 dark:text-destructive-foreground">
                   {error}
                 </div>
               )}
@@ -383,25 +383,25 @@ export default function ProfilePage() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="flex items-center gap-3 text-muted-foreground">
-                      <Mail className="w-5 h-5 text-blue-500 dark:text-blue-300" />
+                      <Mail className="w-5 h-5 text-primary" />
                       <span>{profile.email}</span>
                     </div>
 
                     {profile.location && (
                       <div className="flex items-center gap-3 text-muted-foreground">
-                        <MapPin className="w-5 h-5 text-blue-500 dark:text-blue-300" />
+                        <MapPin className="w-5 h-5 text-primary" />
                         <span>{profile.location}</span>
                       </div>
                     )}
 
                     {profile.website && websiteHref && (
                       <div className="flex items-center gap-3 text-muted-foreground">
-                        <Globe className="w-5 h-5 text-blue-500 dark:text-blue-300" />
+                        <Globe className="w-5 h-5 text-primary" />
                         <a
                           href={websiteHref}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="hover:text-blue-600 dark:hover:text-blue-300 transition-colors underline"
+                          className="hover:text-primary transition-colors underline"
                         >
                           {profile.website.replace(/^https?:\/\//, '')}
                         </a>
@@ -409,7 +409,7 @@ export default function ProfilePage() {
                     )}
 
                     <div className="flex items-center gap-3 text-muted-foreground">
-                      <Calendar className="w-5 h-5 text-blue-500 dark:text-blue-300" />
+                      <Calendar className="w-5 h-5 text-primary" />
                       <span>Joined {formatDate(profile.createdAt)}</span>
                     </div>
                   </div>

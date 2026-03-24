@@ -6,6 +6,15 @@ import { BundleRepository } from "../repositories/bundleRepository.js";
 export const bundlesRoutes: FastifyPluginAsync = async app => {
   const repo = new BundleRepository(app.prisma);
 
+  function parseBody<S extends z.ZodTypeAny>(schema: S, body: unknown): z.infer<S> {
+    try {
+      return schema.parse(body);
+    } catch (err) {
+      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
+      throw err;
+    }
+  }
+
   // GET / — list user's bundles
   app.get("/", { preHandler: [requireAuth] }, async req => {
     const bundles = await repo.listBundles(req.userId!);
@@ -17,15 +26,10 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const Body = z.object({
       name: z.string().min(1).max(200),
       description: z.string().max(1000).optional(),
+      coverMediaId: z.string().nullable().optional(),
     });
-    let name: string, description: string | undefined;
-    try {
-      ({ name, description } = Body.parse(req.body));
-    } catch (err) {
-      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
-      throw err;
-    }
-    const bundle = await repo.createBundle(req.userId!, name, description);
+    const { name, description, coverMediaId } = parseBody(Body, req.body);
+    const bundle = await repo.createBundle(req.userId!, name, description, coverMediaId ?? undefined);
     req.log.info({ bundleId: bundle.id, name }, "bundle created");
     reply.code(201);
     return { bundle };
@@ -48,13 +52,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
       starred: z.boolean().optional(),
       coverMediaId: z.string().nullable().optional(),
     });
-    let data: z.infer<typeof Body>;
-    try {
-      data = Body.parse(req.body);
-    } catch (err) {
-      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
-      throw err;
-    }
+    const data = parseBody(Body, req.body);
     const updated = await repo.updateBundle(id, req.userId!, data);
     if (!updated) return reply.notFound();
     req.log.info({ bundleId: id }, "bundle updated");
@@ -110,13 +108,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const Body = z.object({
       mediaIds: z.array(z.string()).min(1).max(100),
     });
-    let mediaIds: string[];
-    try {
-      ({ mediaIds } = Body.parse(req.body));
-    } catch (err) {
-      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
-      throw err;
-    }
+    const { mediaIds } = parseBody(Body, req.body);
     const ok = await repo.addItems(id, req.userId!, mediaIds);
     if (!ok) return reply.notFound();
     req.log.info({ bundleId: id, count: mediaIds.length }, "items added to bundle");
@@ -167,13 +159,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const Body = z.object({
       orderedIds: z.array(z.string()).min(1),
     });
-    let orderedIds: string[];
-    try {
-      ({ orderedIds } = Body.parse(req.body));
-    } catch (err) {
-      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
-      throw err;
-    }
+    const { orderedIds } = parseBody(Body, req.body);
     const ok = await repo.reorderItems(id, req.userId!, orderedIds);
     if (!ok) return reply.notFound();
     return { ok: true };

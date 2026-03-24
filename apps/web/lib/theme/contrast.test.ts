@@ -173,7 +173,7 @@ const themes: Theme[] = [
     mutedForeground: LIGHT_MUTED_FG,
   },
   {
-    name: "solarize",
+    name: "sandstone",
     background: "28 55% 82%",
     foreground: LIGHT_FG,
     primary: "28 72% 24%",
@@ -181,7 +181,7 @@ const themes: Theme[] = [
     mutedForeground: LIGHT_MUTED_FG,
     // Warm tan background (~82 % lightness); neutral 35 % grey is ≈4.7 : 1 here.
     // Tested at AA so any regression is caught.
-    tagFilterInclude: "#064e3b",  // emerald-900 — CSS override in theme-solarize
+    tagFilterInclude: "#064e3b",  // emerald-900 — CSS override in theme-sandstone
   },
   {
     name: "mist",
@@ -293,6 +293,17 @@ const themes: Theme[] = [
     primary: "120 90% 52%",
     primaryForeground: "0 0% 0%", // black text on bright green button
     mutedForeground: "120 40% 48%",
+  },
+  {
+    name: "solarized",
+    dark: true,
+    background: "193 100% 11%",   // base03 #002b36
+    foreground: "180 7% 63%",     // base1  #93a1a1 — 6.3:1 on bg
+    card: "192 81% 14%",          // base02 #073642
+    cardForeground: "180 7% 63%", // base1  #93a1a1 — 6.3:1 on card
+    primary: "205 69% 49%",       // blue   #268bd2
+    primaryForeground: "193 100% 8%",
+    mutedForeground: "186 8% 55%", // base0 #839496 — 4.67:1 on bg
   },
 ];
 

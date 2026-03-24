@@ -4,8 +4,10 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { Route } from 'next';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, FolderOpen, Loader2 } from 'lucide-react';
 import { emitBundlesUpdated } from '@/lib/bundles';
+import { BUNDLE_ICONS } from '@/lib/bundleIcons';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
@@ -14,6 +16,7 @@ export default function NewBundlePage() {
   const router = useRouter();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [coverMediaId, setCoverMediaId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +33,7 @@ export default function NewBundlePage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmedName, description: description.trim() || undefined }),
+        body: JSON.stringify({ name: trimmedName, description: description.trim() || undefined, coverMediaId: coverMediaId ?? undefined }),
       });
 
       if (!res.ok) {
@@ -90,6 +93,45 @@ export default function NewBundlePage() {
             rows={3}
             className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-none"
           />
+        </div>
+
+        <div className="space-y-2">
+          <Label>Icon <span className="text-muted-foreground font-normal">(optional)</span></Label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setCoverMediaId(null)}
+              title="Default (no icon)"
+              className={cn(
+                'h-10 w-10 rounded-md border-2 flex items-center justify-center bg-muted transition-colors',
+                coverMediaId === null
+                  ? 'border-primary'
+                  : 'border-transparent hover:border-muted-foreground/40',
+              )}
+            >
+              <FolderOpen className="h-5 w-5 text-muted-foreground/60" />
+            </button>
+            {BUNDLE_ICONS.map(({ key, label, Icon }) => {
+              const value = `icon:${key}`;
+              const selected = coverMediaId === value;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setCoverMediaId(value)}
+                  title={label}
+                  className={cn(
+                    'h-10 w-10 rounded-md border-2 flex items-center justify-center bg-muted transition-colors',
+                    selected
+                      ? 'border-primary'
+                      : 'border-transparent hover:border-muted-foreground/40',
+                  )}
+                >
+                  <Icon className={cn('h-5 w-5', selected ? 'text-foreground' : 'text-muted-foreground/60')} />
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {error && (

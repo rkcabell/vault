@@ -20,7 +20,7 @@ type DarkThemeOption  = { id: DarkTheme;  label: string; bg: string; card: strin
 const LIGHT_THEMES: LightThemeOption[] = [
   { id: "default",      label: "Default",      bg: "hsl(240,5%,93%)",   card: "hsl(240,5%,99%)",   borderColor: "hsl(240,5.9%,90%)",  textColor: "hsl(0,0%,3.9%)"   },
   { id: "latte",        label: "Latte",        bg: "hsl(36,38%,86%)",   card: "hsl(36,60%,95%)",   borderColor: "hsl(36,24%,80%)",    textColor: "hsl(0,0%,3.9%)"   },
-  { id: "solarize",     label: "Solarize",     bg: "hsl(28,50%,76%)",   card: "hsl(28,55%,82%)",   borderColor: "hsl(28,36%,67%)",    textColor: "hsl(0,0%,3.9%)"   },
+  { id: "sandstone",    label: "Sandstone",    bg: "hsl(28,50%,76%)",   card: "hsl(28,55%,82%)",   borderColor: "hsl(28,36%,67%)",    textColor: "hsl(0,0%,3.9%)"   },
   { id: "mist",         label: "Mist",         bg: "hsl(202,22%,87%)",  card: "hsl(202,28%,94%)",  borderColor: "hsl(202,16%,83%)",   textColor: "hsl(0,0%,3.9%)"   },
   { id: "lavender",     label: "Lavender",     bg: "hsl(263,22%,87%)",  card: "hsl(263,28%,94%)",  borderColor: "hsl(263,16%,83%)",   textColor: "hsl(0,0%,3.9%)"   },
   { id: "dream",        label: "Dream",        bg: "hsl(335,28%,88%)",  card: "hsl(335,34%,95%)",  borderColor: "hsl(335,18%,84%)",   textColor: "hsl(0,0%,3.9%)"   },
@@ -30,9 +30,10 @@ const LIGHT_THEMES: LightThemeOption[] = [
 ];
 
 const DARK_THEMES: DarkThemeOption[] = [
-  { id: "new-moon", label: "New Moon", bg: "hsl(220,28%,6%)",  card: "hsl(221,39%,11%)",  borderColor: "hsl(215,20%,18%)",  textColor: "hsl(0,0%,98%)"    },
-  { id: "charcoal", label: "Charcoal", bg: "hsl(220,5%,13%)",  card: "hsl(220,5%,20%)",   borderColor: "hsl(220,5%,26%)",   textColor: "hsl(0,0%,88%)"    },
-  { id: "matrix",   label: "Matrix",   bg: "hsl(0,0%,2%)",     card: "hsl(120,8%,7%)",    borderColor: "hsl(120,10%,14%)",  textColor: "hsl(120,80%,60%)" },
+  { id: "new-moon",  label: "New Moon",  bg: "hsl(220,28%,6%)",   card: "hsl(221,39%,11%)",  borderColor: "hsl(215,20%,18%)",  textColor: "hsl(0,0%,98%)"    },
+  { id: "charcoal",  label: "Charcoal",  bg: "hsl(220,5%,13%)",   card: "hsl(220,5%,20%)",   borderColor: "hsl(220,5%,26%)",   textColor: "hsl(0,0%,88%)"    },
+  { id: "matrix",    label: "Matrix",    bg: "hsl(0,0%,2%)",      card: "hsl(120,8%,7%)",    borderColor: "hsl(120,10%,14%)",  textColor: "hsl(120,80%,60%)" },
+  { id: "solarized", label: "Solarized", bg: "hsl(193,100%,11%)", card: "hsl(192,81%,14%)",  borderColor: "hsl(192,50%,22%)",  textColor: "hsl(180,7%,63%)"  },
 ];
 
 function ThemeSwatch<T extends string>({
