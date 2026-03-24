@@ -14,6 +14,10 @@ type MediaListResponse = {
   nextCursor?: string | null;
 };
 
+type TagsListResponse = {
+  tags?: { name: string }[];
+};
+
 async function readErrorMessage(response: Response) {
   try {
     const data = await response.json();
@@ -27,6 +31,34 @@ async function readErrorMessage(response: Response) {
 export default function DevPurgeButton({ onSuccess, onError }: Props) {
   const [isPurging, setIsPurging] = useState(false);
   const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);
+
+  const deleteAllTags = async () => {
+    while (true) {
+      const listRes = await fetch("/api/tags?limit=200&offset=0", {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!listRes.ok) {
+        onError(await readErrorMessage(listRes));
+        return false;
+      }
+
+      const data = (await listRes.json()) as TagsListResponse;
+      const tags = data.tags ?? [];
+      if (tags.length === 0) return true;
+
+      for (const tag of tags) {
+        const delRes = await fetch(`/api/tags/${encodeURIComponent(tag.name)}`, {
+          method: "DELETE",
+          credentials: "include",
+        });
+        if (!delRes.ok) {
+          onError(await readErrorMessage(delRes));
+          return false;
+        }
+      }
+    }
+  };
 
   const doPurge = async () => {
     setIsPurging(true);
@@ -46,12 +78,20 @@ export default function DevPurgeButton({ onSuccess, onError }: Props) {
         const data = (await res.json()) as MediaListResponse;
         cursor = data.nextCursor ?? null;
         for (const item of data.items ?? []) {
-          await fetch(`/api/media/${item.id}`, {
+          const delRes = await fetch(`/api/media/${item.id}`, {
             method: "DELETE",
             credentials: "include",
           });
+          if (!delRes.ok) {
+            onError(await readErrorMessage(delRes));
+            return;
+          }
         }
       } while (cursor);
+
+      const tagsDeleted = await deleteAllTags();
+      if (!tagsDeleted) return;
+
       onSuccess();
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to delete media.");

@@ -69,6 +69,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const bundle = await app.prisma.bundle.findFirst({
       where: { id, userId },
       select: {
+        isUnpackedArchive: true,
         sourceMediaId: true,
         items: { select: { mediaId: true } },
       },
@@ -85,7 +86,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
 
     // If this bundle was created by unpacking an archive, delete all extracted
     // media items that are not members of any other bundle.
-    if (bundle?.sourceMediaId && bundle.items.length > 0) {
+    if (bundle?.isUnpackedArchive && bundle.items.length > 0) {
       const mediaIds = bundle.items.map(i => i.mediaId);
       const stillMembered = await app.prisma.bundleItem.findMany({
         where: { mediaId: { in: mediaIds } },

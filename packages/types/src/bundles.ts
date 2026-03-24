@@ -5,6 +5,8 @@ export interface BundleListItem {
   starred: boolean;
   itemCount: number;
   coverMediaId?: string | null;
+  isUnpackedArchive?: boolean;
+  sourceMediaId?: string | null;
   createdAt: string;
   updatedAt: string;
 }

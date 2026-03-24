@@ -150,7 +150,12 @@ const handleDelete = (e: React.MouseEvent) => {
         setIsDeleting(false);
         return;
       }
-      router.push("/overview?refresh=1");
+      emitTagsUpdated();
+      emitBundlesUpdated();
+      const libraryTarget = searchQuery
+        ? `/library?q=${encodeURIComponent(searchQuery)}`
+        : "/library";
+      router.push(libraryTarget);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to delete media.";
       setErrorMessage(msg);
@@ -170,9 +175,10 @@ const handleDelete = (e: React.MouseEvent) => {
         return;
       }
       const { bundleId } = (await res.json()) as { bundleId: string };
+      setMedia(prev => (prev ? { ...prev, linkedBundleId: bundleId } : prev));
       emitBundlesUpdated();
       emitTagsUpdated();
-      router.push(`/bundles/${bundleId}`);
+      refresh({ silent: true });
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Failed to unpack archive.");
     } finally {

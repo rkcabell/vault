@@ -20,7 +20,7 @@ import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown, Search, X } from "lucide-react";
 import { useUpload } from "@/components/contexts/UploadContext";
 import { emitTagsUpdated } from "@/lib/tags";
-import { emitBundlesUpdated } from "@/lib/bundles";
+import { BUNDLES_UPDATED_EVENT, emitBundlesUpdated } from "@/lib/bundles";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,6 +69,10 @@ type MediaListResponse = {
   nextCursor?: string | null;
 };
 
+type BundlesListResponse = {
+  bundles?: Array<{ isUnpackedArchive?: boolean }>;
+};
+
 async function readErrorMessage(response: Response) {
   try {
     const data = await response.json();
@@ -91,6 +95,7 @@ export default function LibraryPageInner() {
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasUnpackedArchiveBundles, setHasUnpackedArchiveBundles] = useState(false);
 
   // Delete coordination.
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
@@ -308,6 +313,26 @@ export default function LibraryPageInner() {
     [buildQuery, hydrateItems]
   );
 
+  const refreshUnpackedArchiveBundleState = useCallback(async () => {
+    try {
+      const res = await fetch("/api/bundles", {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as BundlesListResponse;
+      const hasAny = (data.bundles ?? []).some(bundle => bundle.isUnpackedArchive === true);
+      setHasUnpackedArchiveBundles(hasAny);
+    } catch {
+      // Ignore: this only controls a convenience toggle.
+    }
+  }, []);
+
+  // Keep a stable ref to the latest fetchMedia so effects can call it without
+  // re-running on layout-only preference changes (e.g. grid column density).
+  const fetchMediaRef = useRef(fetchMedia);
+  useEffect(() => { fetchMediaRef.current = fetchMedia; }, [fetchMedia]);
+
   // Handle /library?refresh=1 or ?uploaded=1.
   useEffect(() => {
     const refresh = searchParams.get("refresh") ?? searchParams.get("uploaded");
@@ -324,13 +349,15 @@ export default function LibraryPageInner() {
 
   useEffect(() => {
     if (!hasHandledRefreshParam) return;
-    fetchMedia();
-  }, [fetchMedia, hasHandledRefreshParam, q, refreshToken, sort, tag, excludeTagsParam, textState, thumbState]);
+    fetchMediaRef.current();
+  }, [excludeTagsParam, hasHandledRefreshParam, hideUnpackedItems, q, refreshToken, sort, tagsParam, textState, thumbState]);
 
-  // Keep a stable ref to the latest fetchMedia so the SSE effect never needs
-  // to re-run (and reconnect) just because gridCols or sort changed.
-  const fetchMediaRef = useRef(fetchMedia);
-  useEffect(() => { fetchMediaRef.current = fetchMedia; }, [fetchMedia]);
+  useEffect(() => {
+    void refreshUnpackedArchiveBundleState();
+    const handler = () => { void refreshUnpackedArchiveBundleState(); };
+    window.addEventListener(BUNDLES_UPDATED_EVENT, handler);
+    return () => window.removeEventListener(BUNDLES_UPDATED_EVENT, handler);
+  }, [refreshUnpackedArchiveBundleState]);
 
   // SSE: receive job-state updates pushed from the server instead of polling.
   // Empty deps — mounts once. Uses fetchMediaRef so it always calls the latest
@@ -404,6 +431,8 @@ export default function LibraryPageInner() {
             deletedIdsRef.current.add(id);
             setMediaItems((prev) => prev.filter((item) => item.id !== id));
             setError(null);
+            emitTagsUpdated();
+            emitBundlesUpdated();
             fetchMedia({ silent: true });
           } catch (err) {
             const message = err instanceof Error ? err.message : "Failed to delete media.";
@@ -667,9 +696,10 @@ export default function LibraryPageInner() {
         </div>
       )}
 
-      <div className="mb-4 flex flex-col gap-2">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
+      {mediaItems.length > 0 && (
+        <div className="mb-4 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
               <input
@@ -751,45 +781,49 @@ export default function LibraryPageInner() {
             )}
           </div>
 
-          {viewMode === "grid" && (
-            <div className="flex flex-col items-end gap-1">
-              <input
-                type="range"
-                min={DENSITY_OPTIONS[0]}
-                max={DENSITY_OPTIONS[DENSITY_OPTIONS.length - 1]}
-                step={1}
-                value={gridCols}
-                list="density-ticks"
-                onChange={(e) => {
-                  updatePreferences({ libraryGridCols: Number(e.target.value) as DensityValue });
-                }}
-                aria-label="Grid density"
-                className="w-72 h-4 accent-primary cursor-pointer"
-              />
-              <datalist id="density-ticks">
-                {DENSITY_OPTIONS.map(n => <option key={n} value={n} />)}
-              </datalist>
-              <span className="mt-1 text-xs font-medium text-foreground leading-none h-4">
-                {isCompactGrid ? "compact" : ""}
-              </span>
+            {viewMode === "grid" && mediaItems.length > 0 && (
+              <div className="flex flex-col items-end gap-1">
+                <div className="w-72">
+                  <input
+                    type="range"
+                    min={DENSITY_OPTIONS[0]}
+                    max={DENSITY_OPTIONS[DENSITY_OPTIONS.length - 1]}
+                    step={1}
+                    value={gridCols}
+                    onChange={(e) => {
+                      updatePreferences({ libraryGridCols: Number(e.target.value) as DensityValue });
+                    }}
+                    aria-label="Grid density"
+                    className="w-full h-4 accent-primary cursor-pointer"
+                  />
+                  <div aria-hidden className="pointer-events-none mt-0.5 flex items-center justify-between px-1 text-primary">
+                    {DENSITY_OPTIONS.map(n => (
+                      <span key={`density-notch-${n}`} className="block h-3 w-[2px] rounded-full bg-current opacity-80" />
+                    ))}
+                  </div>
+                </div>
+                <span className="mt-1 text-xs font-medium text-foreground leading-none h-4">
+                  {isCompactGrid ? "compact" : ""}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {!tag && hasUnpackedArchiveBundles && (
+            <div>
+              <Button
+                variant={hideUnpackedItems ? "outline" : "default"}
+                size="sm"
+                aria-pressed={!hideUnpackedItems}
+                onClick={() => updatePreferences({ hideUnpackedItems: !hideUnpackedItems })}
+                className="h-7 px-2.5 text-xs"
+              >
+                {hideUnpackedItems ? "Show unpacked ZIPs" : "Hide unpacked ZIPs"}
+              </Button>
             </div>
           )}
         </div>
-
-        {!tag && (
-          <div>
-            <Button
-              variant={hideUnpackedItems ? "outline" : "default"}
-              size="sm"
-              aria-pressed={!hideUnpackedItems}
-              onClick={() => updatePreferences({ hideUnpackedItems: !hideUnpackedItems })}
-              className="h-7 px-2.5 text-xs"
-            >
-              {hideUnpackedItems ? "Show unpacked ZIPs" : "Hide unpacked ZIPs"}
-            </Button>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Unified drag-drop wrapper + overlay (single overlay, no custom globals needed) */}
       <div

@@ -169,7 +169,7 @@ export function AppShell({
           </>
         )}
 
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto [scrollbar-gutter:stable]">
           <div className="h-full">{children}</div>
         </main>
       </div>

@@ -92,7 +92,7 @@ export class MediaRepository {
         ...(thumbState ? { thumbState } : {}),
         ...(textState ? { textState } : {}),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
-        ...(excludeUnpacked ? { sourceArchiveId: null } : {}),
+        ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
       },
       orderBy,
       take,
@@ -166,7 +166,7 @@ export class MediaRepository {
     if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
     if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
     if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
-    if (excludeUnpacked) conditions.push(`m."sourceArchiveId" IS NULL`);
+    if (excludeUnpacked) conditions.push(`m."isExtractedFromArchive" = false`);
 
     if (cursorId !== null) {
       // Keyset: (col, id) cmp (cursorColVal, cursorId). $p is reused for col equality.
@@ -201,7 +201,34 @@ export class MediaRepository {
   }
 
   async deleteMedia (id: string) {
-    await this.prisma.media.delete({ where: { id } });
+    await this.prisma.$transaction(async tx => {
+      const media = await tx.media.findUnique({
+        where: { id },
+        select: { userId: true, tags: true },
+      });
+      if (!media) return;
+
+      await tx.media.delete({ where: { id } });
+
+      for (const name of new Set(media.tags ?? [])) {
+        const counts = await tx.$queryRaw<Array<{ count: number }>>`
+          SELECT COUNT(*)::int AS count
+          FROM "Media"
+          WHERE "userId" = ${media.userId}
+            AND ${name} = ANY("tags")
+        `;
+        const nextCount = Number(counts[0]?.count ?? 0);
+
+        if (nextCount <= 0) {
+          await tx.tag.deleteMany({ where: { userId: media.userId, name } });
+        } else {
+          await tx.tag.updateMany({
+            where: { userId: media.userId, name },
+            data: { count: nextCount },
+          });
+        }
+      }
+    });
   }
 
   async findMediaForTitleUpdate (userId: string, id: string) {
@@ -508,6 +535,34 @@ export class MediaRepository {
       `;
       await tx.tag.deleteMany({ where: { userId, name: tag } });
       return affected;
+    });
+  }
+
+  /**
+   * Delete Tag rows that are not referenced by any Media.tags entry for the user.
+   * Returns the number of Tag rows deleted.
+   */
+  async deleteOrphanTags (userId: string): Promise<number> {
+    return this.prisma.$transaction(async tx => {
+      const orphanRows = await tx.$queryRaw<Array<{ name: string }>>`
+        SELECT t.name
+        FROM "Tag" t
+        WHERE t."userId" = ${userId}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "Media" m
+            WHERE m."userId" = t."userId"
+              AND t.name = ANY(m.tags)
+          )
+      `;
+
+      const orphanNames = orphanRows.map(row => row.name);
+      if (orphanNames.length === 0) return 0;
+
+      const result = await tx.tag.deleteMany({
+        where: { userId, name: { in: orphanNames } },
+      });
+      return result.count;
     });
   }
 

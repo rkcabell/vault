@@ -330,10 +330,10 @@ test("PATCH /:id: unauthenticated returns 401", async () => {
 // ── DELETE /:id — delete bundle ───────────────────────────────────────────────
 
 test("DELETE /:id: plain delete returns 204", async () => {
-  // No sourceMediaId → no media cleanup
+  // Not an unpacked bundle -> no extracted-media cleanup
   const app = await buildApp({
     prisma: {
-      bundleFindFirst: async () => ({ sourceMediaId: null, items: [] }),
+      bundleFindFirst: async () => ({ isUnpackedArchive: false, sourceMediaId: null, items: [] }),
     },
   });
 
@@ -345,7 +345,7 @@ test("DELETE /:id: clears linkedBundleId on source media when sourceMediaId pres
   const cleared: string[] = [];
   const app = await buildApp({
     prisma: {
-      bundleFindFirst: async () => ({ sourceMediaId: "archive-1", items: [] }),
+      bundleFindFirst: async () => ({ isUnpackedArchive: true, sourceMediaId: "archive-1", items: [] }),
       mediaUpdateMany: async (args) => {
         cleared.push((args as { where: { id: string } }).where.id);
       },
@@ -361,6 +361,7 @@ test("DELETE /:id: deletes extracted media not in any other bundle", async () =>
   const app = await buildApp({
     prisma: {
       bundleFindFirst: async () => ({
+        isUnpackedArchive: true,
         sourceMediaId: "archive-1",
         items: [{ mediaId: "m-a" }, { mediaId: "m-b" }],
       }),
@@ -382,6 +383,7 @@ test("DELETE /:id: does not delete extracted media still in another bundle", asy
   const app = await buildApp({
     prisma: {
       bundleFindFirst: async () => ({
+        isUnpackedArchive: true,
         sourceMediaId: "archive-1",
         items: [{ mediaId: "m-a" }, { mediaId: "m-b" }],
       }),
@@ -403,6 +405,7 @@ test("DELETE /:id: only deletes orphaned extracted media", async () => {
   const app = await buildApp({
     prisma: {
       bundleFindFirst: async () => ({
+        isUnpackedArchive: true,
         sourceMediaId: "archive-1",
         items: [{ mediaId: "m-a" }, { mediaId: "m-b" }, { mediaId: "m-c" }],
       }),

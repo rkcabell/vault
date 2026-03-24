@@ -57,6 +57,7 @@ model Media {
   thumbnailKey    String?
   linkedBundleId  String?
   linkedBundle    Bundle?          @relation("ArchiveLink", fields: [linkedBundleId], references: [id], onDelete: SetNull)
+  isExtractedFromArchive Boolean   @default(false)
   sourceArchiveId String?
   sourceArchive   Media?           @relation("ExtractedFrom", fields: [sourceArchiveId], references: [id], onDelete: SetNull)
   extractedItems  Media[]          @relation("ExtractedFrom")
@@ -78,6 +79,7 @@ model Bundle {
   starred       Boolean      @default(false)
   starredAt     DateTime?
   coverMediaId  String?
+  isUnpackedArchive Boolean   @default(false)
   sourceMediaId String?
   sourceMedia   Media?       @relation("BundleSource", fields: [sourceMediaId], references: [id], onDelete: SetNull)
   linkedArchives Media[]     @relation("ArchiveLink")
