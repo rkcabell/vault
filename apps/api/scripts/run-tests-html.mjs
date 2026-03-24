@@ -16,10 +16,14 @@ const TSX_ESM = import.meta.resolve("tsx/esm");
 
 // ── File discovery ────────────────────────────────────────────────────────────
 
-function findTests(dir) {
+function findTests (dir) {
   const results = [];
   let entries;
-  try { entries = readdirSync(dir); } catch { return results; }
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return results;
+  }
   for (const entry of entries) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) results.push(...findTests(full));
@@ -32,7 +36,7 @@ function findTests(dir) {
 // tsx resolves tsconfig.json based on cwd, so each file must run in its own
 // workspace directory so that path aliases (e.g. @/*) resolve correctly.
 
-function findWorkspaceCwd(filePath) {
+function findWorkspaceCwd (filePath) {
   let dir = dirname(resolve(filePath));
   while (true) {
     if (existsSync(join(dir, "package.json"))) return dir;
@@ -44,16 +48,18 @@ function findWorkspaceCwd(filePath) {
 
 // ── Run a single file with TAP reporter ──────────────────────────────────────
 
-function runFile(file) {
-  return new Promise((resolve_) => {
+function runFile (file) {
+  return new Promise(resolve_ => {
     const start = Date.now();
     let tap = "";
     const child = spawn(
       process.execPath,
       ["--import", TSX_ESM, "--test", "--test-reporter=tap", file],
-      { stdio: ["ignore", "pipe", "pipe"], cwd: findWorkspaceCwd(file) }
+      { stdio: ["ignore", "pipe", "pipe"], cwd: findWorkspaceCwd(file) },
     );
-    child.stdout.on("data", c => { tap += c.toString(); });
+    child.stdout.on("data", c => {
+      tap += c.toString();
+    });
     child.stderr.on("data", () => {});
     child.on("exit", code => {
       resolve_({ tap, exitCode: code ?? 0, duration: Date.now() - start });
@@ -63,10 +69,10 @@ function runFile(file) {
 
 // ── Bounded concurrency pool ──────────────────────────────────────────────────
 
-async function runPool(items, fn, concurrency = 8) {
+async function runPool (items, fn, concurrency = 8) {
   const results = new Array(items.length);
   let idx = 0;
-  async function worker() {
+  async function worker () {
     while (idx < items.length) {
       const i = idx++;
       results[i] = await fn(items[i]);
@@ -79,7 +85,7 @@ async function runPool(items, fn, concurrency = 8) {
 // ── Single-file TAP parser ────────────────────────────────────────────────────
 // Single-file TAP has no file-level wrapper. Every col-0 ok/not ok line is a test.
 
-function parseSingleFileTap(tap) {
+function parseSingleFileTap (tap) {
   const tests = [];
   let diagBuf = [];
   let inDiag = false;
@@ -88,9 +94,18 @@ function parseSingleFileTap(tap) {
   for (const line of tap.split(/\r?\n/)) {
     const trimmed = line.trimStart();
 
-    if (trimmed === "---") { inDiag = true; continue; }
-    if (trimmed === "...") { inDiag = false; continue; }
-    if (inDiag) { diagBuf.push(trimmed); continue; }
+    if (trimmed === "---") {
+      inDiag = true;
+      continue;
+    }
+    if (trimmed === "...") {
+      inDiag = false;
+      continue;
+    }
+    if (inDiag) {
+      diagBuf.push(trimmed);
+      continue;
+    }
 
     // Only top-level (col 0) result lines
     if (trimmed === line) {
@@ -113,16 +128,18 @@ function parseSingleFileTap(tap) {
 
 // ── HTML helpers ──────────────────────────────────────────────────────────────
 
-function esc(str) {
+function esc (str) {
   return String(str)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 // Known all-caps acronyms to restore after camelCase splitting.
 const ACRONYMS = ["OCR", "PDF", "EXIF", "URL", "API", "ID"];
 
-function fixAcronyms(str) {
+function fixAcronyms (str) {
   return ACRONYMS.reduce((s, acr) => {
     const title = acr[0] + acr.slice(1).toLowerCase();
     return s.replace(new RegExp(`\\b${title}\\b`, "g"), acr);
@@ -131,7 +148,7 @@ function fixAcronyms(str) {
 
 // Converts a relative file path like "apps/api/src/tests/api/services/mediaActionsService.test.ts"
 // into a readable breadcrumb like "API · Services · Media Actions Service".
-function suiteName(relPath) {
+function suiteName (relPath) {
   const p = relPath.replace(/\\/g, "/");
   let app = "";
   let rest = p;
@@ -149,9 +166,7 @@ function suiteName(relPath) {
 
   // Split camelCase into words and capitalize
   const filePart = fixAcronyms(
-    fileName
-      .replace(/([a-z])([A-Z])/g, "$1 $2")
-      .replace(/^[a-z]/, s => s.toUpperCase())
+    fileName.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^[a-z]/, s => s.toUpperCase()),
   );
 
   const dirParts = parts
@@ -162,7 +177,7 @@ function suiteName(relPath) {
 }
 
 // Group key for a relative path — the category label shown on outer dropdowns.
-function groupKey(relPath) {
+function groupKey (relPath) {
   const p = relPath.replace(/\\/g, "/");
   if (p.startsWith("apps/api/src/tests/api/")) {
     const dir = p.slice("apps/api/src/tests/api/".length).split("/")[0];
@@ -176,22 +191,87 @@ function groupKey(relPath) {
 }
 
 // Just the file-level label (no breadcrumb prefix) for display inside a group.
-function fileLabel(relPath) {
+function fileLabel (relPath) {
   const p = relPath.replace(/\\/g, "/");
-  const fileName = p.split("/").pop().replace(/\.test\.ts$/, "");
+  const fileName = p
+    .split("/")
+    .pop()
+    .replace(/\.test\.ts$/, "");
   return fixAcronyms(
-    fileName
-      .replace(/([a-z])([A-Z])/g, "$1 $2")
-      .replace(/^[a-z]/, s => s.toUpperCase())
+    fileName.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^[a-z]/, s => s.toUpperCase()),
   );
 }
 
-function buildHtml(suites, totalElapsed) {
-  const totalTests   = suites.reduce((n, s) => n + s.tests.length, 0);
-  const totalPassed  = suites.reduce((n, s) => n + s.tests.filter(t =>  t.pass && !t.skip).length, 0);
-  const totalFailed  = suites.reduce((n, s) => n + s.tests.filter(t => !t.pass && !t.skip).length, 0);
-  const totalSkipped = suites.reduce((n, s) => n + s.tests.filter(t =>  t.skip).length, 0);
-  const statusClass  = totalFailed > 0 ? "fail" : "pass";
+// ── Sub-group helpers ─────────────────────────────────────────────────────────
+
+function renderTestRow (t) {
+  const tIcon = t.skip ? "–" : t.pass ? "✓" : "✗";
+  const tCls = t.skip ? "test-skip" : t.pass ? "test-pass" : "test-fail";
+  const diagHtml =
+    !t.pass && t.diag?.length
+      ? `<tr class="diag-row"><td colspan="2"><pre class="diag">${esc(
+          t.diag.join("\n"),
+        )}</pre></td></tr>`
+      : "";
+  return `<tr class="${tCls}"><td class="icon">${tIcon}</td><td class="test-name">${esc(
+    t.name,
+  )}</td></tr>${diagHtml}`;
+}
+
+/**
+ * If more than half the tests follow "{prefix} — {description}" naming, returns
+ * a Map of prefix → tests[] (with names stripped of the prefix). Otherwise null.
+ */
+function detectSubGroups (tests) {
+  const grouped = new Map();
+  let matchCount = 0;
+  for (const t of tests) {
+    const m = t.name.match(/^(.+?) — (.+)$/);
+    if (m) {
+      matchCount++;
+      const prefix = m[1];
+      if (!grouped.has(prefix)) grouped.set(prefix, []);
+      grouped.get(prefix).push({ ...t, name: m[2] });
+    }
+  }
+  return matchCount >= tests.length / 2 ? grouped : null;
+}
+
+function renderSuiteBody (tests) {
+  const subGroups = detectSubGroups(tests);
+  if (!subGroups) {
+    return `<table class="test-table"><tbody>${tests.map(renderTestRow).join("")}</tbody></table>`;
+  }
+  const subGroupsHtml = [...subGroups.entries()]
+    .map(([prefix, subTests]) => {
+      const failed = subTests.filter(t => !t.pass && !t.skip).length;
+      const ok = failed === 0;
+      const cls = ok ? "subgroup-pass" : "subgroup-fail";
+      return `<details class="subgroup ${cls}" ${ok ? "" : "open"}>
+      <summary>
+        <span class="subgroup-icon">${ok ? "✓" : "✗"}</span>
+        <span class="subgroup-label">${esc(prefix)}</span>
+        <span class="suite-counts">
+          ${failed > 0 ? `<span class="ct-fail">${failed} failed</span>` : ""}
+          <span class="ct-pass">${subTests.filter(t => t.pass && !t.skip).length} passed</span>
+        </span>
+      </summary>
+      <table class="test-table"><tbody>${subTests.map(renderTestRow).join("")}</tbody></table>
+    </details>`;
+    })
+    .join("\n");
+  return `<div class="suite-subgroups">${subGroupsHtml}</div>`;
+}
+
+function buildHtml (suites, totalElapsed) {
+  const totalTests = suites.reduce((n, s) => n + s.tests.length, 0);
+  const totalPassed = suites.reduce((n, s) => n + s.tests.filter(t => t.pass && !t.skip).length, 0);
+  const totalFailed = suites.reduce(
+    (n, s) => n + s.tests.filter(t => !t.pass && !t.skip).length,
+    0,
+  );
+  const totalSkipped = suites.reduce((n, s) => n + s.tests.filter(t => t.skip).length, 0);
+  const statusClass = totalFailed > 0 ? "fail" : "pass";
 
   // Group suites by category (e.g. "API · Lib", "API · Services", "Web · Theme")
   const groupMap = new Map();
@@ -202,52 +282,58 @@ function buildHtml(suites, totalElapsed) {
   }
   const groups = [...groupMap.values()];
 
-  const groupsHtml = groups.map((g, gi) => {
-    const gPassed   = g.suites.reduce((n, s) => n + s.tests.filter(t =>  t.pass && !t.skip).length, 0);
-    const gFailed   = g.suites.reduce((n, s) => n + s.tests.filter(t => !t.pass && !t.skip).length, 0);
-    const gSkipped  = g.suites.reduce((n, s) => n + s.tests.filter(t =>  t.skip).length, 0);
-    const gDuration = g.suites.reduce((n, s) => n + s.duration, 0);
-    const gOk  = gFailed === 0;
-    const gCls = gOk ? "group-pass" : "group-fail";
+  const groupsHtml = groups
+    .map((g, gi) => {
+      const gPassed = g.suites.reduce(
+        (n, s) => n + s.tests.filter(t => t.pass && !t.skip).length,
+        0,
+      );
+      const gFailed = g.suites.reduce(
+        (n, s) => n + s.tests.filter(t => !t.pass && !t.skip).length,
+        0,
+      );
+      const gSkipped = g.suites.reduce((n, s) => n + s.tests.filter(t => t.skip).length, 0);
+      const gDuration = g.suites.reduce((n, s) => n + s.duration, 0);
+      const gOk = gFailed === 0;
+      const gCls = gOk ? "group-pass" : "group-fail";
 
-    // Sort suites within the group: failed first, then alphabetically
-    const sorted = [...g.suites].sort((a, b) => {
-      const af = a.tests.some(t => !t.pass && !t.skip) ? 0 : 1;
-      const bf = b.tests.some(t => !t.pass && !t.skip) ? 0 : 1;
-      return af !== bf ? af - bf : fileLabel(a.label).localeCompare(fileLabel(b.label));
-    });
+      // Sort suites within the group: failed first, then alphabetically
+      const sorted = [...g.suites].sort((a, b) => {
+        const af = a.tests.some(t => !t.pass && !t.skip) ? 0 : 1;
+        const bf = b.tests.some(t => !t.pass && !t.skip) ? 0 : 1;
+        return af !== bf ? af - bf : fileLabel(a.label).localeCompare(fileLabel(b.label));
+      });
 
-    const suitesHtml = sorted.map(s => {
-      const failed = s.tests.filter(t => !t.pass && !t.skip).length;
-      const passed = s.tests.filter(t =>  t.pass && !t.skip).length;
-      const ok   = failed === 0;
-      const sCls = ok ? "suite-pass" : "suite-fail";
+      const suitesHtml = sorted
+        .map(s => {
+          const failed = s.tests.filter(t => !t.pass && !t.skip).length;
+          const passed = s.tests.filter(t => t.pass && !t.skip).length;
+          const ok = failed === 0;
+          const sCls = ok ? "suite-pass" : "suite-fail";
 
-      const testRows = s.tests.map(t => {
-        const tIcon = t.skip ? "–" : t.pass ? "✓" : "✗";
-        const tCls  = t.skip ? "test-skip" : t.pass ? "test-pass" : "test-fail";
-        const diagHtml = !t.pass && t.diag?.length
-          ? `<tr class="diag-row"><td colspan="2"><pre class="diag">${esc(t.diag.join("\n"))}</pre></td></tr>`
-          : "";
-        return `<tr class="${tCls}"><td class="icon">${tIcon}</td><td class="test-name">${esc(t.name)}</td></tr>${diagHtml}`;
-      }).join("");
-
-      return `    <details class="suite ${sCls}" ${ok ? "" : "open"}>
+          return `    <details class="suite ${sCls}" ${ok ? "" : "open"}>
       <summary>
         <span class="suite-icon">${ok ? "✓" : "✗"}</span>
-        <span class="suite-label" title="${esc(suiteName(s.label))}">${esc(fileLabel(s.label))}</span>
+        <span class="suite-label" title="${esc(suiteName(s.label))}">${esc(
+            fileLabel(s.label),
+          )}</span>
         <span class="suite-counts">
           ${failed > 0 ? `<span class="ct-fail">${failed} failed</span>` : ""}
           <span class="ct-pass">${passed} passed</span>
-          ${s.tests.filter(t => t.skip).length > 0 ? `<span class="ct-skip">${s.tests.filter(t => t.skip).length} skipped</span>` : ""}
+          ${
+            s.tests.filter(t => t.skip).length > 0
+              ? `<span class="ct-skip">${s.tests.filter(t => t.skip).length} skipped</span>`
+              : ""
+          }
           <span class="ct-time">${s.duration} ms</span>
         </span>
       </summary>
-      <table class="test-table"><tbody>${testRows}</tbody></table>
+      ${renderSuiteBody(s.tests)}
     </details>`;
-    }).join("\n");
+        })
+        .join("\n");
 
-    return `  <details class="group ${gCls}" ${gOk ? "" : "open"}
+      return `  <details class="group ${gCls}" ${gOk ? "" : "open"}
     data-status="${gOk ? 1 : 0}"
     data-name="${esc(g.label.toLowerCase())}"
     data-duration="${gDuration}"
@@ -256,7 +342,7 @@ function buildHtml(suites, totalElapsed) {
       <span class="group-icon">${gOk ? "✓" : "✗"}</span>
       <span class="group-label">${esc(g.label)}</span>
       <span class="group-counts">
-        ${gFailed  > 0 ? `<span class="ct-fail">${gFailed} failed</span>` : ""}
+        ${gFailed > 0 ? `<span class="ct-fail">${gFailed} failed</span>` : ""}
         <span class="ct-pass">${gPassed} passed</span>
         ${gSkipped > 0 ? `<span class="ct-skip">${gSkipped} skipped</span>` : ""}
         <span class="ct-time">${gDuration} ms</span>
@@ -266,7 +352,8 @@ function buildHtml(suites, totalElapsed) {
 ${suitesHtml}
     </div>
   </details>`;
-  }).join("\n");
+    })
+    .join("\n");
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -340,18 +427,37 @@ details.suite>summary:hover{filter:brightness(1.3)}
 .test-skip .test-name{color:#888}
 .diag-row td{padding:0}
 pre.diag{font-size:.7rem;background:#150505;color:#ff8a80;padding:.5rem 1rem;overflow-x:auto;margin:0;border-top:1px solid #2a0a0a}
+/* ── Sub-group level ────────────────────────────── */
+.suite-subgroups{display:flex;flex-direction:column;gap:.2rem;padding:.3rem .5rem}
+details.subgroup{border-radius:4px;overflow:hidden;border:1px solid #1a1a1a}
+.subgroup-pass{border-color:#1a1a1a}
+.subgroup-fail{border-color:#2e1212}
+details.subgroup>summary{display:flex;align-items:center;gap:.5rem;padding:.4rem .75rem;cursor:pointer;list-style:none;user-select:none}
+details.subgroup>summary::-webkit-details-marker{display:none}
+.subgroup-pass>summary{background:#0d0d0d}
+.subgroup-fail>summary{background:#160a0a}
+details.subgroup>summary:hover{filter:brightness(1.4)}
+.subgroup-icon{font-size:.78rem;width:.9rem;text-align:center;flex-shrink:0}
+.subgroup-pass .subgroup-icon{color:#4caf50}
+.subgroup-fail .subgroup-icon{color:#ef5350}
+.subgroup-label{flex:1;font-size:.77rem;font-weight:500;color:#aaa}
+.subgroup-fail .subgroup-label{color:#ffcdd2}
 </style>
 </head>
 <body>
 <h1>Vault — Test Results</h1>
-<p class="meta">Generated ${new Date().toLocaleString()} &nbsp;·&nbsp; ${groups.length} groups &nbsp;·&nbsp; ${suites.length} suites</p>
+<p class="meta">Generated ${new Date().toLocaleString()} &nbsp;·&nbsp; ${
+    groups.length
+  } groups &nbsp;·&nbsp; ${suites.length} suites</p>
 
-<div class="status-bar ${statusClass}">${statusClass === "pass" ? "✓ All tests passed" : "✗ Tests failed"}</div>
+<div class="status-bar ${statusClass}">${
+    statusClass === "pass" ? "✓ All tests passed" : "✗ Tests failed"
+  }</div>
 
 <div class="chips">
   <span class="chip total">${totalTests} tests</span>
   <span class="chip pass">✓ ${totalPassed} passed</span>
-  ${totalFailed  > 0 ? `<span class="chip fail">✗ ${totalFailed} failed</span>` : ""}
+  ${totalFailed > 0 ? `<span class="chip fail">✗ ${totalFailed} failed</span>` : ""}
   ${totalSkipped > 0 ? `<span class="chip skip">– ${totalSkipped} skipped</span>` : ""}
   <span class="chip time">⏱ ${(totalElapsed / 1000).toFixed(2)} s</span>
 </div>
@@ -403,7 +509,10 @@ sort('status');
 const dirs = process.argv.slice(2);
 const files = dirs.flatMap(findTests);
 
-if (!files.length) { console.log("No test files found."); process.exit(0); }
+if (!files.length) {
+  console.log("No test files found.");
+  process.exit(0);
+}
 
 const root = resolve(".");
 console.log(`Generating report… (${files.length} files)`);

@@ -23,7 +23,16 @@ const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
 
 export const mediaRoutes: FastifyPluginAsync = async app => {
   const { uploadService, queryService, readService, actionsService } = app.mediaServices;
-  const unpackQueue = new Queue<UnpackJob>(UNPACK_QUEUE, { connection: buildRedisConnection(app.config.REDIS_URL) });
+  let unpackQueue: Queue<UnpackJob> | null = null;
+  const getUnpackQueue = () => {
+    if (!unpackQueue) {
+      unpackQueue = new Queue<UnpackJob>(UNPACK_QUEUE, { connection: buildRedisConnection(app.config.REDIS_URL) });
+    }
+    return unpackQueue;
+  };
+  app.addHook("onClose", async () => {
+    if (unpackQueue) await unpackQueue.close();
+  });
   const preferencesService = new PreferencesService(new PreferencesRepository(app.prisma));
   const assertUploadWithinLimit = (file: { filename: string; mimeType: string; sizeBytes: number }) => {
     const error = getUploadSizeError(file);
@@ -106,7 +115,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       });
       for (const item of archiveItems) {
         if (ARCHIVE_MIME_TYPES.has(item.mimeType)) {
-          await enqueueUnpack(unpackQueue, {
+          await enqueueUnpack(getUnpackQueue(), {
             mediaId: item.id,
             userId,
             storageKey: item.storageKey,
@@ -138,7 +147,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
           select: { id: true, storageKey: true, mimeType: true },
         });
         if (mediaItem && ARCHIVE_MIME_TYPES.has(mediaItem.mimeType)) {
-          await enqueueUnpack(unpackQueue, {
+          await enqueueUnpack(getUnpackQueue(), {
             mediaId: mediaItem.id,
             userId,
             storageKey: mediaItem.storageKey,

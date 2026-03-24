@@ -98,6 +98,10 @@
     --reminder-today: #d97706;
     --reminder-overdue: #dc2626;
     --reminder-snoozed: rgba(3, 105, 161, 0.8);
+
+    /* Tag-filter chip state colors */
+    --tag-filter-include: #047857;          /* emerald-700 */
+    --tag-filter-exclude: #991b1b;          /* red-800 — AA on light backgrounds */
   }
 
 
@@ -149,6 +153,10 @@
     --reminder-today: #fcd34d;
     --reminder-overdue: #f87171;
     --reminder-snoozed: rgba(125, 211, 252, 0.8);
+
+    /* Tag-filter chip state colors — dark */
+    --tag-filter-include: #34d399;          /* emerald-400 */
+    --tag-filter-exclude: #f87171;          /* red-400 — AA on dark backgrounds */
   }
 
   /* ---- Light theme variants ---- */
@@ -184,6 +192,7 @@
     --color-primary-hover: hsl(28 72% 36%);
     --border: 28 36% 67%;
     --input: 28 36% 67%;
+    --tag-filter-include: #064e3b;          /* emerald-900 — AA on warm tan background */
   }
 
   html:not(.dark).theme-mist {
@@ -252,6 +261,7 @@
     --color-primary-hover: hsl(335 68% 38%);
     --border: 330 100% 60%;
     --input: 200 55% 84%;
+    --tag-filter-include: #064e3b;          /* emerald-900 — AA on light-blue background */
   }
 
   html:not(.dark).theme-mint {
@@ -306,6 +316,7 @@
     --reminder-today: #b45309;     /* amber-700  — warm orange, clearly distinct from overdue */
     --reminder-overdue: #991b1b;   /* red-800    — clearly red */
     --reminder-snoozed: #1e3a5f;   /* navy       ~7.0:1 */
+    --tag-filter-include: #064e3b; /* emerald-900 — AA on mid-value green background */
   }
 
 /* ---- Dark theme variants ---- */

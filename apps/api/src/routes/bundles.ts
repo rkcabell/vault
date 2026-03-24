@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import { requireAuth } from "../utils/authGuard.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
 
@@ -18,7 +18,13 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
       name: z.string().min(1).max(200),
       description: z.string().max(1000).optional(),
     });
-    const { name, description } = Body.parse(req.body);
+    let name: string, description: string | undefined;
+    try {
+      ({ name, description } = Body.parse(req.body));
+    } catch (err) {
+      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
+      throw err;
+    }
     const bundle = await repo.createBundle(req.userId!, name, description);
     req.log.info({ bundleId: bundle.id, name }, "bundle created");
     reply.code(201);
@@ -42,7 +48,13 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
       starred: z.boolean().optional(),
       coverMediaId: z.string().nullable().optional(),
     });
-    const data = Body.parse(req.body);
+    let data: z.infer<typeof Body>;
+    try {
+      data = Body.parse(req.body);
+    } catch (err) {
+      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
+      throw err;
+    }
     const updated = await repo.updateBundle(id, req.userId!, data);
     if (!updated) return reply.notFound();
     req.log.info({ bundleId: id }, "bundle updated");
@@ -97,7 +109,13 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const Body = z.object({
       mediaIds: z.array(z.string()).min(1).max(100),
     });
-    const { mediaIds } = Body.parse(req.body);
+    let mediaIds: string[];
+    try {
+      ({ mediaIds } = Body.parse(req.body));
+    } catch (err) {
+      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
+      throw err;
+    }
     const ok = await repo.addItems(id, req.userId!, mediaIds);
     if (!ok) return reply.notFound();
     req.log.info({ bundleId: id, count: mediaIds.length }, "items added to bundle");
@@ -148,7 +166,13 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const Body = z.object({
       orderedIds: z.array(z.string()).min(1),
     });
-    const { orderedIds } = Body.parse(req.body);
+    let orderedIds: string[];
+    try {
+      ({ orderedIds } = Body.parse(req.body));
+    } catch (err) {
+      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
+      throw err;
+    }
     const ok = await repo.reorderItems(id, req.userId!, orderedIds);
     if (!ok) return reply.notFound();
     return { ok: true };

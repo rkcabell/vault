@@ -23,8 +23,8 @@ export function TagFilterChip({ tag, state, onCycle, color, count, className }: 
       }
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        state === 'include' && 'border-emerald-500/60 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-        state === 'exclude' && 'border-destructive/60 bg-destructive/10 text-destructive',
+        state === 'include' && 'border-emerald-500/60 bg-emerald-500/10 text-[var(--tag-filter-include)]',
+        state === 'exclude' && 'border-destructive/60 bg-destructive/10 text-[var(--tag-filter-exclude)]',
         state === 'unselected' && 'border-input bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground',
         className,
       )}
