@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { LOG_FORMATTERS, buildTransportTargets } from "@/lib/logger.js";
 import { initLogFile, getActiveLogFile, CURRENT_PTR } from "@/lib/logFileManager.js";
@@ -83,8 +84,6 @@ test("buildTransportTargets defaults level to info", () => {
 // These tests write real files into the project's logs/ directory (same location
 // the API server uses). Each test cleans up what it creates.
 
-const LOGS_DIR = path.dirname(CURRENT_PTR);
-
 function cleanupTestLogs(created: string[]) {
   for (const f of created) {
     try { fs.unlinkSync(f); } catch { /* already gone */ }
@@ -161,24 +160,25 @@ test("getActiveLogFile returns null when .current is absent", () => {
 });
 
 test("initLogFile rotates old logs, keeping at most 10", () => {
-  fs.mkdirSync(LOGS_DIR, { recursive: true });
+  // Use an isolated temp directory so the running server's open log file
+  // in the real logs/ dir cannot interfere with the count.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-rotate-test-"));
 
   // Create 10 dummy .log files with staggered mtimes (oldest first)
   const dummies: string[] = [];
   for (let i = 0; i < 10; i++) {
-    const f = path.join(LOGS_DIR, `dummy-rotate-${i}.log`);
+    const f = path.join(tmpDir, `dummy-rotate-${i}.log`);
     fs.writeFileSync(f, "", "utf8");
     const past = new Date(Date.now() - (11 - i) * 2000);
     fs.utimesSync(f, past, past);
     dummies.push(f);
   }
 
-  const newFile = initLogFile(); // 11th file — oldest dummy should be deleted
+  initLogFile(tmpDir); // 11th file — oldest dummy should be deleted
   try {
-    const allLogs = fs.readdirSync(LOGS_DIR).filter(f => f.endsWith(".log"));
+    const allLogs = fs.readdirSync(tmpDir).filter(f => f.endsWith(".log"));
     assert.ok(allLogs.length <= 10, `Expected ≤10 log files, got ${allLogs.length}`);
   } finally {
-    // Clean up: new file + any surviving dummies
-    cleanupTestLogs([newFile, ...dummies]);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

@@ -1,6 +1,6 @@
 //File: apps/api/src/routes/tags.ts
 import type { FastifyPluginAsync } from "fastify";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import { requireAuth } from "../utils/authGuard.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { normalizeTag, TagValidationError } from "../lib/tags/normalizeTags.js";
@@ -33,7 +33,14 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
     });
 
     const { tag: rawTag } = Params.parse(req.params);
-    const body = Body.parse(req.body);
+
+    let body: z.infer<typeof Body>;
+    try {
+      body = Body.parse(req.body);
+    } catch (err) {
+      if (err instanceof ZodError) throw app.httpErrors.badRequest(err.errors[0]?.message ?? "Invalid request body");
+      throw err;
+    }
 
     if (body.name === undefined && body.color === undefined) {
       throw app.httpErrors.badRequest("Provide name or color to update.");

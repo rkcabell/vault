@@ -92,6 +92,13 @@ const LIGHT_MUTED_FG = "0 0% 35%";
 const DARK_FG       = "0 0% 98%";
 const DARK_MUTED_FG  = "0 0% 70%";
 
+/** TagFilterChip "include" state — light: emerald-700, dark: emerald-400. */
+const TAG_FILTER_INCLUDE_LIGHT = "#047857";
+const TAG_FILTER_INCLUDE_DARK  = "#34d399";
+/** TagFilterChip "exclude" state — light: red-800, dark: red-400. */
+const TAG_FILTER_EXCLUDE_LIGHT = "#991b1b";
+const TAG_FILTER_EXCLUDE_DARK  = "#f87171";
+
 interface ReminderColor {
   /** Solid hex colour (rgba values must be composited first and are excluded). */
   hex: string;
@@ -104,6 +111,8 @@ interface ReminderColor {
 
 interface Theme {
   name: string;
+  /** True for themes applied under html.dark — selects dark: Tailwind variant colours. */
+  dark?: boolean;
   background: string;
   foreground: string;
   /** Only provide when the card surface differs from the background. */
@@ -116,6 +125,18 @@ interface Theme {
    *  doesn't reach 4.5 : 1 on a saturated mid-value background. */
   mutedFgThreshold?: number;
   reminderColors?: ReminderColor[];
+  /**
+   * Override for --tag-filter-include CSS variable. Set when a theme adds a CSS override
+   * so the test reflects the actual rendered color.
+   * Defaults: light → TAG_FILTER_INCLUDE_LIGHT, dark → TAG_FILTER_INCLUDE_DARK.
+   */
+  tagFilterInclude?: string;
+  /**
+   * Override for --tag-filter-exclude CSS variable. Set when a theme adds a CSS override
+   * so the test reflects the actual rendered color.
+   * Defaults: light → TAG_FILTER_EXCLUDE_LIGHT, dark → TAG_FILTER_EXCLUDE_DARK.
+   */
+  tagFilterExclude?: string;
   /**
    * Override the destructive HSL value for themes where the default red
    * (0 84.2% 60.2%) fails contrast. When provided, two tests are generated:
@@ -160,6 +181,7 @@ const themes: Theme[] = [
     mutedForeground: LIGHT_MUTED_FG,
     // Warm tan background (~82 % lightness); neutral 35 % grey is ≈4.7 : 1 here.
     // Tested at AA so any regression is caught.
+    tagFilterInclude: "#064e3b",  // emerald-900 — CSS override in theme-solarize
   },
   {
     name: "mist",
@@ -192,6 +214,7 @@ const themes: Theme[] = [
     primary: "335 68% 26%",
     primaryForeground: "0 0% 98%",
     mutedForeground: LIGHT_MUTED_FG,
+    tagFilterInclude: "#064e3b",  // emerald-900 — CSS override in theme-cotton-candy
   },
   {
     name: "mint",
@@ -215,6 +238,7 @@ const themes: Theme[] = [
     // Default red (0 84.2% 60.2%) only reaches ~2.1:1 on this background.
     // Overridden to red-800 (≈ #991b1b) — ~4.75:1 on bg, ~8:1 white-on-red.
     destructive: "0 70% 35%",
+    tagFilterInclude: "#064e3b",  // emerald-900 — CSS override in theme-garden
     reminderColors: [
       // Colours are specifically overridden in the CSS to pass AA on this background.
       { hex: "#78350f", label: "today"   }, // amber-900 ~5.3 : 1
@@ -226,6 +250,7 @@ const themes: Theme[] = [
   // ── Dark themes ──────────────────────────────────────────────────────────────
   {
     name: "default-dark",
+    dark: true,
     background: "0 0% 3.9%",
     foreground: DARK_FG,
     primary: "0 0% 98%",
@@ -238,6 +263,7 @@ const themes: Theme[] = [
   },
   {
     name: "new-moon",
+    dark: true,
     background: "0 0% 3.9%",   // inherits dark base
     foreground: DARK_FG,
     card: "221 39% 11%",        // distinct blue-tinted panel
@@ -248,6 +274,7 @@ const themes: Theme[] = [
   },
   {
     name: "charcoal",
+    dark: true,
     background: "220 5% 17%",
     foreground: "0 0% 88%",
     card: "220 5% 20%",
@@ -258,6 +285,7 @@ const themes: Theme[] = [
   },
   {
     name: "matrix",
+    dark: true,
     background: "0 0% 4%",
     foreground: "120 80% 60%",  // phosphor green
     card: "120 8% 7%",
@@ -301,6 +329,18 @@ for (const theme of themes) {
         `${name}/reminder-${rc.label}`,
       ));
   }
+
+  test(`${name} — tag-filter-include on background`, () =>
+    assertContrast(
+      theme.tagFilterInclude ? hex(theme.tagFilterInclude) : hex(theme.dark ? TAG_FILTER_INCLUDE_DARK : TAG_FILTER_INCLUDE_LIGHT),
+      hsl(theme.background), AA, `${name}/tag-filter-include`,
+    ));
+
+  test(`${name} — tag-filter-exclude on background`, () =>
+    assertContrast(
+      theme.tagFilterExclude ? hex(theme.tagFilterExclude) : hex(theme.dark ? TAG_FILTER_EXCLUDE_DARK : TAG_FILTER_EXCLUDE_LIGHT),
+      hsl(theme.background), AA, `${name}/tag-filter-exclude`,
+    ));
 
   if (theme.destructive !== undefined) {
     const destructiveFg = theme.destructiveForeground ?? "0 0% 98%";

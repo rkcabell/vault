@@ -16,7 +16,7 @@ const logger = {
 function makeRepo (overrides: {
   createMedia?: (_data: unknown) => Promise<{ id: string; storageKey: string }>;
   createBatch?: (_items: unknown[]) => Promise<void>;
-  markSourcesReady?: (_userId: string, _ids: string[]) => Promise<{ id: string; storageKey: string }[]>;
+  markSourcesReady?: (_userId: string, _ids: string[]) => Promise<{ id: string; storageKey: string; mimeType: string }[]>;
 } = {}): Deps["repository"] {
   return {
     createMedia: overrides.createMedia ?? (async (data: unknown) => {
@@ -234,8 +234,8 @@ test("finalizeBatch: returns ok:true and count:0 when no media found for ids", a
 test("finalizeBatch: returns count equal to number of items marked ready", async () => {
   const svc = makeService({
     markSourcesReady: async () => [
-      { id: "a", storageKey: "k/a" },
-      { id: "b", storageKey: "k/b" },
+      { id: "a", storageKey: "k/a", mimeType: "image/jpeg" },
+      { id: "b", storageKey: "k/b", mimeType: "image/jpeg" },
     ],
   });
 
@@ -262,8 +262,8 @@ test("finalizeBatch: enqueues thumb and OCR jobs for each ready item", async () 
   const svc = createMediaUploadService({
     repository: makeRepo({
       markSourcesReady: async () => [
-        { id: "m1", storageKey: "k/m1" },
-        { id: "m2", storageKey: "k/m2" },
+        { id: "m1", storageKey: "k/m1", mimeType: "image/jpeg" },
+        { id: "m2", storageKey: "k/m2", mimeType: "image/jpeg" },
       ],
     }),
     s3Adapter: makeS3(),

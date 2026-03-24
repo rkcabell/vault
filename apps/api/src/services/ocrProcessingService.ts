@@ -31,7 +31,9 @@ export type OcrProcessingDeps = {
   sleep?: (ms: number) => Promise<unknown>;
   timeoutMs?: number;
   textDeps?: ProcessTextJobDeps;
-  publishJobUpdate?: (update: { userId: string; mediaId: string; field: "textState"; value: "READY" | "ERROR" }) => void;
+  publishJobUpdate?: (
+    update: { userId: string; mediaId: string; field: "textState"; value: "READY" | "ERROR" | "FAILED" },
+  ) => void;
 };
 
 /**

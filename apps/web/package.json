@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "node scripts/run-tests.mjs lib"
+    "test": "node scripts/run-tests.mjs lib",
+    "coverage": "c8 --all --src lib --exclude \"lib/**/*.test.ts\" --reporter=text-summary --reporter=lcov --reporter=html --reporter=json-summary --report-dir coverage node scripts/run-tests.mjs lib"
   },
   "dependencies": {
     "@radix-ui/react-collapsible": "^1.1.12",

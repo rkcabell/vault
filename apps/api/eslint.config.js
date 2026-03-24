@@ -5,7 +5,7 @@ import globals from "globals";
 
 export default [
   // Ignore build + deps
-  { ignores: ["dist/**", "node_modules/**"] },
+  { ignores: ["dist/**", "node_modules/**", "coverage/**"] },
 
   // Node.js globals for scripts
   {
