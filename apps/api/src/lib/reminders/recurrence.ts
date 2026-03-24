@@ -3,9 +3,10 @@ type RecurrenceFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
 type ParsedRRule = {
   frequency: RecurrenceFrequency;
   interval: number;
+  until?: Date;
 };
 
-const SUPPORTED_KEYS = new Set(["FREQ", "INTERVAL"]);
+const SUPPORTED_KEYS = new Set(["FREQ", "INTERVAL", "UNTIL"]);
 const SUPPORTED_FREQUENCIES = new Set<RecurrenceFrequency>([
   "DAILY",
   "WEEKLY",
@@ -51,9 +52,18 @@ function parseRRule(rrule: string): ParsedRRule {
   const intervalRaw = values.get("INTERVAL");
   const interval = intervalRaw ? parsePositiveInt(intervalRaw, "INTERVAL") : 1;
 
+  let until: Date | undefined;
+  const untilRaw = values.get("UNTIL");
+  if (untilRaw) {
+    const parsed = new Date(untilRaw);
+    if (Number.isNaN(parsed.getTime())) throw new ReminderRRuleError("RRULE UNTIL is not a valid date");
+    until = parsed;
+  }
+
   return {
     frequency: frequencyRaw as RecurrenceFrequency,
     interval,
+    ...(until ? { until } : {}),
   };
 }
 
@@ -105,4 +115,10 @@ export function advanceRecurringDue(currentDueAt: Date, rrule: string) {
 
 export function validateRRule(rrule: string) {
   parseRRule(rrule);
+}
+
+/** Returns true when the given next-due date is past the UNTIL bound in the rrule. */
+export function isRecurrenceExpired(nextDue: Date, rrule: string): boolean {
+  const { until } = parseRRule(rrule);
+  return until !== undefined && nextDue.getTime() > until.getTime();
 }

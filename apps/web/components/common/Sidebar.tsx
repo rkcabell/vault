@@ -26,7 +26,7 @@ export interface TagItem {
   color?: string | null;
 }
 
-export interface SavedView {
+interface BundleNavItem {
   id: string;
   name: string;
   count?: number;
@@ -35,7 +35,6 @@ export interface SavedView {
 
 interface SidebarProps {
   tags?: TagItem[] | null;
-  savedViews?: SavedView[] | null;
   tagsError?: string | null;
   isLoading?: boolean;
   className?: string;
@@ -79,7 +78,7 @@ function SidebarSection({ title, icon, children, defaultOpen = true }: SidebarSe
 
 const PAGE_SIZE = 30;
 
-export function Sidebar({ tags, savedViews, tagsError, isLoading = false, className }: SidebarProps) {
+export function Sidebar({ tags, tagsError, isLoading = false, className }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -101,8 +100,9 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
   const sentinelRef = useRef<HTMLDivElement>(null);
   const tagsScrollRef = useRef<HTMLDivElement>(null);
   // Bundles self-managed state
-  const [displayedBundles, setDisplayedBundles] = useState<SavedView[]>(savedViews ?? []);
+  const [displayedBundles, setDisplayedBundles] = useState<BundleNavItem[]>([]);
   const bundlesAbortRef = useRef<AbortController | null>(null);
+  const [isFetchingBundles, setIsFetchingBundles] = useState(false);
 
   const includedTags = useMemo(() => {
     const tagsParam = searchParams.get('tags') ?? '';
@@ -221,17 +221,11 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
     if (renamingTag) renameInputRef.current?.focus();
   }, [renamingTag]);
 
-  // Seed displayedBundles from prop, then self-refresh on BUNDLES_UPDATED_EVENT.
-  useEffect(() => {
-    if (savedViews !== null && savedViews !== undefined) {
-      setDisplayedBundles(savedViews);
-    }
-  }, [savedViews]);
-
   const fetchBundles = useCallback(async () => {
     bundlesAbortRef.current?.abort();
     const controller = new AbortController();
     bundlesAbortRef.current = controller;
+    setIsFetchingBundles(true);
     try {
       const res = await fetch('/api/bundles', { credentials: 'include', signal: controller.signal });
       if (!res.ok || bundlesAbortRef.current !== controller) return;
@@ -239,7 +233,12 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
       if (!data.bundles || bundlesAbortRef.current !== controller) return;
       setDisplayedBundles(data.bundles.map(b => ({ id: b.id, name: b.name, count: b.itemCount, starred: b.starred })));
     } catch { /* aborted or network error — keep current state */ }
+    finally { if (bundlesAbortRef.current === controller) setIsFetchingBundles(false); }
   }, []);
+
+  useEffect(() => {
+    void fetchBundles();
+  }, [fetchBundles]);
 
   useEffect(() => {
     const handler = () => { void fetchBundles(); };
@@ -457,7 +456,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
           </SidebarSection>
 
           <SidebarSection
-            title="Saved Bundles"
+            title="Bundles"
             icon={<Folder className="h-4 w-4" />}
           >
             <div className="space-y-2">
@@ -473,14 +472,14 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                 + Add new bundle
               </Link>
 
-              {savedViews === null ? (
+              {isFetchingBundles && displayedBundles.length === 0 ? (
                 <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading saved bundles...
+                  Loading bundles...
                 </div>
               ) : displayedBundles.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">
-                  No saved bundles
+                  No bundles yet
                 </div>
               ) : (
                 <div className="space-y-1">

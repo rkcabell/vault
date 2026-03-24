@@ -4,7 +4,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { TopNav } from "./TopNav";
-import { Sidebar, type TagItem, type SavedView } from "./Sidebar";
+import { Sidebar, type TagItem } from "./Sidebar";
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { TAGS_UPDATED_EVENT } from "@/lib/tags";
 import { ThemeApplier } from "./ThemeApplier";
@@ -14,7 +14,6 @@ import { cn } from "@/lib/utils";
 interface AppShellProps {
   children: React.ReactNode;
   tags?: TagItem[] | null;
-  savedViews?: SavedView[] | null;
   isLoadingSidebar?: boolean;
   showSidebar?: boolean;
 }
@@ -22,7 +21,6 @@ interface AppShellProps {
 export function AppShell({
   children,
   tags = null,
-  savedViews = null,
   isLoadingSidebar = false,
   showSidebar = true,
 }: AppShellProps) {
@@ -33,7 +31,6 @@ export function AppShell({
   const [isFetchingTags, setIsFetchingTags] = useState(false);
   const [tagsError, setTagsError] = useState<string | null>(null);
   const tagsAbortRef = useRef<AbortController | null>(null);
-  const [sidebarBundles, setSidebarBundles] = useState<SavedView[] | null>(savedViews);
 
   const { data: initData, isLoaded: initLoaded } = useAppInit();
 
@@ -42,7 +39,6 @@ export function AppShell({
     if (!initLoaded) return;
     if (initData) {
       setSidebarTags(initData.tags.map(t => ({ id: t.name, name: t.name, count: t.count, color: t.color })));
-      setSidebarBundles(initData.bundles.map(b => ({ id: b.id, name: b.name, count: b.itemCount, starred: b.starred })));
     } else {
       // Init failed — fall back to individual tag fetch (bundles self-fetch in Sidebar).
       void fetchSidebarTags().catch(() => {});
@@ -117,7 +113,6 @@ export function AppShell({
               <Suspense fallback={null}>
                 <Sidebar
                   tags={sidebarTags}
-                  savedViews={sidebarBundles}
                   tagsError={tagsError}
                   isLoading={isLoadingSidebar || isFetchingTags}
                 />
@@ -159,7 +154,6 @@ export function AppShell({
                 <Suspense fallback={null}>
                   <Sidebar
                     tags={sidebarTags}
-                    savedViews={sidebarBundles}
                     tagsError={tagsError}
                     isLoading={isLoadingSidebar || isFetchingTags}
                   />

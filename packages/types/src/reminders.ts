@@ -25,6 +25,7 @@ export const ReminderOverviewRowSchema = z.object({
   bucket: ReminderBucketSchema,
   isOverdue: z.boolean(),
   remindOffsetDays: z.number().nullable(),
+  rrule: z.string().nullable(),
 });
 export type ReminderOverviewRow = z.infer<typeof ReminderOverviewRowSchema>;
 

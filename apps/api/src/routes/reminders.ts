@@ -11,7 +11,7 @@ import {
   normalizeTimezone,
   type ReminderBucket,
 } from "../lib/reminders/time.js";
-import { ReminderRRuleError, advanceRecurringDue, validateRRule } from "../lib/reminders/recurrence.js";
+import { ReminderRRuleError, advanceRecurringDue, isRecurrenceExpired, validateRRule } from "../lib/reminders/recurrence.js";
 
 type ReminderStatusDb = "ACTIVE" | "COMPLETED" | "CANCELED";
 type ReminderStatusApi = "active" | "completed" | "canceled";
@@ -27,6 +27,7 @@ type ReminderOverviewRow = {
   bucket: ReminderBucket;
   isOverdue: boolean;
   remindOffsetDays: number | null;
+  rrule: string | null;
 };
 
 type ReminderCompletedRow = {
@@ -114,6 +115,7 @@ function toOverviewRow(
     snoozedUntil: Date | null;
     timezone: string;
     remindOffsetDays: number | null;
+    rrule: string | null;
     media: { id: string; title: string } | null;
   },
   now: Date,
@@ -133,6 +135,7 @@ function toOverviewRow(
     bucket,
     isOverdue: bucket === "overdue",
     remindOffsetDays: reminder.remindOffsetDays,
+    rrule: reminder.rrule,
   } satisfies ReminderOverviewRow;
 }
 
@@ -331,6 +334,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
       snoozedUntil: true,
       timezone: true,
       remindOffsetDays: true,
+      rrule: true,
       media: {
         select: {
           id: true,
@@ -560,6 +564,15 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
       try {
         const currentDue = reminder.nextDueAt ?? reminder.dueAt;
         const nextDueAt = advanceRecurringDue(currentDue, reminder.rrule);
+
+        if (isRecurrenceExpired(nextDueAt, reminder.rrule)) {
+          await app.prisma.reminder.update({
+            where: { id },
+            data: { status: "COMPLETED", lastCompletedAt: now },
+          });
+          return reply.send({ ok: true });
+        }
+
         const remindAt = computeRemindAt(reminder.dueAt, nextDueAt, reminder.remindOffsetDays);
 
         await app.prisma.reminder.update({

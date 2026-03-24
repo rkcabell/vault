@@ -52,6 +52,47 @@ function inferMeridiem(localValue: string): "AM" | "PM" {
   return hour24 >= 12 ? "PM" : "AM";
 }
 
+type RRuleFreq = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
+const FREQ_LABELS: Record<RRuleFreq, string> = {
+  DAILY: "Daily",
+  WEEKLY: "Weekly",
+  MONTHLY: "Monthly",
+  YEARLY: "Yearly",
+};
+const FREQ_UNITS: Record<RRuleFreq, string> = {
+  DAILY: "day(s)",
+  WEEKLY: "week(s)",
+  MONTHLY: "month(s)",
+  YEARLY: "year(s)",
+};
+
+function buildRRule(freq: string, intervalStr: string, untilDate: string): string | null {
+  if (!freq) return null;
+  const parts = [`FREQ=${freq}`];
+  const interval = Number.parseInt(intervalStr, 10);
+  if (Number.isInteger(interval) && interval > 1) parts.push(`INTERVAL=${interval}`);
+  if (untilDate) parts.push(`UNTIL=${untilDate}`);
+  return parts.join(";");
+}
+
+function parseRRuleFreq(rrule: string | null): string {
+  if (!rrule) return "";
+  const match = /FREQ=([A-Z]+)/.exec(rrule);
+  return match?.[1] ?? "";
+}
+
+function parseRRuleInterval(rrule: string | null): string {
+  if (!rrule) return "1";
+  const match = /INTERVAL=(\d+)/.exec(rrule);
+  return match?.[1] ?? "1";
+}
+
+function parseRRuleUntil(rrule: string | null): string {
+  if (!rrule) return "";
+  const match = /UNTIL=([0-9-]+)/.exec(rrule);
+  return match?.[1] ?? "";
+}
+
 function isoToLocalDateTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -70,6 +111,9 @@ export function EditReminderDialog({ open, onOpenChange, reminder, onUpdated }: 
   const [dueAtLocal, setDueAtLocal] = useState("");
   const [dueMeridiem, setDueMeridiem] = useState<"AM" | "PM">("AM");
   const [remindOffsetDays, setRemindOffsetDays] = useState("");
+  const [rruleFreq, setRruleFreq] = useState("");
+  const [rruleInterval, setRruleInterval] = useState("1");
+  const [rruleUntil, setRruleUntil] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
 
   // Populate form when reminder changes or dialog opens
@@ -83,6 +127,9 @@ export function EditReminderDialog({ open, onOpenChange, reminder, onUpdated }: 
     setRemindOffsetDays(
       reminder.remindOffsetDays !== null ? String(reminder.remindOffsetDays) : "",
     );
+    setRruleFreq(parseRRuleFreq(reminder.rrule));
+    setRruleInterval(parseRRuleInterval(reminder.rrule));
+    setRruleUntil(parseRRuleUntil(reminder.rrule));
     setFormError(null);
   }, [open, reminder]);
 
@@ -122,6 +169,8 @@ export function EditReminderDialog({ open, onOpenChange, reminder, onUpdated }: 
 
     setFormError(null);
 
+    const rrule = buildRRule(rruleFreq, rruleInterval, rruleUntil);
+
     try {
       await updateReminder.mutateAsync({
         id: reminder.id,
@@ -129,6 +178,7 @@ export function EditReminderDialog({ open, onOpenChange, reminder, onUpdated }: 
         note: note.trim() || null,
         dueAt,
         remindOffsetDays: parsedOffset,
+        rrule,
       });
       toast("Reminder updated", { variant: "success" });
       onOpenChange(false);
@@ -223,6 +273,58 @@ export function EditReminderDialog({ open, onOpenChange, reminder, onUpdated }: 
                 onKeyDown={e => { if (['e', 'E', '-', '+'].includes(e.key)) e.preventDefault(); }}
                 disabled={updateReminder.isPending}
               />
+            </div>
+
+            <div className="reminder-form-group">
+              <Label htmlFor="edit-reminder-rrule-freq">Repeats (optional)</Label>
+              <select
+                id="edit-reminder-rrule-freq"
+                value={rruleFreq}
+                onChange={event => {
+                  setRruleFreq(event.target.value);
+                  if (!event.target.value) setRruleInterval("1");
+                }}
+                disabled={updateReminder.isPending}
+                className="reminder-meridiem-select"
+                aria-label="Repeat frequency"
+              >
+                <option value="">None</option>
+                {(Object.keys(FREQ_LABELS) as RRuleFreq[]).map(freq => (
+                  <option key={freq} value={freq}>{FREQ_LABELS[freq]}</option>
+                ))}
+              </select>
+              {rruleFreq ? (
+                <>
+                  <p className="reminder-recurrence-sub-label">for</p>
+                  <div className="reminder-due-grid">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={999}
+                      step={1}
+                      inputMode="numeric"
+                      aria-label="Repeat interval"
+                      value={rruleInterval}
+                      onChange={event => setRruleInterval(event.target.value)}
+                      onKeyDown={e => { if (['e', 'E', '-', '+', '.'].includes(e.key)) e.preventDefault(); }}
+                      disabled={updateReminder.isPending}
+                      className="reminder-due-input"
+                    />
+                    <span className="reminder-meridiem-select" style={{ display: "flex", alignItems: "center", paddingLeft: "0.5rem" }}>
+                      {FREQ_UNITS[rruleFreq as RRuleFreq]}
+                    </span>
+                  </div>
+                  <p className="reminder-recurrence-sub-label">or until</p>
+                  <Input
+                    type="date"
+                    aria-label="Repeat until date"
+                    value={rruleUntil}
+                    onChange={event => setRruleUntil(event.target.value)}
+                    disabled={updateReminder.isPending}
+                    className="reminder-due-input"
+                  />
+                </>
+              ) : null}
             </div>
 
             {formError || updateReminder.error ? (
