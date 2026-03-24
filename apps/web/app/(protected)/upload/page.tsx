@@ -410,7 +410,6 @@ export default function UploadPage() {
               multiple
               className="hidden"
               onChange={(e) => handleFileSelect(e.target.files)}
-              accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.epub,.odt,.odp,.ods,.zip,.7z,.rar,.md,.html,.htm,.json,.xml"
             />
 
             <Button onClick={() => fileInputRef.current?.click()} disabled={isUploading}>

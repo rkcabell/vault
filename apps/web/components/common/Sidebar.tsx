@@ -465,7 +465,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                 href={'/bundles/new' as Route}
                 className={cn(
                   'flex items-center px-3 py-2 text-sm rounded-md',
-                  'border border-dashed border-muted-foreground/40 text-primary',
+                  'border border-dashed border-muted-foreground/40 text-muted-foreground',
                   'transition-colors hover:bg-accent hover:text-accent-foreground',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
                 )}
@@ -503,7 +503,7 @@ export function Sidebar({ tags, savedViews, tagsError, isLoading = false, classN
                       >
                         <span className="flex min-w-0 items-center gap-1.5">
                           {view.starred && (
-                            <Star className="shrink-0 h-3 w-3 fill-yellow-400 text-yellow-400" />
+                            <Star className="shrink-0 h-3 w-3" style={{ fill: "var(--color-star, #fbbf24)", color: "var(--color-star, #fbbf24)" }} />
                           )}
                           <span className="truncate">{view.name}</span>
                         </span>

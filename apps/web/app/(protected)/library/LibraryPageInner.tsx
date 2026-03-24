@@ -796,7 +796,7 @@ export default function LibraryPageInner() {
                     aria-label="Grid density"
                     className="w-full h-4 accent-primary cursor-pointer"
                   />
-                  <div aria-hidden className="pointer-events-none mt-0.5 flex items-center justify-between px-1 text-primary">
+                  <div aria-hidden className="pointer-events-none flex items-center justify-between px-1 text-primary">
                     {DENSITY_OPTIONS.map(n => (
                       <span key={`density-notch-${n}`} className="block h-3 w-[2px] rounded-full bg-current opacity-80" />
                     ))}

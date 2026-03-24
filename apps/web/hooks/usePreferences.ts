@@ -2,8 +2,8 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 
-export type LightTheme = "default" | "latte" | "solarize" | "mist" | "lavender" | "dream" | "cotton-candy" | "mint" | "garden";
-export type DarkTheme = "new-moon" | "matrix" | "charcoal";
+export type LightTheme = "default" | "latte" | "sandstone" | "mist" | "lavender" | "dream" | "cotton-candy" | "mint" | "garden";
+export type DarkTheme = "new-moon" | "matrix" | "charcoal" | "solarized";
 
 export type Preferences = {
   libraryViewMode: "grid" | "list";
@@ -96,10 +96,10 @@ function readFromLocalStorage(): Partial<Preferences> {
     if (theme === "system" || theme === "light" || theme === "dark") out.themePreference = theme;
 
     const lightTheme = localStorage.getItem("prefs:lightTheme");
-    if (lightTheme === "default" || lightTheme === "latte" || lightTheme === "solarize" || lightTheme === "mist" || lightTheme === "lavender" || lightTheme === "dream" || lightTheme === "cotton-candy" || lightTheme === "mint" || lightTheme === "garden") out.lightTheme = lightTheme;
+    if (lightTheme === "default" || lightTheme === "latte" || lightTheme === "sandstone" || lightTheme === "mist" || lightTheme === "lavender" || lightTheme === "dream" || lightTheme === "cotton-candy" || lightTheme === "mint" || lightTheme === "garden") out.lightTheme = lightTheme;
 
     const darkTheme = localStorage.getItem("prefs:darkTheme");
-    if (darkTheme === "new-moon" || darkTheme === "matrix" || darkTheme === "charcoal") out.darkTheme = darkTheme;
+    if (darkTheme === "new-moon" || darkTheme === "matrix" || darkTheme === "charcoal" || darkTheme === "solarized") out.darkTheme = darkTheme;
   } catch {
     // ignore
   }

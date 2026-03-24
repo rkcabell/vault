@@ -137,9 +137,9 @@ export class BundleRepository {
     };
   }
 
-  async createBundle (userId: string, name: string, description?: string) {
+  async createBundle (userId: string, name: string, description?: string, coverMediaId?: string) {
     return this.prisma.bundle.create({
-      data: { userId, name, description },
+      data: { userId, name, description, coverMediaId },
       select: { id: true, name: true, description: true, createdAt: true, updatedAt: true },
     });
   }
