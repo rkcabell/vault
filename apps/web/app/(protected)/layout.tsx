@@ -5,7 +5,7 @@ import { AuthGuard } from "@/components/common/AuthGuard";
 export default function ProtectedLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthGuard>
-      <AppShell tags={null} savedViews={[]}>
+      <AppShell>
         {children}
       </AppShell>
     </AuthGuard>
