@@ -4,7 +4,7 @@ import type { Writable } from "node:stream";
 import archiver from "archiver";
 import type { Queue } from "bullmq";
 import type { OcrJobData } from "../ocrProcessingService.js";
-import type { MediaRepository } from "../../repositories/mediaRepository.js";
+import type { MediaRepository, MediaListFilters } from "../../repositories/mediaRepository.js";
 import type { BundleRepository } from "../../repositories/bundleRepository.js";
 import type { S3Adapter } from "../../adapters/s3Adapter.js";
 import type { ThumbJob } from "../../queues/enqueueThumbnail.js";
@@ -391,8 +391,40 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     return { bundleId };
   };
 
+  const deleteAllMedia = async (userId: string, filters: Omit<MediaListFilters, "userId" | "orderBy" | "take" | "cursor">) => {
+    const ids = await deps.repository.listAllMediaIds({ ...filters, userId });
+    if (ids.length === 0) return { count: 0 };
+    const results = await Promise.allSettled(ids.map(id => deleteMedia(userId, id)));
+    const count = results.filter(r => r.status === "fulfilled").length;
+    // Parallel deletes cause a race condition where each transaction counts remaining
+    // items before sibling transactions commit, leaving Tag.count stale. One authoritative
+    // reconcile pass against committed data fixes it.
+    if (count > 0) await deps.repository.reconcileTagCounts(userId);
+    return { count };
+  };
+
+  /** Optimised delete-all with no filters: 4 Prisma queries + parallel S3 deletes. */
+  const deleteAllMediaBulk = async (userId: string) => {
+    const items = await deps.repository.deleteAllMediaForUser(userId);
+    if (items.length === 0) return { count: 0 };
+    await Promise.allSettled(
+      items.flatMap(item => {
+        const ops: Promise<unknown>[] = [
+          deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: item.storageKey }),
+        ];
+        if (item.thumbnailKey) {
+          ops.push(deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: item.thumbnailKey }));
+        }
+        return ops;
+      }),
+    );
+    return { count: items.length };
+  };
+
   return {
     deleteMedia,
+    deleteAllMedia,
+    deleteAllMediaBulk,
     updateMediaMetadata,
     enqueueTextExtraction,
     cancelTextExtraction,

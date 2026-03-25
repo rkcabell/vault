@@ -73,6 +73,12 @@ export class MediaRepository {
     return this._listMediaOrm(filters);
   }
 
+  /** Count media matching the same filters as listMedia, ignoring pagination (take/cursor). */
+  async countMedia (filters: MediaListFilters): Promise<number> {
+    if (filters.tags?.length || filters.excludeTags?.length) return this._countMediaRaw(filters);
+    return this._countMediaOrm(filters);
+  }
+
   private async _listMediaOrm (filters: MediaListFilters) {
     const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor, excludeUnpacked } = filters;
     return this.prisma.media.findMany({
@@ -100,7 +106,7 @@ export class MediaRepository {
       select: {
         id: true, title: true, filename: true,
         thumbState: true, textState: true, createdAt: true,
-        tags: true, mimeType: true,
+        tags: true, mimeType: true, sizeBytes: true,
       },
     });
   }
@@ -178,7 +184,7 @@ export class MediaRepository {
     params.push(take);
 
     const sql = `
-      SELECT m.id, m.title, m.filename, m."thumbState", m."textState", m."createdAt", m.tags, m."mimeType"
+      SELECT m.id, m.title, m.filename, m."thumbState", m."textState", m."createdAt", m.tags, m."mimeType", m."sizeBytes"
       FROM "Media" m
       WHERE ${conditions.join(" AND ")}
       ORDER BY m.${col} ${dir}, m.id ${dir}
@@ -188,8 +194,131 @@ export class MediaRepository {
     return this.prisma.$queryRawUnsafe<Array<{
       id: string; title: string; filename: string;
       thumbState: string; textState: string;
-      createdAt: Date; tags: string[]; mimeType: string;
+      createdAt: Date; tags: string[]; mimeType: string; sizeBytes: number;
     }>>(sql, ...params);
+  }
+
+  private async _countMediaOrm (filters: MediaListFilters): Promise<number> {
+    const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    return this.prisma.media.count({
+      where: {
+        userId,
+        ...(queryText
+          ? {
+              OR: [
+                { title: { contains: queryText, mode: "insensitive" } },
+                { document: { is: { rawText: { contains: queryText, mode: "insensitive" } } } },
+              ],
+            }
+          : {}),
+        ...(excludeTags?.length
+          ? { AND: excludeTags.map(t => ({ NOT: { tags: { has: t } } })) }
+          : {}),
+        ...(thumbState ? { thumbState } : {}),
+        ...(textState ? { textState } : {}),
+        ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
+        ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
+      },
+    });
+  }
+
+  private async _countMediaRaw (filters: MediaListFilters): Promise<number> {
+    const { userId, queryText, tags, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    const conditions: string[] = [`m."userId" = $1`];
+    const params: unknown[] = [userId];
+    let p = 2;
+
+    if (tags?.length) {
+      const tagPlaceholders = tags.map(() => `$${p++}`).join(", ");
+      conditions.push(`ARRAY(SELECT lower(t) FROM unnest(m.tags) AS t) @> ARRAY[${tagPlaceholders}]::text[]`);
+      params.push(...tags.map(t => t.toLowerCase()));
+    }
+
+    if (excludeTags?.length) {
+      for (const t of excludeTags) {
+        conditions.push(`NOT ($${p++} = ANY(ARRAY(SELECT lower(x) FROM unnest(m.tags) AS x)))`);
+        params.push(t.toLowerCase());
+      }
+    }
+
+    if (queryText) {
+      conditions.push(`(m.title ILIKE $${p} OR EXISTS (SELECT 1 FROM "Document" d WHERE d."mediaId" = m.id AND d."rawText" ILIKE $${p}))`);
+      params.push(`%${queryText}%`);
+      p++;
+    }
+    if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
+    if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
+    if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
+    if (excludeUnpacked) conditions.push(`m."isExtractedFromArchive" = false`);
+
+    const sql = `SELECT COUNT(*)::int AS count FROM "Media" m WHERE ${conditions.join(" AND ")}`;
+    const result = await this.prisma.$queryRawUnsafe<[{ count: number }]>(sql, ...params);
+    return result[0]?.count ?? 0;
+  }
+
+  /** Return all media IDs matching the given filters — no pagination, used for bulk operations. */
+  async listAllMediaIds (filters: Omit<MediaListFilters, "orderBy" | "take" | "cursor">): Promise<string[]> {
+    const { tags, excludeTags } = filters;
+    if (tags?.length || excludeTags?.length) return this._listAllMediaIdsRaw(filters);
+    return this._listAllMediaIdsOrm(filters);
+  }
+
+  private async _listAllMediaIdsOrm (filters: Omit<MediaListFilters, "orderBy" | "take" | "cursor">): Promise<string[]> {
+    const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    const rows = await this.prisma.media.findMany({
+      where: {
+        userId,
+        ...(queryText
+          ? {
+              OR: [
+                { title: { contains: queryText, mode: "insensitive" } },
+                { document: { is: { rawText: { contains: queryText, mode: "insensitive" } } } },
+              ],
+            }
+          : {}),
+        ...(excludeTags?.length
+          ? { AND: excludeTags.map(t => ({ NOT: { tags: { has: t } } })) }
+          : {}),
+        ...(thumbState ? { thumbState } : {}),
+        ...(textState ? { textState } : {}),
+        ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
+        ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
+      },
+      select: { id: true },
+    });
+    return rows.map(r => r.id);
+  }
+
+  private async _listAllMediaIdsRaw (filters: Omit<MediaListFilters, "orderBy" | "take" | "cursor">): Promise<string[]> {
+    const { userId, queryText, tags, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    const conditions: string[] = [`m."userId" = $1`];
+    const params: unknown[] = [userId];
+    let p = 2;
+
+    if (tags?.length) {
+      const tagPlaceholders = tags.map(() => `$${p++}`).join(", ");
+      conditions.push(`ARRAY(SELECT lower(t) FROM unnest(m.tags) AS t) @> ARRAY[${tagPlaceholders}]::text[]`);
+      params.push(...tags.map(t => t.toLowerCase()));
+    }
+    if (excludeTags?.length) {
+      for (const t of excludeTags) {
+        conditions.push(`NOT ($${p++} = ANY(ARRAY(SELECT lower(x) FROM unnest(m.tags) AS x)))`);
+        params.push(t.toLowerCase());
+      }
+    }
+    if (queryText) {
+      conditions.push(`(m.title ILIKE $${p} OR EXISTS (SELECT 1 FROM "Document" d WHERE d."mediaId" = m.id AND d."rawText" ILIKE $${p}))`);
+      params.push(`%${queryText}%`);
+      p++;
+    }
+    if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
+    if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
+    if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
+    if (excludeUnpacked) conditions.push(`m."isExtractedFromArchive" = false`);
+
+    const sql = `SELECT m.id FROM "Media" m WHERE ${conditions.join(" AND ")}`;
+    const result = await this.prisma.$queryRawUnsafe<{ id: string }[]>(sql, ...params);
+    return result.map(r => r.id);
   }
 
   /** Return storageKey and thumbnailKey for a media item (used to delete S3 objects). */
@@ -228,6 +357,47 @@ export class MediaRepository {
         }
       }
     });
+  }
+
+  /** Bulk-delete all media for a user in 4 queries. Returns S3 keys for deletion.
+   *  DB-level cascades handle BundleItem, Document, MediaExtractedMetadata, and
+   *  the SetNull relations (Reminder.mediaId, Bundle.sourceMediaId). The only
+   *  non-FK field, Bundle.coverMediaId, is cleared manually. */
+  async deleteAllMediaForUser (userId: string): Promise<Array<{ storageKey: string; thumbnailKey: string | null }>> {
+    const items = await this.prisma.media.findMany({
+      where: { userId },
+      select: { storageKey: true, thumbnailKey: true },
+    });
+    if (items.length === 0) return [];
+    await this.prisma.media.deleteMany({ where: { userId } });
+    await this.prisma.tag.deleteMany({ where: { userId } });
+    await this.prisma.bundle.updateMany({ where: { userId }, data: { coverMediaId: null } });
+    return items;
+  }
+
+  /** Recompute Tag.count from actual Media rows and delete any tags with no remaining media.
+   *  Call this after any bulk delete to fix counts that went stale due to concurrent transactions. */
+  async reconcileTagCounts (userId: string): Promise<void> {
+    const rows = await this.prisma.$queryRaw<Array<{ name: string; count: bigint }>>`
+      SELECT t.name, COUNT(m.id) AS count
+      FROM "Tag" t
+      LEFT JOIN "Media" m ON m."userId" = t."userId" AND t.name = ANY(m.tags)
+      WHERE t."userId" = ${userId}
+      GROUP BY t.name
+    `;
+    const toDelete: string[] = [];
+    const toUpdate: { name: string; count: number }[] = [];
+    for (const row of rows) {
+      const n = Number(row.count);
+      if (n === 0) toDelete.push(row.name);
+      else toUpdate.push({ name: row.name, count: n });
+    }
+    if (toDelete.length > 0) {
+      await this.prisma.tag.deleteMany({ where: { userId, name: { in: toDelete } } });
+    }
+    for (const { name, count } of toUpdate) {
+      await this.prisma.tag.updateMany({ where: { userId, name }, data: { count } });
+    }
   }
 
   async findMediaForTitleUpdate (userId: string, id: string) {
@@ -287,6 +457,27 @@ export class MediaRepository {
     }
 
     return this.prisma.media.update({ where: { id }, data: update, select });
+  }
+
+  /** Append `tagName` to the media item's tags if not already present, and keep the Tag
+   *  table count in sync. No-ops if the tag is already on the item. */
+  async addTagIfAbsent (mediaId: string, tagName: string): Promise<void> {
+    await this.prisma.$transaction(async tx => {
+      const media = await tx.media.findUnique({
+        where: { id: mediaId },
+        select: { userId: true, tags: true },
+      });
+      if (!media) return;
+      if (media.tags.includes(tagName)) return;
+
+      const newTags = [...media.tags, tagName];
+      await tx.media.update({ where: { id: mediaId }, data: { tags: newTags } });
+      await tx.tag.upsert({
+        where: { userId_name: { userId: media.userId, name: tagName } },
+        update: { count: { increment: 1 } },
+        create: { userId: media.userId, name: tagName, count: 1 },
+      });
+    });
   }
 
   async findStorageKey (userId: string, id: string) {

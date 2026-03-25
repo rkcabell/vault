@@ -121,8 +121,9 @@ export function TopNav({ onMenuClick }: TopNavProps) {
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
+              variant="destructive"
               onClick={handleLogout}
-              className="cursor-pointer text-destructive focus:text-destructive"
+              className="cursor-pointer"
             >
               <LogOut className="mr-2 h-4 w-4" suppressHydrationWarning />
               Logout

@@ -10,7 +10,6 @@ import { Badge } from '@/ui/Badge';
 import type { Route } from "next";
 import { emitTagsUpdated } from '@/lib/tags';
 import { BUNDLES_UPDATED_EVENT } from '@/lib/bundles';
-import type { TagFilterState } from '@/components/media/TagFilterChip';
 import { ConfirmPopover } from '@/components/ui/ConfirmPopover';
 import {
   DropdownMenu,
@@ -113,37 +112,17 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
     ]);
   }, [searchParams]);
 
-  const excludedTags = useMemo(() => {
-    const param = searchParams.get('excludeTags') ?? '';
-    return new Set(param.split(',').map(t => t.trim()).filter(Boolean));
-  }, [searchParams]);
-
-  const getTagState = (tagName: string): TagFilterState => {
-    if (includedTags.has(tagName)) return 'include';
-    if (excludedTags.has(tagName)) return 'exclude';
-    return 'unselected';
-  };
+  const isTagSelected = (tagName: string) => includedTags.has(tagName);
 
   const cycleTag = (tagName: string) => {
     const params = new URLSearchParams(searchParams.toString());
-    const newIncluded = new Set(includedTags);
-    const newExcluded = new Set(excludedTags);
-
-    if (newIncluded.has(tagName)) {
-      newIncluded.delete(tagName);
-      newExcluded.add(tagName);
-    } else if (newExcluded.has(tagName)) {
-      newExcluded.delete(tagName);
-    } else {
-      newIncluded.add(tagName);
-    }
-
     params.delete('tag');
-    if (newIncluded.size > 0) params.set('tags', [...newIncluded].join(','));
-    else params.delete('tags');
-    if (newExcluded.size > 0) params.set('excludeTags', [...newExcluded].join(','));
-    else params.delete('excludeTags');
-
+    params.delete('excludeTags');
+    if (includedTags.has(tagName)) {
+      params.delete('tags');
+    } else {
+      params.set('tags', tagName);
+    }
     const targetPath = pathname.startsWith('/library') ? pathname : '/library';
     const qs = params.toString();
     router.push((qs ? `${targetPath}?${qs}` : targetPath) as Route);
@@ -167,17 +146,11 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
         return;
       }
       emitTagsUpdated({ deletedTag: tag });
-      if (includedTags.has(tag) || excludedTags.has(tag)) {
+      if (includedTags.has(tag)) {
         const params = new URLSearchParams(searchParams.toString());
-        const newIncluded = new Set(includedTags);
-        const newExcluded = new Set(excludedTags);
-        newIncluded.delete(tag);
-        newExcluded.delete(tag);
         params.delete('tag');
-        if (newIncluded.size > 0) params.set('tags', [...newIncluded].join(','));
-        else params.delete('tags');
-        if (newExcluded.size > 0) params.set('excludeTags', [...newExcluded].join(','));
-        else params.delete('excludeTags');
+        params.delete('tags');
+        params.delete('excludeTags');
         const targetPath = pathname.startsWith('/library') ? pathname : '/library';
         const qs = params.toString();
         router.push((qs ? `${targetPath}?${qs}` : targetPath) as Route);
@@ -359,16 +332,13 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                 >
                   {displayedTags.filter(t => !optimisticallyDeletedTags.has(t.name)).map((tag) => {
                     const isRenaming = renamingTag === tag.name;
-
-                    const tagState = getTagState(tag.name);
+                    const selected = isTagSelected(tag.name);
                     return (
                       <div
                         key={tag.id}
                         className={cn(
                           'group flex min-w-0 items-center gap-1 rounded-md transition-colors',
-                          tagState === 'include' && 'bg-emerald-500/10',
-                          tagState === 'exclude' && 'bg-destructive/10',
-                          tagState === 'unselected' && 'hover:bg-accent',
+                          selected ? 'bg-primary/10' : 'hover:bg-accent',
                         )}
                       >
                         {/* Name button or rename input */}
@@ -388,21 +358,13 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                         ) : (
                           <button
                             onClick={() => cycleTag(tag.name)}
-                            title={
-                              tagState === 'include' ? `Click to exclude "${tag.name}"` :
-                              tagState === 'exclude' ? `Click to clear "${tag.name}"` :
-                              `Filter by "${tag.name}"`
-                            }
+                            title={selected ? `Clear filter "${tag.name}"` : `Filter by "${tag.name}"`}
                             className={cn(
                               'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                              tagState === 'include' && 'text-emerald-700 dark:text-emerald-400',
-                              tagState === 'exclude' && 'text-destructive',
-                              tagState === 'unselected' && 'text-muted-foreground hover:text-accent-foreground',
+                              selected ? 'text-primary font-medium' : 'text-muted-foreground hover:text-accent-foreground',
                             )}
                           >
-                            {tagState === 'include' && <span className="shrink-0 text-xs font-bold leading-none">+</span>}
-                            {tagState === 'exclude' && <span className="shrink-0 text-xs font-bold leading-none">−</span>}
-                            {tagState === 'unselected' && tag.color && (
+                            {!selected && tag.color && (
                               <span className="shrink-0 h-2 w-2 rounded-full" style={{ background: tag.color }} />
                             )}
                             <span className="truncate">{tag.name}</span>

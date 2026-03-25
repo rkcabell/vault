@@ -100,7 +100,9 @@
     --reminder-snoozed: rgba(3, 105, 161, 0.8);
 
     /* Tag-filter chip state colors */
-    --tag-filter-include: #047857;          /* emerald-700 */
+    --tag-filter-include: #047857;                    /* emerald-700 */
+    --tag-filter-include-border: rgb(16 185 129 / 0.6); /* emerald-500/60 */
+    --tag-filter-include-bg: rgb(16 185 129 / 0.1);     /* emerald-500/10 */
     --tag-filter-exclude: #991b1b;          /* red-800 — AA on light backgrounds */
   }
 
@@ -155,7 +157,9 @@
     --reminder-snoozed: rgba(125, 211, 252, 0.8);
 
     /* Tag-filter chip state colors — dark */
-    --tag-filter-include: #34d399;          /* emerald-400 */
+    --tag-filter-include: #34d399;                    /* emerald-400 */
+    --tag-filter-include-border: rgb(16 185 129 / 0.6); /* emerald-500/60 */
+    --tag-filter-include-bg: rgb(16 185 129 / 0.1);     /* emerald-500/10 */
     --tag-filter-exclude: #f87171;          /* red-400 — AA on dark backgrounds */
   }
 
@@ -165,6 +169,8 @@
     --background: 36 60% 95%;
     --modal-background: 36 66% 90%;
     --card: 36 60% 95%;
+    --popover: 36 60% 95%;
+    --popover-foreground: 0 0% 3.9%;
     --secondary: 36 28% 89%;
     --muted: 36 28% 89%;
     --accent: 36 32% 85%;
@@ -182,6 +188,8 @@
     --background: 28 55% 82%;
     --modal-background: 28 62% 77%;
     --card: 28 55% 82%;
+    --popover: 28 55% 82%;
+    --popover-foreground: 0 0% 3.9%;
     --secondary: 28 42% 75%;
     --muted: 28 42% 75%;
     --accent: 28 46% 69%;
@@ -201,6 +209,8 @@
     --background: 202 28% 94%;
     --modal-background: 202 34% 89%;
     --card: 202 28% 94%;
+    --popover: 202 28% 94%;
+    --popover-foreground: 0 0% 3.9%;
     --secondary: 202 18% 90%;
     --muted: 202 18% 90%;
     --accent: 202 24% 81%;
@@ -218,6 +228,8 @@
     --background: 263 28% 94%;
     --modal-background: 263 34% 89%;
     --card: 263 28% 94%;
+    --popover: 263 28% 94%;
+    --popover-foreground: 0 0% 3.9%;
     --secondary: 263 18% 90%;
     --muted: 263 18% 90%;
     --accent: 263 22% 81%;
@@ -235,6 +247,8 @@
     --background: 335 34% 95%;
     --modal-background: 335 40% 90%;
     --card: 335 34% 95%;
+    --popover: 335 34% 95%;
+    --popover-foreground: 0 0% 3.9%;
     --secondary: 335 22% 91%;
     --muted: 335 22% 91%;
     --accent: 335 32% 82%;
@@ -252,6 +266,8 @@
     --background: 200 72% 88%;
     --modal-background: 200 78% 83%;
     --card: 200 72% 88%;
+    --popover: 200 72% 88%;
+    --popover-foreground: 0 0% 3.9%;
     --secondary: 200 55% 84%;
     --muted: 200 55% 84%;
     --accent: 335 45% 85%;
@@ -270,6 +286,8 @@
     --background: 145 26% 92%;
     --modal-background: 145 32% 87%;
     --card: 145 26% 92%;
+    --popover: 145 26% 92%;
+    --popover-foreground: 0 0% 3.9%;
     --secondary: 150 14% 88%;
     --muted: 150 14% 88%;
     --accent: 152 42% 76%;
@@ -299,6 +317,8 @@
     --background: 137 32% 72%;
     --modal-background: 137 38% 67%;
     --card: 137 32% 72%;
+    --popover: 137 32% 72%;
+    --popover-foreground: 0 0% 3.9%;
     --secondary: 137 28% 66%;
     --muted: 137 28% 66%;
     --accent: 7 50% 68%;
@@ -312,12 +332,16 @@
 
     /* Destructive — default red (60 % L) fails on this mid-value green; use red-800 instead */
     --destructive: 0 70% 35%;      /* ≈ #991b1b  ~4.75:1 on bg, ~8:1 white-on-red */
+    --color-destructive-item-hover-bg: rgba(127, 29, 29, 0.15);
+    --color-destructive-item-hover-text: #7f1d1d;
 
     /* Reminder status — dark enough to pass WCAG AA on the garden green background */
     --reminder-today: #b45309;     /* amber-700  — warm orange, clearly distinct from overdue */
     --reminder-overdue: #991b1b;   /* red-800    — clearly red */
     --reminder-snoozed: #1e3a5f;   /* navy       ~7.0:1 */
-    --tag-filter-include: #064e3b; /* emerald-900 — AA on mid-value green background */
+    --tag-filter-include: #064e3b;                    /* emerald-900 — AA on mid-value green background */
+    --tag-filter-include-border: rgb(6 78 59 / 0.6);   /* emerald-900/60 — visible on green bg */
+    --tag-filter-include-bg: rgb(6 78 59 / 0.12);       /* emerald-900/12 */
   }
 
 /* ---- Dark theme variants ---- */
@@ -395,13 +419,13 @@ html.dark.theme-new-moon {
     --page-background: 193 100% 8%;
     --background: 193 100% 11%;       /* base03 #002b36 */
     --modal-background: 192 81% 13%;
-    --foreground: 180 7% 63%;          /* base1  #93a1a1 — 6.3:1 on bg */
+    --foreground: 180 10% 78%;
 
     --card: 192 81% 14%;              /* base02 #073642 */
-    --card-foreground: 180 7% 63%;    /* base1  #93a1a1 — 6.3:1 on card */
+    --card-foreground: 180 10% 78%;
 
     --popover: 192 81% 14%;
-    --popover-foreground: 180 7% 63%;
+    --popover-foreground: 180 10% 78%;
 
     --primary: 205 69% 49%;           /* blue   #268bd2 */
     --primary-foreground: 193 100% 8%;
@@ -410,13 +434,13 @@ html.dark.theme-new-moon {
     --color-primary-hover: hsl(205 69% 59%);
 
     --secondary: 192 60% 18%;
-    --secondary-foreground: 180 7% 63%; /* base1 #93a1a1 */
+    --secondary-foreground: 180 10% 78%;
 
     --muted: 192 60% 18%;
-    --muted-foreground: 186 8% 55%;    /* base0 #839496 — 4.67:1 on bg */
+    --muted-foreground: 186 8% 65%;
 
     --accent: 192 60% 18%;
-    --accent-foreground: 180 7% 63%;
+    --accent-foreground: 180 10% 78%;
 
     --border: 192 50% 22%;
     --input: 192 50% 22%;

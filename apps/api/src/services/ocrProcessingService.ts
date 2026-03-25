@@ -32,7 +32,7 @@ export type OcrProcessingDeps = {
   timeoutMs?: number;
   textDeps?: ProcessTextJobDeps;
   publishJobUpdate?: (
-    update: { userId: string; mediaId: string; field: "textState"; value: "READY" | "ERROR" | "FAILED" },
+    update: { userId: string; mediaId: string; field: "textState" | "tagsUpdated"; value: "READY" | "ERROR" | "FAILED" | "updated" },
   ) => void;
 };
 
@@ -168,8 +168,16 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
         return;
       }
 
-      if (!extracted.needsOcr && data.userId) {
-        deps.publishJobUpdate?.({ userId: data.userId, mediaId, field: "textState", value: "READY" });
+      if (!extracted.needsOcr) {
+        if (extracted.rawText.length > 0) {
+          await mediaRepository.addTagIfAbsent(mediaId, "has-text");
+          if (data.userId) {
+            deps.publishJobUpdate?.({ userId: data.userId, mediaId, field: "tagsUpdated", value: "updated" });
+          }
+        }
+        if (data.userId) {
+          deps.publishJobUpdate?.({ userId: data.userId, mediaId, field: "textState", value: "READY" });
+        }
       }
 
       if (extracted.needsOcr) {
@@ -215,6 +223,13 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
   if (!stateSet) {
     logger.info({ ...logContext }, "ocr cancelled after processing");
     return;
+  }
+
+  if (ocrResult.rawText.length > 0) {
+    await mediaRepository.addTagIfAbsent(mediaId, "has-text");
+    if (data.userId) {
+      deps.publishJobUpdate?.({ userId: data.userId, mediaId, field: "tagsUpdated", value: "updated" });
+    }
   }
 
   if (data.userId) {

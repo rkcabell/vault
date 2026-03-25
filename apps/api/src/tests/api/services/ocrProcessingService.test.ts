@@ -56,6 +56,7 @@ type MediaRow = { id: string; textState: string; storageKey: string; sizeBytes: 
 function makeDeps (opts: {
   findForOcr?: () => Promise<MediaRow | null>;
   setTextState?: (_id: string, state: string) => Promise<boolean>;
+  addTagIfAbsent?: (_id: string, _tag: string) => Promise<void>;
   upsertDocument?: (args: unknown) => Promise<void>;
   enqueueOcr?: () => Promise<void>;
   s3Send?: () => Promise<unknown>;
@@ -66,6 +67,7 @@ function makeDeps (opts: {
     mediaRepository: {
       findForOcr: opts.findForOcr ?? (async () => null),
       setTextState: opts.setTextState ?? (async () => true),
+      addTagIfAbsent: opts.addTagIfAbsent ?? (async () => {}),
     } as unknown as OcrProcessingDeps["mediaRepository"],
     documentRepository: {
       upsertDocument: opts.upsertDocument ?? (async () => {}),
@@ -264,9 +266,11 @@ test("processOcrJob: fires publishJobUpdate with READY on success", async () => 
 
   await processOcrJob(deps, { mediaId: "m3", userId: "user-1" });
 
-  assert.equal(updates.length, 1);
-  const u = updates[0] as { field: string; value: string; userId: string };
-  assert.equal(u.field, "textState");
-  assert.equal(u.value, "READY");
-  assert.equal(u.userId, "user-1");
+  const textStateUpdate = updates.find((u) => (u as { field?: string }).field === "textState") as
+    | { field: string; value: string; userId: string }
+    | undefined;
+  assert.ok(textStateUpdate, "textState update should be published");
+  assert.equal(textStateUpdate.field, "textState");
+  assert.equal(textStateUpdate.value, "READY");
+  assert.equal(textStateUpdate.userId, "user-1");
 });
