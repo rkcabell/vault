@@ -256,6 +256,39 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     });
   });
 
+  // DELETE /media - delete all media matching filter params (same query format as GET /media)
+  app.delete("/", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const rawQuery = req.query as Record<string, unknown>;
+    const Query = z.object({
+      q: z.string().trim().optional(),
+      tags: z.unknown().optional(),
+      excludeTags: z.string().trim().optional(),
+      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
+      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
+      excludeUnpacked: z.coerce.boolean().optional(),
+    });
+    const { q, tags, excludeTags: excludeTagsRaw, thumbState, textState, excludeUnpacked } = Query.parse(rawQuery);
+
+    const tagFilters = typeof tags === "string" ? tags.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
+    const excludeTagFilters = excludeTagsRaw ? excludeTagsRaw.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
+
+    const hasFilters = q || tagFilters.length > 0 || excludeTagFilters.length > 0 || thumbState || textState || excludeUnpacked;
+    const result = hasFilters
+      ? await actionsService.deleteAllMedia(userId, {
+          queryText: q,
+          tags: tagFilters,
+          excludeTags: excludeTagFilters,
+          thumbState,
+          textState,
+          excludeUnpacked,
+        })
+      : await actionsService.deleteAllMediaBulk(userId);
+
+    req.log.info({ userId, count: result.count }, "bulk delete all media");
+    return reply.send(result);
+  });
+
   // DELETE /media/:id - delete my media
   app.delete<{ Params: { id: string } }>(
     "/:id",

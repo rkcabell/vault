@@ -5,7 +5,7 @@ import { FolderOpen, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/Dialog';
 import type { BundleListItem, BundleDetail } from '@vault/types';
-import { BUNDLE_ICONS } from '@/lib/bundleIcons';
+import { BUNDLE_ICONS, DEFAULT_BUNDLE_COVER_ID } from '@/lib/bundleIcons';
 import { emitBundlesUpdated } from '@/lib/bundles';
 
 export interface EditBundleModalProps {
@@ -145,11 +145,11 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
               {/* No-cover / default */}
               <button
                 type="button"
-                onClick={() => setCoverMediaId(null)}
+                onClick={() => setCoverMediaId(DEFAULT_BUNDLE_COVER_ID)}
                 title="Default (no cover)"
                 className={cn(
                   'h-10 w-10 rounded-md border-2 flex items-center justify-center bg-muted transition-colors',
-                  coverMediaId === null
+                  coverMediaId === null || coverMediaId === DEFAULT_BUNDLE_COVER_ID
                     ? 'border-primary'
                     : 'border-transparent hover:border-muted-foreground/40',
                 )}

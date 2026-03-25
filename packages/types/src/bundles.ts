@@ -19,6 +19,7 @@ export interface BundleMediaItem {
   mimeType: string;
   sizeBytes: number;
   thumbState: string;
+  textState: string;
   thumbnailKey?: string | null;
 }
 

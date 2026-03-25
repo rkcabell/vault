@@ -5,8 +5,8 @@ import EventEmitter from "node:events";
 export type JobUpdateEvent = {
   mediaId: string;
   userId: string;
-  field: "textState" | "thumbState";
-  value: "READY" | "ERROR" | "FAILED";
+  field: "textState" | "thumbState" | "tagsUpdated";
+  value: "READY" | "ERROR" | "FAILED" | "updated";
 };
 
 declare module "fastify" {
@@ -35,8 +35,8 @@ export default fp(
         if (!payload.mediaId || !payload.field || !payload.value) return;
         const field = payload.field;
         const value = payload.value;
-        if (field !== "textState" && field !== "thumbState") return;
-        if (value !== "READY" && value !== "ERROR" && value !== "FAILED") return;
+        if (field !== "textState" && field !== "thumbState" && field !== "tagsUpdated") return;
+        if (value !== "READY" && value !== "ERROR" && value !== "FAILED" && value !== "updated") return;
         emitter.emit("update", {
           mediaId: payload.mediaId,
           userId,

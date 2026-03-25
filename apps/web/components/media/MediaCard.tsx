@@ -24,11 +24,13 @@ import { Card, CardContent } from '@/ui/Card';
 export interface MediaItem {
   id: string;
   title: string;
+  filename?: string | null;
   thumbState: MediaWorkerState;
   textState: MediaWorkerState;
   tags?: string[];
   downloadUrl?: string;
   mimeType?: string | null;
+  sizeBytes?: number | null;
 }
 
 interface MediaCardProps {
@@ -95,6 +97,64 @@ function getFallbackKind (mimeType?: string | null): FallbackKind {
 }
 
 
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function getMimeTypeLabel(mimeType?: string | null, filename?: string | null): string {
+  if (!mimeType) {
+    if (filename) {
+      const dot = filename.lastIndexOf(".");
+      if (dot >= 0 && dot < filename.length - 1) return filename.slice(dot + 1).toUpperCase().slice(0, 8);
+    }
+    return "—";
+  }
+  const m = mimeType.toLowerCase();
+  if (m === "image/jpeg" || m === "image/jpg") return "JPEG";
+  if (m === "image/png") return "PNG";
+  if (m === "image/gif") return "GIF";
+  if (m === "image/webp") return "WebP";
+  if (m === "image/heic" || m === "image/heif") return "HEIC";
+  if (m === "image/svg+xml") return "SVG";
+  if (m === "image/tiff") return "TIFF";
+  if (m === "image/bmp") return "BMP";
+  if (m === "video/mp4") return "MP4";
+  if (m === "video/quicktime") return "MOV";
+  if (m === "video/webm") return "WebM";
+  if (m === "video/x-matroska") return "MKV";
+  if (m === "video/x-msvideo") return "AVI";
+  if (m.startsWith("audio/")) return "Audio";
+  if (m === "application/pdf") return "PDF";
+  if (m === "text/plain") return "Text";
+  if (m === "text/html") return "HTML";
+  if (m === "text/csv") return "CSV";
+  if (m === "application/json") return "JSON";
+  if (m === "application/epub+zip") return "EPUB";
+  if (m === "application/msword") return "DOC";
+  if (m === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "DOCX";
+  if (m === "application/vnd.ms-excel") return "XLS";
+  if (m === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") return "XLSX";
+  if (m === "application/vnd.ms-powerpoint") return "PPT";
+  if (m === "application/vnd.openxmlformats-officedocument.presentationml.presentation") return "PPTX";
+  if (m === "application/zip" || m === "application/x-zip-compressed") return "ZIP";
+  if (m === "application/x-tar") return "TAR";
+  if (m === "application/gzip" || m === "application/x-gzip") return "GZIP";
+  if (m === "application/x-7z-compressed") return "7Z";
+  if (m === "application/x-rar-compressed" || m === "application/vnd.rar") return "RAR";
+  if (m === "application/octet-stream") {
+    if (filename) {
+      const dot = filename.lastIndexOf(".");
+      if (dot >= 0 && dot < filename.length - 1) return filename.slice(dot + 1).toUpperCase().slice(0, 8);
+    }
+    return "Binary";
+  }
+  const sub = m.split("/")[1];
+  return sub ? sub.toUpperCase().slice(0, 8) : "File";
+}
 
 export function MediaCard({
   media,
@@ -325,75 +385,77 @@ export function MediaCard({
             )}
 
             <div className="flex-1 min-w-0 cursor-pointer" onClick={handleInfoAreaClick}>
-              {isRenaming ? (
-                <div className={cn("flex items-center gap-2", isCompact && "gap-1")}>
-                  <Input
-                    ref={inputRef}
-                    value={renameValue}
-                    onChange={(event) => setRenameValue(event.target.value)}
-                    onKeyDown={handleRenameKeyDown}
-                    onBlur={handleRenameBlur}
-                    disabled={isSavingRename || isDeleting}
-                    className={cn("h-8 px-2 w-auto flex-1", isCompact && "h-7")}
-                    aria-label="Rename title"
-                  />
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onMouseDown={() => {
-                      ignoreBlurRef.current = true;
-                    }}
-                    onClick={() => {
-                      void commitRename();
-                    }}
-                    disabled={isSavingRename || isDeleting}
-                    aria-label="Save rename"
-                    className={cn("h-8 w-8", isCompact && "h-7 w-7")}
-                  >
-                    <Check className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onMouseDown={() => {
-                      ignoreBlurRef.current = true;
-                    }}
-                    onClick={() => {
-                      cancelRename();
-                    }}
-                    disabled={isSavingRename || isDeleting}
-                    aria-label="Cancel rename"
-                    className={cn("h-8 w-8", isCompact && "h-7 w-7")}
-                  >
-                    <Ban className="h-4 w-4" />
-                  </Button>
+              <div className={cn("flex items-center min-w-0", isCompact ? "gap-2" : "gap-4")}>
+                <div className="flex-1 min-w-0">
+                  {isRenaming ? (
+                    <div className={cn("flex items-center gap-2", isCompact && "gap-1")}>
+                      <Input
+                        ref={inputRef}
+                        value={renameValue}
+                        onChange={(event) => setRenameValue(event.target.value)}
+                        onKeyDown={handleRenameKeyDown}
+                        onBlur={handleRenameBlur}
+                        disabled={isSavingRename || isDeleting}
+                        className={cn("h-8 px-2 w-auto flex-1", isCompact && "h-7")}
+                        aria-label="Rename title"
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onMouseDown={() => { ignoreBlurRef.current = true; }}
+                        onClick={() => { void commitRename(); }}
+                        disabled={isSavingRename || isDeleting}
+                        aria-label="Save rename"
+                        className={cn("h-8 w-8", isCompact && "h-7 w-7")}
+                      >
+                        <Check className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onMouseDown={() => { ignoreBlurRef.current = true; }}
+                        onClick={() => { cancelRename(); }}
+                        disabled={isSavingRename || isDeleting}
+                        aria-label="Cancel rename"
+                        className={cn("h-8 w-8", isCompact && "h-7 w-7")}
+                      >
+                        <Ban className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ) : isSelectMode ? (
+                    <button type="button" onClick={handleSelectClick} className="text-left w-full">
+                      <h3 className="truncate font-medium">{media.title}</h3>
+                    </button>
+                  ) : (
+                    <Link
+                      href={hrefWithQuery}
+                      className="font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                    >
+                      <h3 className="truncate">{media.title}</h3>
+                    </Link>
+                  )}
                 </div>
-              ) : isSelectMode ? (
-                <button
-                  type="button"
-                  onClick={handleSelectClick}
-                  className="text-left w-full"
-                >
-                  <h3 className="truncate font-medium">{media.title}</h3>
-                </button>
-              ) : (
-                <Link
-                  href={hrefWithQuery}
-                  className="font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
-                >
-                  <h3 className="truncate">{media.title}</h3>
-                </Link>
-              )}
+                {!isRenaming && (
+                  <>
+                    <span className="w-24 shrink-0 text-xs text-muted-foreground truncate">
+                      {getMimeTypeLabel(media.mimeType, media.filename)}
+                    </span>
+                    <span className="w-20 shrink-0 text-xs text-muted-foreground text-right tabular-nums">
+                      {media.sizeBytes != null ? formatBytes(media.sizeBytes) : "—"}
+                    </span>
+                  </>
+                )}
+              </div>
               {media.tags && media.tags.length > 0 && (
                 <div className={cn("mt-1 flex flex-wrap gap-1", isCompact && "mt-0.5")}>
-                  {media.tags.slice(0, 1).map((tag) => (
+                  {media.tags.slice(0, 4).map((tag) => (
                     <Badge key={tag} variant="outline" className="text-xs max-w-[10rem]">
                       <span className="truncate">{tag}</span>
                     </Badge>
                   ))}
-                  {media.tags.length > 1 && (
+                  {media.tags.length > 4 && (
                     <Badge variant="outline" className="text-xs">
-                      +{media.tags.length - 1}
+                      +{media.tags.length - 4}
                     </Badge>
                   )}
                 </div>
@@ -614,17 +676,24 @@ export function MediaCard({
           )}
         </div>
 
-        {!isCompact && media.tags && media.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {media.tags.slice(0, 1).map((tag) => (
-              <Badge key={tag} variant="outline" className="text-xs max-w-[10rem]">
-                <span className="truncate">{tag}</span>
-              </Badge>
-            ))}
-            {media.tags.length > 1 && (
-              <Badge variant="outline" className="text-xs">
-                +{media.tags.length - 1}
-              </Badge>
+        {!isCompact && ((media.tags && media.tags.length > 0) || media.sizeBytes != null) && (
+          <div className="flex items-center justify-between gap-1">
+            <div className="flex flex-wrap gap-1">
+              {media.tags?.slice(0, 1).map((tag) => (
+                <Badge key={tag} variant="outline" className="text-xs max-w-[10rem]">
+                  <span className="truncate">{tag}</span>
+                </Badge>
+              ))}
+              {media.tags && media.tags.length > 1 && (
+                <Badge variant="outline" className="text-xs">
+                  +{media.tags.length - 1}
+                </Badge>
+              )}
+            </div>
+            {media.sizeBytes != null && (
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground tabular-nums">
+                {formatBytes(media.sizeBytes)}
+              </span>
             )}
           </div>
         )}

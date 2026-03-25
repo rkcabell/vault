@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
 import { usePreferences } from "@/hooks/usePreferences";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -15,11 +16,13 @@ import { MediaCard, MediaCardSkeleton, type MediaItem } from "@/components/media
 import { BulkActionBar } from "@/components/media/BulkActionBar";
 import { BulkTagDialog } from "@/components/media/BulkTagDialog";
 import { BulkBundleDialog } from "@/components/media/BulkBundleDialog";
+import { TagFilterChip, type TagFilterState } from "@/components/media/TagFilterChip";
 import { Button } from "@/components/ui/Button";
+import { Card, CardContent } from "@/components/ui/Card";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
-import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown, Search, X } from "lucide-react";
+import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown, Search, X, Tag } from "lucide-react";
 import { useUpload } from "@/components/contexts/UploadContext";
-import { emitTagsUpdated } from "@/lib/tags";
+import { emitTagsUpdated, TAGS_UPDATED_EVENT } from "@/lib/tags";
 import { BUNDLES_UPDATED_EVENT, emitBundlesUpdated } from "@/lib/bundles";
 import {
   DropdownMenu,
@@ -57,16 +60,19 @@ const LIBRARY_PATH = "/library";
 type MediaListItem = {
   id: string;
   title: string;
+  filename?: string | null;
   thumbState: MediaItem["thumbState"];
   textState: MediaItem["textState"];
   tags?: string[];
   mimeType?: string | null;
+  sizeBytes?: number | null;
   createdAt: string;
 };
 
 type MediaListResponse = {
   items: MediaListItem[];
   nextCursor?: string | null;
+  totalCount?: number;
 };
 
 type BundlesListResponse = {
@@ -94,7 +100,13 @@ export default function LibraryPageInner() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Tag filter panel.
+  const [showTagFilter, setShowTagFilter] = useState(false);
+  const [tagOptions, setTagOptions] = useState<{ name: string; count: number; color: string | null }[]>([]);
+  const [tagSearch, setTagSearch] = useState('');
   const [hasUnpackedArchiveBundles, setHasUnpackedArchiveBundles] = useState(false);
 
   // Delete coordination.
@@ -105,6 +117,7 @@ export default function LibraryPageInner() {
   // Select mode.
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isSelectAllLibrary, setIsSelectAllLibrary] = useState(false);
   const lastSelectedIdRef = useRef<string | null>(null);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [isBundleDialogOpen, setIsBundleDialogOpen] = useState(false);
@@ -167,6 +180,13 @@ export default function LibraryPageInner() {
     () => excludeTagsParam.split(",").map(t => t.trim()).filter(Boolean),
     [excludeTagsParam],
   );
+
+  // Ref kept in sync so stable event handlers always see fresh filter state.
+  const tagFilterStateRef = useRef({ showTagFilter, includedTagsList, excludedTagsList, searchParams });
+  useEffect(() => {
+    tagFilterStateRef.current = { showTagFilter, includedTagsList, excludedTagsList, searchParams };
+  });
+
   const thumbState = searchParams.get("thumbState")?.trim() ?? "";
   const textState = searchParams.get("textState")?.trim() ?? "";
   const sortParam = searchParams.get("sort")?.trim();
@@ -220,6 +240,17 @@ export default function LibraryPageInner() {
     [excludedTagsList, gridCols, hideUnpackedItems, includedTagsList, isCompactGrid, q, sort, textState, thumbState, viewMode]
   );
 
+  const buildDeleteAllQuery = useCallback(() => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (includedTagsList.length > 0) params.set("tags", includedTagsList.join(","));
+    if (excludedTagsList.length > 0) params.set("excludeTags", excludedTagsList.join(","));
+    if (thumbState) params.set("thumbState", thumbState);
+    if (textState) params.set("textState", textState);
+    if (hideUnpackedItems && !q && includedTagsList.length === 0) params.set("excludeUnpacked", "1");
+    return params.toString();
+  }, [excludedTagsList, hideUnpackedItems, includedTagsList, q, textState, thumbState]);
+
   const handleSortChange = useCallback(
     (value: SortValue) => {
       const params = new URLSearchParams(searchParams.toString());
@@ -231,16 +262,72 @@ export default function LibraryPageInner() {
     [router, searchParams],
   );
 
+  const clearAllFilters = useCallback(() => {
+    setSearchInput("");
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("q");
+    params.delete("tags");
+    params.delete("tag");
+    params.delete("excludeTags");
+    const qs = params.toString();
+    router.replace(qs ? `${LIBRARY_PATH}?${qs}` : LIBRARY_PATH);
+  }, [router, searchParams]);
+
+  const cycleTag = useCallback((tag: string) => {
+    const isIncluded = includedTagsList.includes(tag);
+    const isExcluded = excludedTagsList.includes(tag);
+    const params = new URLSearchParams(searchParams.toString());
+
+    let newIncluded = [...includedTagsList];
+    let newExcluded = [...excludedTagsList];
+
+    if (isIncluded) {
+      newIncluded = newIncluded.filter(t => t !== tag);
+      newExcluded = [...newExcluded, tag];
+    } else if (isExcluded) {
+      newExcluded = newExcluded.filter(t => t !== tag);
+    } else {
+      newIncluded = [...newIncluded, tag];
+    }
+
+    if (newIncluded.length > 0) params.set("tags", newIncluded.join(","));
+    else { params.delete("tags"); params.delete("tag"); }
+
+    if (newExcluded.length > 0) params.set("excludeTags", newExcluded.join(","));
+    else params.delete("excludeTags");
+
+    const nextQuery = params.toString();
+    router.push(nextQuery ? `${LIBRARY_PATH}?${nextQuery}` : LIBRARY_PATH);
+  }, [includedTagsList, excludedTagsList, searchParams, router]);
+
+  const getTagFilterState = (tag: string): TagFilterState => {
+    if (includedTagsList.includes(tag)) return "include";
+    if (excludedTagsList.includes(tag)) return "exclude";
+    return "unselected";
+  };
+
+  const filteredTagOptions = useMemo(() => {
+    const q = tagSearch.trim().toLowerCase();
+    if (!q) return tagOptions;
+    return tagOptions.filter(t => t.name.toLowerCase().includes(q));
+  }, [tagOptions, tagSearch]);
+
+  // True when any user-initiated filter is active. Used to keep the toolbar
+  // visible even when the filtered result set is empty.
+  const hasAnyFilter = !!(q || includedTagsList.length > 0 || excludedTagsList.length > 0 || thumbState || textState);
+
 
   const hydrateItems = useCallback((list: MediaListItem[]) => {
     return list.map((item) => {
       return {
         id: item.id,
         title: item.title,
+        filename: item.filename,
         thumbState: item.thumbState,
         textState: item.textState,
         tags: item.tags,
         mimeType: item.mimeType,
+        sizeBytes: item.sizeBytes,
       } satisfies MediaItem;
     });
   }, []);
@@ -254,10 +341,7 @@ export default function LibraryPageInner() {
 
       if (!silent) {
         if (append) setIsLoadingMore(true);
-        else {
-          setIsLoading(true);
-          setMediaItems([]);
-        }
+        else setIsLoading(true);
       }
 
       if (process.env.NODE_ENV === "development") {
@@ -298,6 +382,7 @@ export default function LibraryPageInner() {
         });
 
         setNextCursor(data.nextCursor ?? null);
+        if (!append && data.totalCount !== undefined) setTotalCount(data.totalCount);
         setError(null);
       } catch (err) {
         if (requestId !== fetchIdRef.current) return;
@@ -359,6 +444,48 @@ export default function LibraryPageInner() {
     return () => window.removeEventListener(BUNDLES_UPDATED_EVENT, handler);
   }, [refreshUnpackedArchiveBundleState]);
 
+  // Fetch tag options when the panel is opened.
+  useEffect(() => {
+    if (!showTagFilter) return;
+    fetch('/api/tags?limit=200', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : { tags: [] })
+      .then((d: { tags: { name: string; count: number; color: string | null }[] }) => {
+        setTagOptions(d.tags ?? []);
+      })
+      .catch(() => {});
+  }, [showTagFilter]);
+
+  // On any tags mutation: refresh the panel if open, and strip URL tag filters
+  // that no longer exist (e.g. all png items deleted while ?tags=png is active).
+  useEffect(() => {
+    const handler = async () => {
+      const { showTagFilter, includedTagsList, excludedTagsList, searchParams } = tagFilterStateRef.current;
+      try {
+        const res = await fetch('/api/tags?limit=200', { credentials: 'include' });
+        if (!res.ok) return;
+        const data = await res.json() as { tags: { name: string; count: number; color: string | null }[] };
+        const tags = data.tags ?? [];
+        if (showTagFilter) setTagOptions(tags);
+
+        if (includedTagsList.length === 0 && excludedTagsList.length === 0) return;
+        const tagNames = new Set(tags.map(t => t.name));
+        const newIncluded = includedTagsList.filter(t => tagNames.has(t));
+        const newExcluded = excludedTagsList.filter(t => tagNames.has(t));
+        if (newIncluded.length !== includedTagsList.length || newExcluded.length !== excludedTagsList.length) {
+          const params = new URLSearchParams(searchParams.toString());
+          if (newIncluded.length > 0) params.set('tags', newIncluded.join(','));
+          else { params.delete('tags'); params.delete('tag'); }
+          if (newExcluded.length > 0) params.set('excludeTags', newExcluded.join(','));
+          else params.delete('excludeTags');
+          const qs = params.toString();
+          router.replace(qs ? `${LIBRARY_PATH}?${qs}` : LIBRARY_PATH);
+        }
+      } catch {}
+    };
+    window.addEventListener(TAGS_UPDATED_EVENT, handler);
+    return () => window.removeEventListener(TAGS_UPDATED_EVENT, handler);
+  }, [router]);
+
   // SSE: receive job-state updates pushed from the server instead of polling.
   // Empty deps — mounts once. Uses fetchMediaRef so it always calls the latest
   // version without causing reconnects on every buildQuery/gridCols change.
@@ -376,10 +503,14 @@ export default function LibraryPageInner() {
       try {
         const { mediaId, field, value } = JSON.parse(e.data) as {
           mediaId?: string;
-          field?: "textState" | "thumbState";
+          field?: "textState" | "thumbState" | "tagsUpdated";
           value?: string;
         };
         if (!mediaId || !field || !value) return;
+        if (field === "tagsUpdated") {
+          emitTagsUpdated();
+          return;
+        }
         setMediaItems((prev) =>
           prev.map((item) => (item.id === mediaId ? { ...item, [field]: value } : item))
         );
@@ -430,6 +561,7 @@ export default function LibraryPageInner() {
             }
             deletedIdsRef.current.add(id);
             setMediaItems((prev) => prev.filter((item) => item.id !== id));
+            setTotalCount(prev => prev !== null ? prev - 1 : null);
             setError(null);
             emitTagsUpdated();
             emitBundlesUpdated();
@@ -503,6 +635,7 @@ export default function LibraryPageInner() {
   const toggleSelectMode = useCallback(() => {
     setIsSelectMode(prev => !prev);
     setSelectedIds(new Set());
+    setIsSelectAllLibrary(false);
     lastSelectedIdRef.current = null;
   }, []);
 
@@ -530,6 +663,14 @@ export default function LibraryPageInner() {
     });
     lastSelectedIdRef.current = id;
   }, [mediaItems]);
+
+  useEffect(() => {
+    if (mediaItems.length === 0) return;
+    sessionStorage.setItem(
+      'library:navList',
+      JSON.stringify({ ids: mediaItems.map(m => m.id), q })
+    );
+  }, [mediaItems, q]);
 
   const handleBulkDownload = useCallback(async () => {
     if (selectedIds.size === 0 || isDownloading) return;
@@ -563,8 +704,8 @@ export default function LibraryPageInner() {
 
   const handleBulkDelete = useCallback((info: { centerX: number; anchorWidth: number; bottomOffset: number }) => {
     const ids = Array.from(selectedIds);
-    if (ids.length === 0) return;
-    const count = ids.length;
+    if (ids.length === 0 && !isSelectAllLibrary) return;
+    const count = isSelectAllLibrary ? (totalCount ?? ids.length) : ids.length;
     setConfirmState({
       x: info.centerX,
       y: 0,
@@ -572,49 +713,76 @@ export default function LibraryPageInner() {
       bottomOffset: info.bottomOffset,
       message: `Delete ${count} ${count === 1 ? "item" : "items"}? This cannot be undone.`,
       action: async () => {
+        if (isSelectAllLibrary) {
+          // Delete all items matching the current filter server-side.
+          try {
+            const qs = buildDeleteAllQuery();
+            const res = await fetch(`/api/media${qs ? `?${qs}` : ""}`, {
+              method: "DELETE",
+              credentials: "include",
+            });
+            if (!res.ok) {
+              const msg = await readErrorMessage(res);
+              setError(msg);
+              return;
+            }
+            setTotalCount(0);
+            setIsSelectAllLibrary(false);
+            setIsSelectMode(false);
+            setSelectedIds(new Set());
+            deletedIdsRef.current = new Set();
+            emitTagsUpdated();
+            emitBundlesUpdated();
+            fetchMedia();
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to delete items.";
+            setError(message);
+          }
+          return;
+        }
 
-    setDeletingIds(prev => {
-      const next = new Set(prev);
-      ids.forEach(id => next.add(id));
-      return next;
-    });
+        // Normal path: delete the selected IDs individually.
+        setDeletingIds(prev => {
+          const next = new Set(prev);
+          ids.forEach(id => next.add(id));
+          return next;
+        });
 
-    const results = await Promise.allSettled(
-      ids.map(id =>
-        fetch(`/api/media/${id}`, { method: 'DELETE', credentials: 'include' })
-      )
-    );
+        const results = await Promise.allSettled(
+          ids.map(id =>
+            fetch(`/api/media/${id}`, { method: "DELETE", credentials: "include" })
+          )
+        );
 
-    const deleted: string[] = [];
-    results.forEach((result, i) => {
-      if (result.status === 'fulfilled' && result.value.ok) {
-        deleted.push(ids[i]);
-        deletedIdsRef.current.add(ids[i]);
-      }
-    });
+        const deleted: string[] = [];
+        results.forEach((result, i) => {
+          if (result.status === "fulfilled" && result.value.ok) {
+            deleted.push(ids[i]);
+            deletedIdsRef.current.add(ids[i]);
+          }
+        });
 
-    setMediaItems(prev => prev.filter(item => !deleted.includes(item.id)));
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      deleted.forEach(id => next.delete(id));
-      return next;
-    });
-    setDeletingIds(prev => {
-      const next = new Set(prev);
-      ids.forEach(id => next.delete(id));
-      return next;
-    });
+        setDeletingIds(prev => {
+          const next = new Set(prev);
+          ids.forEach(id => next.delete(id));
+          return next;
+        });
 
-    if (deleted.length > 0) {
-      fetchMedia({ silent: true });
-      if (deleted.length === ids.length) {
-        setIsSelectMode(false);
-        setSelectedIds(new Set());
-      }
-    }
+        if (deleted.length > 0) {
+          setTotalCount(prev => prev !== null ? Math.max(0, prev - deleted.length) : null);
+          emitTagsUpdated();
+          emitBundlesUpdated();
+          // Non-silent re-fetch: clears list immediately and shows loading skeleton
+          // instead of a blank "no items" state while the request is in-flight.
+          fetchMedia();
+          if (deleted.length === ids.length) {
+            setIsSelectMode(false);
+            setSelectedIds(new Set());
+          }
+        }
       },
     });
-  }, [selectedIds, fetchMedia]);
+  }, [selectedIds, fetchMedia, isSelectAllLibrary, totalCount, buildDeleteAllQuery]);
 
   // Drag & drop handlers (no window/global pattern)
   const onDragEnter = useCallback((e: React.DragEvent) => {
@@ -659,7 +827,7 @@ export default function LibraryPageInner() {
     <Container className="py-6">
       <PageHeader
         title="Media Library"
-        description="Browse and manage your media files"
+        description={totalCount !== null ? `Browse and manage your media files · ${totalCount} item${totalCount === 1 ? "" : "s"}` : "Browse and manage your media files"}
         actions={
           <>
             <Button
@@ -696,9 +864,10 @@ export default function LibraryPageInner() {
         </div>
       )}
 
-      {mediaItems.length > 0 && (
+      {(mediaItems.length > 0 || hasAnyFilter) && (
         <div className="mb-4 flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
+            {/* Left zone: filter controls */}
             <div className="flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
@@ -720,6 +889,16 @@ export default function LibraryPageInner() {
                 </button>
               )}
             </div>
+            <Button
+              variant={(includedTagsList.length + excludedTagsList.length) > 0 ? "default" : showTagFilter ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => { setShowTagFilter(prev => { if (prev) setTagSearch(""); return !prev; }); }}
+            >
+              <Tag className="mr-2 h-4 w-4" />
+              {(includedTagsList.length + excludedTagsList.length) > 0
+                ? `Tags (${includedTagsList.length + excludedTagsList.length})`
+                : "Filter by tag"}
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="flex items-center gap-2">
@@ -739,50 +918,17 @@ export default function LibraryPageInner() {
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                updatePreferences({ libraryViewMode: viewMode === "grid" ? "list" : "grid" });
-              }}
-            >
-              {viewMode === "grid" ? (
-                <>
-                  <LayoutList className="mr-2 h-4 w-4" suppressHydrationWarning />
-                  List View
-                </>
-              ) : (
-                <>
-                  <LayoutGrid className="mr-2 h-4 w-4" suppressHydrationWarning />
-                  Grid View
-                </>
-              )}
-            </Button>
-
-            {DevPurgeButton && viewMode === "grid" && (
+            {DevPurgeButton && (
               <DevPurgeButton
-                onSuccess={() => { setMediaItems([]); setNextCursor(null); setError(null); emitTagsUpdated(); emitBundlesUpdated(); }}
+                onSuccess={() => { setTotalCount(0); setError(null); setTagOptions([]); emitTagsUpdated(); emitBundlesUpdated(); fetchMedia(); router.replace(LIBRARY_PATH); }}
                 onError={setError}
               />
             )}
+            </div>
 
-            {viewMode === "list" && (
-              <Button
-                variant={isCompactList ? "default" : "outline"}
-                size="sm"
-                aria-pressed={isCompactList}
-                onClick={() => {
-                  updatePreferences({ libraryIsCompactList: !isCompactList });
-                }}
-              >
-                {isCompactList ? "Compact" : "Comfortable"}
-              </Button>
-            )}
-          </div>
-
-            {viewMode === "grid" && mediaItems.length > 0 && (
-              <div className="flex flex-col items-end gap-1">
+            {/* Right zone: view controls */}
+            <div className="flex items-center gap-2">
+              {viewMode === "grid" && mediaItems.length > 0 && (
                 <div className="w-72">
                   <input
                     type="range"
@@ -802,12 +948,86 @@ export default function LibraryPageInner() {
                     ))}
                   </div>
                 </div>
-                <span className="mt-1 text-xs font-medium text-foreground leading-none h-4">
-                  {isCompactGrid ? "compact" : ""}
-                </span>
+              )}
+
+              {viewMode === "list" && (
+                <Button
+                  variant={isCompactList ? "default" : "outline"}
+                  size="sm"
+                  aria-pressed={isCompactList}
+                  onClick={() => {
+                    updatePreferences({ libraryIsCompactList: !isCompactList });
+                  }}
+                >
+                  {isCompactList ? "Compact" : "Comfortable"}
+                </Button>
+              )}
+
+              <div className="flex items-center rounded-md border p-0.5 gap-0.5">
+                <button
+                  type="button"
+                  aria-label="Grid view"
+                  aria-pressed={viewMode === "grid"}
+                  onClick={() => updatePreferences({ libraryViewMode: "grid" })}
+                  className={`rounded p-1.5 transition-colors ${viewMode === "grid" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                >
+                  <LayoutGrid className="h-4 w-4" suppressHydrationWarning />
+                </button>
+                <button
+                  type="button"
+                  aria-label="List view"
+                  aria-pressed={viewMode === "list"}
+                  onClick={() => updatePreferences({ libraryViewMode: "list" })}
+                  className={`rounded p-1.5 transition-colors ${viewMode === "list" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                >
+                  <LayoutList className="h-4 w-4" suppressHydrationWarning />
+                </button>
               </div>
-            )}
+            </div>
           </div>
+
+          {showTagFilter && (
+            <div className="flex flex-col gap-2 rounded-md border bg-muted/30 px-3 py-2.5">
+              {tagOptions.length > 8 && (
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
+                  <input
+                    value={tagSearch}
+                    onChange={e => setTagSearch(e.target.value)}
+                    placeholder="Filter tags…"
+                    className="w-full rounded-md border border-input bg-background pl-7 pr-3 py-1.5 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2.5 text-xs"
+                  onClick={clearAllFilters}
+                >
+                  <X className="h-3 w-3 mr-1" />
+                  Clear filters
+                </Button>
+                {filteredTagOptions.length > 0 ? (
+                  filteredTagOptions.map(t => (
+                    <TagFilterChip
+                      key={t.name}
+                      tag={t.name}
+                      state={getTagFilterState(t.name)}
+                      onCycle={cycleTag}
+                      color={t.color}
+                      count={t.count}
+                    />
+                  ))
+                ) : (
+                  <p className="text-xs text-muted-foreground py-0.5">
+                    {tagOptions.length === 0 ? "No tags yet." : "No tags match your search."}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
 
           {!tag && hasUnpackedArchiveBundles && (
             <div>
@@ -822,6 +1042,32 @@ export default function LibraryPageInner() {
               </Button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* "Select all N items in library" banner */}
+      {isSelectMode && !isSelectAllLibrary && selectedIds.size === mediaItems.length && mediaItems.length > 0 && totalCount !== null && totalCount > mediaItems.length && (
+        <div className="mb-4 flex items-center gap-2 rounded-md bg-muted px-4 py-2 text-sm">
+          <span>All {mediaItems.length} visible items selected.</span>
+          <button
+            type="button"
+            className="font-medium text-primary underline-offset-2 hover:underline"
+            onClick={() => setIsSelectAllLibrary(true)}
+          >
+            Select all {totalCount} items in library
+          </button>
+        </div>
+      )}
+      {isSelectMode && isSelectAllLibrary && totalCount !== null && (
+        <div className="mb-4 flex items-center gap-2 rounded-md bg-primary/10 px-4 py-2 text-sm">
+          <span>All {totalCount} items in library selected.</span>
+          <button
+            type="button"
+            className="font-medium text-primary underline-offset-2 hover:underline"
+            onClick={() => setIsSelectAllLibrary(false)}
+          >
+            Deselect
+          </button>
         </div>
       )}
 
@@ -840,6 +1086,22 @@ export default function LibraryPageInner() {
               <p className="text-lg font-semibold text-primary">Drop files to upload</p>
             </div>
           </div>
+        )}
+
+        {viewMode === "list" && (mediaItems.length > 0 || isLoading) && (
+          <Card className="mb-1 border-transparent bg-transparent shadow-none select-none">
+            <CardContent className={cn("p-4", isCompactList && "px-2 py-1")}>
+              <div className={cn("flex items-center", isCompactList ? "gap-2" : "gap-4")}>
+                <div className={cn("shrink-0", isCompactList ? "w-20" : "w-24")} aria-hidden />
+                <div className={cn("flex-1 flex items-center min-w-0 text-xs font-medium text-muted-foreground", isCompactList ? "gap-2" : "gap-4")}>
+                  <span className="flex-1 min-w-0">Title</span>
+                  <span className="w-24 shrink-0">Type</span>
+                  <span className="w-20 shrink-0 text-right">Size</span>
+                </div>
+                <div className="w-10 shrink-0" aria-hidden />
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {isLoading && mediaItems.length === 0 ? (
@@ -882,7 +1144,7 @@ export default function LibraryPageInner() {
             ) : (
               <Button onClick={handleUploadClick}>
                 <Plus className="mr-2 h-4 w-4" />
-                Upload Your First Item
+                {hasAnyFilter ? "Upload" : "Upload Your First Item"}
               </Button>
             )}
           </div>
@@ -897,13 +1159,13 @@ export default function LibraryPageInner() {
         )}
       </div>
       {/* Bulk action bar */}
-      {isSelectMode && selectedIds.size > 0 && (
+      {isSelectMode && (selectedIds.size > 0 || isSelectAllLibrary) && (
         <BulkActionBar
-          count={selectedIds.size}
+          count={isSelectAllLibrary ? (totalCount ?? selectedIds.size) : selectedIds.size}
           onDelete={(info) => handleBulkDelete(info)}
           onTag={() => setIsTagDialogOpen(true)}
           onAddToBundle={() => setIsBundleDialogOpen(true)}
-          onClear={() => { setSelectedIds(new Set()); lastSelectedIdRef.current = null; }}
+          onClear={() => { setSelectedIds(new Set()); setIsSelectAllLibrary(false); lastSelectedIdRef.current = null; }}
           onDownload={handleBulkDownload}
           isDownloading={isDownloading}
         />

@@ -6,7 +6,7 @@ import Link from 'next/link';
 import type { Route } from 'next';
 import { ArrowLeft, FolderOpen, Loader2 } from 'lucide-react';
 import { emitBundlesUpdated } from '@/lib/bundles';
-import { BUNDLE_ICONS } from '@/lib/bundleIcons';
+import { BUNDLE_ICONS, DEFAULT_BUNDLE_COVER_ID } from '@/lib/bundleIcons';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -100,11 +100,11 @@ export default function NewBundlePage() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => setCoverMediaId(null)}
+              onClick={() => setCoverMediaId(DEFAULT_BUNDLE_COVER_ID)}
               title="Default (no icon)"
               className={cn(
                 'h-10 w-10 rounded-md border-2 flex items-center justify-center bg-muted transition-colors',
-                coverMediaId === null
+                coverMediaId === null || coverMediaId === DEFAULT_BUNDLE_COVER_ID
                   ? 'border-primary'
                   : 'border-transparent hover:border-muted-foreground/40',
               )}

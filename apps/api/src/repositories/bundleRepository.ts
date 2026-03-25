@@ -66,6 +66,7 @@ export class BundleRepository {
                 mimeType: true,
                 sizeBytes: true,
                 thumbState: true,
+                textState: true,
                 thumbnailKey: true,
               },
             },
@@ -95,6 +96,7 @@ export class BundleRepository {
         mimeType: item.media.mimeType,
         sizeBytes: item.media.sizeBytes,
         thumbState: item.media.thumbState,
+        textState: item.media.textState,
         thumbnailKey: item.media.thumbnailKey,
       })),
     };

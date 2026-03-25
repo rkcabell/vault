@@ -1,13 +1,14 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { FileText, FolderOpen, Image as ImageIcon, Loader2, Search, Video, X } from 'lucide-react';
+import { Archive, BookOpen, File as FileIcon, FileText, Film, FolderOpen, Image as ImageIcon, Loader2, Music, Search, Video, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { TagFilterChip, type TagFilterState } from '@/components/media/TagFilterChip';
 import { Dialog } from '@/components/ui/Dialog';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import type { MediaWorkerState } from '@/lib/media/types';
+import { getBundleIcon, DEFAULT_BUNDLE_ICON } from '@/lib/bundleIcons';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,21 @@ const TYPE_FILTERS: { label: string; value: ActiveType; icon: React.ReactNode; m
   { label: 'Videos',   value: 'video',    icon: <Video className="h-3.5 w-3.5" />,    mimePrefix: 'video/' },
   { label: 'Documents', value: 'document', icon: <FileText className="h-3.5 w-3.5" />, mimePrefix: 'application/pdf' },
 ];
+
+function getPickerIcon(mimeType?: string | null) {
+  if (!mimeType) return FileIcon;
+  const m = mimeType.toLowerCase();
+  if (m.startsWith('audio/')) return Music;
+  if (m === 'application/epub+zip') return BookOpen;
+  if (m.startsWith('video/')) return Film;
+  if (m === 'application/zip' || m === 'application/x-zip-compressed' ||
+      m === 'application/x-7z-compressed' || m === 'application/x-rar-compressed' ||
+      m === 'application/vnd.rar') return Archive;
+  if (m.startsWith('text/') || m === 'application/json' ||
+      m.startsWith('application/vnd.oasis.opendocument') ||
+      m === 'application/pdf') return FileText;
+  return FileIcon;
+}
 
 function buildQS(q: string, tags: Set<string>, excludeTags: Set<string>, type: ActiveType, cursor: string | null) {
   const qs = new URLSearchParams({ limit: '30' });
@@ -78,6 +94,7 @@ export function AddMediaDialog({
   const searchAbortRef = useRef<AbortController | null>(null);
   const loadingMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const lastClickedIdxRef = useRef<number>(-1);
 
   const existingIds = existingIdsProp ?? fetchedExistingIds;
 
@@ -189,12 +206,26 @@ export function AddMediaDialog({
     }
   };
 
-  const toggle = (id: string) => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  const toggle = (id: string, idx: number, shiftKey: boolean) => {
+    if (shiftKey && lastClickedIdxRef.current >= 0) {
+      const lo = Math.min(lastClickedIdxRef.current, idx);
+      const hi = Math.max(lastClickedIdxRef.current, idx);
+      setSelected(prev => {
+        const next = new Set(prev);
+        for (let i = lo; i <= hi; i++) {
+          const item = results[i];
+          if (item && !existingIds.has(item.id)) next.add(item.id);
+        }
+        return next;
+      });
+    } else {
+      setSelected(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+    }
+    lastClickedIdxRef.current = idx;
   };
 
   const handleAdd = async () => {
@@ -215,6 +246,8 @@ export function AddMediaDialog({
   };
 
   const addable = [...selected].filter(id => !existingIds.has(id)).length;
+  const iconCover = getBundleIcon(coverMediaId);
+  const CoverIcon = iconCover ?? DEFAULT_BUNDLE_ICON;
   const filteredTags = tagSearch.trim()
     ? tagOptions.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase()))
     : tagOptions;
@@ -229,14 +262,14 @@ export function AddMediaDialog({
         {/* Header */}
         <div className="flex items-center justify-between border-b px-5 py-4 shrink-0">
           <div className="flex items-center gap-3">
-            {coverMediaId ? (
+            {coverMediaId && !iconCover ? (
               <img
                 src={`/api/media/${coverMediaId}/thumbnail`}
                 alt={bundleName}
                 className="h-16 w-16 rounded object-cover shrink-0"
               />
             ) : (
-              <FolderOpen className="h-5 w-5 text-primary shrink-0" />
+              <CoverIcon className="h-5 w-5 text-primary shrink-0" />
             )}
             <div>
               <p className="text-xs text-muted-foreground leading-none mb-0.5">Adding media to</p>
@@ -311,11 +344,36 @@ export function AddMediaDialog({
         {/* Results grid */}
         <div className="flex-1 overflow-y-auto p-4">
           {!isSearching && (
-            <p className="text-xs text-muted-foreground mb-3">
-              {results.length === 0
-                ? 'No media found'
-                : `${results.length}${hasMore ? '+' : ''} item${results.length !== 1 ? 's' : ''}`}
-            </p>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs text-muted-foreground">
+                {results.length === 0
+                  ? 'No media found'
+                  : `${results.length}${hasMore ? '+' : ''} item${results.length !== 1 ? 's' : ''}`}
+              </p>
+              {results.length > 0 && (
+                <div className="flex items-center gap-2">
+                  {selected.size > 0 && (
+                    <span className="text-xs text-muted-foreground">{selected.size} selected</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSelected(new Set(results.filter(r => !existingIds.has(r.id)).map(r => r.id)))}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Select all
+                  </button>
+                  {selected.size > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelected(new Set())}
+                      className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           {isSearching ? (
@@ -324,14 +382,17 @@ export function AddMediaDialog({
             </div>
           ) : results.length === 0 ? null : (
             <>
-              <div className="grid grid-cols-3 gap-3">
-                {results.map(item => {
+              <div className="grid grid-cols-5 gap-2">
+                {results.map((item, idx) => {
                   const alreadyIn = existingIds.has(item.id);
                   const isSelected = selected.has(item.id);
+                  const thumbReady = item.thumbState === 'READY';
+                  const PickerIcon = getPickerIcon(item.mimeType);
                   return (
                     <button
                       key={item.id}
-                      onClick={() => { if (!alreadyIn) toggle(item.id); }}
+                      onMouseDown={e => { if (e.shiftKey) e.preventDefault(); }}
+                      onClick={e => { if (!alreadyIn) toggle(item.id, idx, e.shiftKey); }}
                       disabled={alreadyIn}
                       className={cn(
                         'relative rounded-lg overflow-hidden border-2 text-left transition-all',
@@ -342,14 +403,18 @@ export function AddMediaDialog({
                           : 'border-transparent hover:border-muted-foreground/40',
                       )}
                     >
-                      <div className="aspect-[4/3] bg-muted">
-                        <img
-                          src={`/api/media/${item.id}/thumbnail?v=${item.thumbState === 'READY' ? 'ready' : 'pending'}`}
-                          alt={item.title}
-                          className="h-full w-full object-cover"
-                        />
+                      <div className="aspect-[4/3] bg-muted flex items-center justify-center">
+                        {thumbReady ? (
+                          <img
+                            src={`/api/media/${item.id}/thumbnail?v=ready`}
+                            alt={item.title}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <PickerIcon className="h-8 w-8 text-muted-foreground" />
+                        )}
                       </div>
-                      <div className="px-2 py-1.5">
+                      <div className="px-1.5 py-1">
                         <p className="text-xs truncate">{item.title}</p>
                       </div>
                       {isSelected && !alreadyIn && (

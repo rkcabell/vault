@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { Route } from 'next';
-import { ArrowLeft, ChevronDown, Download, FolderOpen, MoreHorizontal, Pencil, Plus, Star, Trash2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, FolderOpen, MoreHorizontal, Pencil, Plus, Star, Trash2, Upload } from 'lucide-react';
 import { EditBundleModal } from '@/components/bundles/EditBundleModal';
 import { AddMediaDialog } from '@/components/bundles/AddMediaDialog';
 import { cn } from '@/lib/utils';
@@ -58,7 +58,7 @@ function toMediaItem(item: BundleMediaItem) {
     id: item.mediaId,
     title: item.title,
     thumbState: item.thumbState as MediaWorkerState,
-    textState: 'READY' as MediaWorkerState,
+    textState: item.textState as MediaWorkerState,
     mimeType: item.mimeType,
   };
 }
@@ -262,7 +262,7 @@ export default function BundleDetailPage() {
                     }}
                     disabled={isExporting}
                   >
-                    <Download className="mr-2 h-4 w-4" />
+                    <Upload className="mr-2 h-4 w-4" />
                     {isExporting ? 'Exporting…' : 'Export as ZIP'}
                   </DropdownMenuItem>
                   <DropdownMenuItem

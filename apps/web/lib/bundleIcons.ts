@@ -20,6 +20,8 @@ export interface BundleIconDef {
   Icon: LucideIcon;
 }
 
+export const DEFAULT_BUNDLE_COVER_ID = "icon:folder";
+
 /** Icons available as bundle covers. Stored as `icon:<key>` in coverMediaId. */
 export const BUNDLE_ICONS: BundleIconDef[] = [
   { key: "images",    label: "Photos",      Icon: Images    },
@@ -45,5 +47,6 @@ export const DEFAULT_BUNDLE_ICON: LucideIcon = FolderOpen;
 export function getBundleIcon(coverMediaId: string | null | undefined): LucideIcon | null {
   if (!coverMediaId?.startsWith("icon:")) return null;
   const key = coverMediaId.slice(5);
+  if (key === "folder") return DEFAULT_BUNDLE_ICON;
   return BUNDLE_ICONS.find(d => d.key === key)?.Icon ?? null;
 }

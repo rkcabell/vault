@@ -4,7 +4,7 @@ import React, { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Container, PanelCard } from "@/components/common";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent } from "@/components/ui/Card";
@@ -75,6 +75,10 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
   const [isUnpacking, setIsUnpacking] = useState(false);
   const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);
 
+  const [prevId, setPrevId] = useState<string | null>(null);
+  const [nextId, setNextId] = useState<string | null>(null);
+  const [navQuery, setNavQuery] = useState("");
+
   const title = media?.title || media?.filename || "Media details";
   const busy = isDeleting || isDownloading || isUnpacking;
   useEffect(() => {
@@ -88,10 +92,15 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
       try {
         const { mediaId, field, value } = JSON.parse(e.data) as {
           mediaId?: string;
-          field?: "textState" | "thumbState";
+          field?: "textState" | "thumbState" | "tagsUpdated";
           value?: string;
         };
         if (mediaId !== id || !field || !value) return;
+        if (field === "tagsUpdated") {
+          emitTagsUpdated();
+          refresh({ silent: true });
+          return;
+        }
         setMedia((prev) => (prev ? { ...prev, [field]: value } : prev));
         refresh({ silent: true });
       } catch {
@@ -118,6 +127,21 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
     window.addEventListener(TAGS_UPDATED_EVENT, handler);
     return () => window.removeEventListener(TAGS_UPDATED_EVENT, handler);
   }, [refresh, setMedia]);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('library:navList');
+      if (!raw) return;
+      const { ids, q: storedQ } = JSON.parse(raw) as { ids: string[]; q: string };
+      const idx = ids.indexOf(id);
+      if (idx === -1) return;
+      setPrevId(idx > 0 ? ids[idx - 1] : null);
+      setNextId(idx < ids.length - 1 ? ids[idx + 1] : null);
+      setNavQuery(storedQ);
+    } catch {
+      // ignore
+    }
+  }, [id]);
 
   const handleDownload = async () => {
     if (busy) return;
@@ -222,8 +246,30 @@ const handleDelete = (e: React.MouseEvent) => {
     </div>
   );
 
+  const navHref = (targetId: string) =>
+    (navQuery ? `/media/${targetId}?q=${encodeURIComponent(navQuery)}` : `/media/${targetId}`) as Route;
+
   return (
-    <Container className="py-6">
+    <>
+      {prevId && (
+        <Link
+          href={navHref(prevId)}
+          className="fixed left-72 top-1/2 -translate-y-1/2 hidden lg:flex items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Previous item"
+        >
+          <ChevronLeft className="h-10 w-10" />
+        </Link>
+      )}
+      {nextId && (
+        <Link
+          href={navHref(nextId)}
+          className="fixed right-72 top-1/2 -translate-y-1/2 hidden lg:flex items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Next item"
+        >
+          <ChevronRight className="h-10 w-10" />
+        </Link>
+      )}
+      <Container className="py-6">
       <div className="mb-8 flex min-w-0 items-center gap-1.5 text-sm">
         <Link
           href={searchQuery ? `/library?q=${encodeURIComponent(searchQuery)}` : "/library"}
@@ -358,6 +404,7 @@ const handleDelete = (e: React.MouseEvent) => {
         onConfirm={() => { setConfirmState(null); void doDelete(); }}
         onCancel={() => setConfirmState(null)}
       />
-    </Container>
+      </Container>
+    </>
   );
 }
