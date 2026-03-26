@@ -190,7 +190,8 @@
     --card: 28 55% 82%;
     --popover: 28 55% 82%;
     --popover-foreground: 0 0% 3.9%;
-    --secondary: 28 42% 75%;
+    --secondary: 28 52% 35%;            /* contrast: ~4.2:1 vs background */
+    --secondary-foreground: 0 0% 98%;  /* white — dark text fails on this bg */
     --muted: 28 42% 75%;
     --accent: 28 46% 69%;
     --primary: 28 72% 24%;

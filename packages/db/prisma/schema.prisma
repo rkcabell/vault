@@ -17,7 +17,9 @@ model User {
   website      String?
   location     String?
   avatarUrl    String?
-  preferences  Json?
+  preferences       Json?
+  resetToken        String?   @unique
+  resetTokenExpiry  DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   media        Media[]
@@ -55,6 +57,7 @@ model Media {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   thumbnailKey    String?
+  contentHash     String?
   linkedBundleId  String?
   linkedBundle    Bundle?          @relation("ArchiveLink", fields: [linkedBundleId], references: [id], onDelete: SetNull)
   isExtractedFromArchive Boolean   @default(false)
@@ -69,6 +72,11 @@ model Media {
   bundleItems     BundleItem[]
 
   @@index([tags], type: Gin)
+  @@index([userId, contentHash])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, title(sort: Asc)])
+  @@index([userId, sizeBytes(sort: Desc)])
+  @@index([userId, mimeType(sort: Asc)])
 }
 
 model Bundle {

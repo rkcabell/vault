@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { createJwtAdapter, type JwtAdapter } from "../adapters/jwtAdapter.js";
 import { createPasswordHasher, type PasswordHasher } from "../adapters/passwordHasher.js";
 import { type UserRepository } from "../repositories/userRepository.js";
@@ -6,7 +7,7 @@ export type AuthTokens = { access: string; refresh: string };
 export type AuthUser = { id: string; email: string; name?: string | null; username?: string | null };
 
 export class AuthError extends Error {
-  constructor(public code: "USER_EXISTS" | "INVALID_CREDENTIALS" | "INVALID_TOKEN") {
+  constructor(public code: "USER_EXISTS" | "INVALID_CREDENTIALS" | "INVALID_TOKEN" | "TOKEN_EXPIRED") {
     super(code);
   }
 }
@@ -85,10 +86,30 @@ export function createAuthService (deps: AuthServiceDeps) {
     }
   };
 
+  const forgotPassword = async (email: string): Promise<string | null> => {
+    const user = await deps.userRepository.findByEmail(email);
+    if (!user) return null;
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    await deps.userRepository.setResetToken(user.id, token, expiry);
+    return token;
+  };
+
+  const resetPassword = async (token: string, newPassword: string): Promise<void> => {
+    const user = await deps.userRepository.findByResetToken(token);
+    if (!user) throw new AuthError("TOKEN_EXPIRED");
+
+    const newHash = await passwordHasher.hash(newPassword);
+    await deps.userRepository.clearResetToken(user.id, newHash);
+  };
+
   return {
     register,
     login,
     refreshTokens,
     getMe,
+    forgotPassword,
+    resetPassword,
   };
 }

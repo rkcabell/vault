@@ -23,6 +23,7 @@ export type InitUploadInput = {
   sizeBytes: number;
   title: string;
   tags: string[];
+  autoTagOnUpload?: boolean;
 };
 
 export type BatchUploadItem = {
@@ -31,6 +32,7 @@ export type BatchUploadItem = {
   sizeBytes: number;
   title?: string | null;
   tags: string[];
+  autoTagOnUpload?: boolean;
 };
 
 type MediaUploadDeps = {
@@ -61,7 +63,7 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
     const mimeType = normalizeMimeType(body.mimeType, body.filename);
     const mimeTag = normalizeTags(buildMimeTypeTag(mimeType, body.filename))[0]!;
     const uniqueTags = Array.from(
-      new Set([...(body.tags ?? []), mimeTag]),
+      new Set(body.autoTagOnUpload !== false ? [...(body.tags ?? []), mimeTag] : (body.tags ?? [])),
     );
 
     const media = await deps.repository.createMedia({
@@ -100,7 +102,7 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
       const mimeType = normalizeMimeType(item.mimeType, item.filename);
       const mimeTag = normalizeTags(buildMimeTypeTag(mimeType, item.filename))[0]!;
       const itemTags = Array.from(
-        new Set([...(item.tags ?? []), mimeTag]),
+        new Set(item.autoTagOnUpload !== false ? [...(item.tags ?? []), mimeTag] : (item.tags ?? [])),
       );
       return {
         id,

@@ -125,6 +125,47 @@ export const authRoutes: FastifyPluginAsync = async app => {
     },
   );
 
+  // POST /auth/forgot-password
+  app.post(
+    "/forgot-password",
+    {
+      preHandler: async (req, reply) => {
+        // 5 requests/min per IP
+        await app.rateLimit({ key: `forgot:ip:${req.ip}`, limit: 5, windowMs: 60_000 })(req, reply);
+      },
+    },
+    async (req, reply) => {
+      if (reply.sent) return;
+
+      const schema = z.object({ email: z.string().email() });
+      const result = schema.safeParse(req.body);
+      if (!result.success) return reply.send({});
+
+      const token = await authService.forgotPassword(result.data.email);
+      return reply.send(token ? { token } : {});
+    },
+  );
+
+  // POST /auth/reset-password
+  app.post(
+    "/reset-password",
+    async (req, reply) => {
+      const schema = z.object({ token: z.string(), password: z.string().min(8) });
+      const result = schema.safeParse(req.body);
+      if (!result.success) return reply.badRequest("Password must be at least 8 characters");
+
+      try {
+        await authService.resetPassword(result.data.token, result.data.password);
+        return { message: "Password updated" };
+      } catch (err) {
+        if (err instanceof AuthError && err.code === "TOKEN_EXPIRED") {
+          return reply.badRequest("This reset link is invalid or has expired.");
+        }
+        throw err;
+      }
+    },
+  );
+
   // POST /auth/refresh
   app.post(
     "/refresh",

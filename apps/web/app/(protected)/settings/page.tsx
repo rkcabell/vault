@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePreferences, DEFAULT_PREFERENCES, type LightTheme, type DarkTheme } from "@/hooks/usePreferences";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -8,6 +8,22 @@ import { emitTagsUpdated, TAGS_UPDATED_EVENT } from "@/lib/tags";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 
 type TagRow = { name: string; count: number; color: string | null };
+
+// 12 standard colors — 2 rows × 6
+const TAG_SWATCHES = [
+  "#ef4444", // Red
+  "#f97316", // Orange
+  "#eab308", // Yellow
+  "#22c55e", // Green
+  "#14b8a6", // Teal
+  "#3b82f6", // Blue
+  "#6366f1", // Indigo
+  "#a855f7", // Purple
+  "#ec4899", // Pink
+  "#f43f5e", // Rose
+  "#78716c", // Brown
+  "#6b7280", // Gray
+];
 
 const MAX_FETCH = 50;
 const INITIAL_VISIBLE = 20;
@@ -150,7 +166,6 @@ const GENERAL_PREF_KEYS = [
   "autoTagOnUpload",
   "extractMetadata",
   "detectDuplicates",
-  "collapseMetadataByDefault",
   "lowMemoryMode",
   "autoUnpackArchives",
   "soonWindowDays",
@@ -203,14 +218,6 @@ function GeneralSettingsCard() {
           onChange={v => updatePreferences({ detectDuplicates: v })}
         />
         <SettingRow
-          id="collapse-metadata-default"
-          label="Collapse metadata by default"
-          description="Close metadata panels when media details open."
-          checked={prefs.collapseMetadataByDefault}
-          disabled={!isLoaded}
-          onChange={v => updatePreferences({ collapseMetadataByDefault: v })}
-        />
-        <SettingRow
           id="low-memory-mode"
           label="Low memory mode"
           description="Halves thumbnail and text processing concurrency. Takes effect after docker restart."
@@ -255,6 +262,93 @@ function GeneralSettingsCard() {
   );
 }
 
+// ─── Tag Color Picker ─────────────────────────────────────────────────────────
+
+function TagColorPicker({
+  tagName,
+  color,
+  onPreview,
+  onPickerClose,
+  onSwatchSelect,
+  onClear,
+}: {
+  tagName: string;
+  color: string | null;
+  onPreview: (tagName: string, color: string) => void;
+  onPickerClose: (tagName: string) => void;
+  onSwatchSelect: (tagName: string, color: string) => void;
+  onClear: (tagName: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [popoverPos, setPopoverPos] = useState<React.CSSProperties>({});
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  const handleOpen = () => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      const popoverH = 120; // approx height of popover
+      const spaceBelow = window.innerHeight - rect.bottom;
+      if (spaceBelow < popoverH) {
+        setPopoverPos({ position: "fixed", left: rect.left, bottom: window.innerHeight - rect.top + 4 });
+      } else {
+        setPopoverPos({ position: "fixed", left: rect.left, top: rect.bottom + 4 });
+      }
+    }
+    setOpen(v => !v);
+  };
+
+  return (
+    <div className="relative flex items-center shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        title={color ? "Change color" : "Set color"}
+        onClick={handleOpen}
+        className="h-5 w-5 rounded-full border border-border transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        style={{ background: color ?? "hsl(var(--muted))" }}
+      />
+      {color && (
+        <button
+          type="button"
+          title="Remove color"
+          onClick={() => onClear(tagName)}
+          className="absolute -right-2 -top-2 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted text-muted-foreground hover:bg-destructive hover:text-destructive-foreground text-[9px] leading-none"
+        >
+          ×
+        </button>
+      )}
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div style={{ ...popoverPos, zIndex: 50, width: 208 }} className="flex flex-col gap-2 rounded-lg border border-border bg-popover p-3 shadow-lg">
+            {/* Native free-form picker */}
+            <input
+              type="color"
+              className="h-8 w-full cursor-pointer rounded border border-border"
+              value={color ?? "#888888"}
+              onInput={e => onPreview(tagName, e.currentTarget.value)}
+              onBlur={() => onPickerClose(tagName)}
+            />
+            {/* Swatches: 2 rows × 6 */}
+            <div className="grid grid-cols-6 gap-2">
+              {TAG_SWATCHES.map(swatch => (
+                <button
+                  key={swatch}
+                  type="button"
+                  title={swatch}
+                  onClick={() => { onSwatchSelect(tagName, swatch); setOpen(false); }}
+                  className={`h-6 w-6 rounded-full transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${color === swatch ? "ring-2 ring-offset-1 ring-primary" : "border border-black/10"}`}
+                  style={{ background: swatch }}
+                />
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Manage Tags ──────────────────────────────────────────────────────────────
 
 function ManageTagsCard() {
@@ -273,8 +367,8 @@ function ManageTagsCard() {
   const [pendingColorChanges, setPendingColorChanges] = useState<Record<string, string>>({});
   const renameInputRef = React.useRef<HTMLInputElement>(null);
 
-  const load = async () => {
-    setIsLoading(true);
+  const load = async (silent = false) => {
+    if (!silent) setIsLoading(true);
     setError(null);
     try {
       const res = await fetch(`/api/tags?limit=${MAX_FETCH}`, { credentials: "include" });
@@ -288,13 +382,13 @@ function ManageTagsCard() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load tags.");
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
   useEffect(() => {
     void load();
-    const handler = () => void load();
+    const handler = () => void load(true);
     window.addEventListener(TAGS_UPDATED_EVENT, handler);
     return () => window.removeEventListener(TAGS_UPDATED_EVENT, handler);
   }, []);
@@ -406,6 +500,13 @@ function ManageTagsCard() {
     await persistTagColor(tagName, nextColor);
   };
 
+  const handleColorSelect = async (tagName: string, color: string) => {
+    setTags(prev => prev.map(t => t.name === tagName ? { ...t, color } : t));
+    setPendingColorChanges(prev => { const copy = { ...prev }; delete copy[tagName]; return copy; });
+    await persistTagColor(tagName, color);
+  };
+
+
   const handleColorClear = async (tagName: string) => {
     setTags(prev => prev.map(t => t.name === tagName ? { ...t, color: null } : t));
     setPendingColorChanges(prev => {
@@ -481,34 +582,14 @@ function ManageTagsCard() {
                 className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
               >
                 {/* Color swatch */}
-                <div className="relative flex items-center shrink-0">
-                  <label
-                    title={tag.color ? "Change color" : "Set color"}
-                    className="cursor-pointer"
-                  >
-                    <div
-                      className="h-5 w-5 rounded-full border border-border transition-shadow hover:shadow-md"
-                      style={{ background: tag.color ?? "hsl(var(--muted))" }}
-                    />
-                    <input
-                      type="color"
-                      className="sr-only"
-                      value={tag.color ?? "#888888"}
-                      onInput={e => handleColorPreview(tag.name, e.currentTarget.value)}
-                      onBlur={() => void handleColorPickerClose(tag.name)}
-                    />
-                  </label>
-                  {tag.color && (
-                    <button
-                      type="button"
-                      title="Remove color"
-                      onClick={() => void handleColorClear(tag.name)}
-                      className="absolute -right-2 -top-2 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted text-muted-foreground hover:bg-destructive hover:text-destructive-foreground text-[9px] leading-none"
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
+                <TagColorPicker
+                  tagName={tag.name}
+                  color={tag.color}
+                  onPreview={handleColorPreview}
+                  onPickerClose={n => void handleColorPickerClose(n)}
+                  onSwatchSelect={(n, c) => void handleColorSelect(n, c)}
+                  onClear={n => void handleColorClear(n)}
+                />
 
                 {/* Tag name / rename input */}
                 <div className="flex-1 min-w-0">

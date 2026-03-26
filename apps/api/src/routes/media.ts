@@ -61,7 +61,8 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     assertUploadWithinLimit(body);
 
-    const result = await uploadService.initUpload(req.userId!, { ...body, tags: parseTags(body.tags) });
+    const prefs = await preferencesService.getPreferences(req.userId!).catch(() => null);
+    const result = await uploadService.initUpload(req.userId!, { ...body, tags: parseTags(body.tags), autoTagOnUpload: prefs?.autoTagOnUpload ?? true });
     req.log.info({ filename: body.filename, mimeType: body.mimeType, sizeBytes: body.sizeBytes }, "upload init");
     return result;
   });
@@ -87,7 +88,9 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     body.items.forEach(assertUploadWithinLimit);
 
-    const items = body.items.map(item => ({ ...item, tags: parseTags(item.tags) }));
+    const prefs = await preferencesService.getPreferences(req.userId!).catch(() => null);
+    const autoTagOnUpload = prefs?.autoTagOnUpload ?? true;
+    const items = body.items.map(item => ({ ...item, tags: parseTags(item.tags), autoTagOnUpload }));
 
     const result = await uploadService.initBatchUploads(req.userId!, items);
     req.log.info({ count: body.items.length }, "batch upload init");
