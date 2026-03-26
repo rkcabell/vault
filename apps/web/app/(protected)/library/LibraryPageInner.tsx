@@ -2,7 +2,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cn } from "@/lib/utils";
 import { usePreferences } from "@/hooks/usePreferences";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -12,13 +11,12 @@ const DevPurgeButton =
     ? dynamic(() => import("@/components/dev/DevPurgeButton"))
     : null;
 import { Container, PageHeader } from "@/components/common";
-import { MediaCard, MediaCardSkeleton, type MediaItem } from "@/components/media";
+import { MediaCard, MediaCardListHeader, MediaCardSkeleton, type MediaItem } from "@/components/media";
 import { BulkActionBar } from "@/components/media/BulkActionBar";
 import { BulkTagDialog } from "@/components/media/BulkTagDialog";
 import { BulkBundleDialog } from "@/components/media/BulkBundleDialog";
 import { TagFilterChip, type TagFilterState } from "@/components/media/TagFilterChip";
 import { Button } from "@/components/ui/Button";
-import { Card, CardContent } from "@/components/ui/Card";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown, Search, X, Tag } from "lucide-react";
 import { useUpload } from "@/components/contexts/UploadContext";
@@ -873,7 +871,7 @@ export default function LibraryPageInner() {
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
               <input
                 type="text"
-                placeholder="Filter by title..."
+                placeholder="Filter by title/text..."
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 className="h-9 w-48 rounded-md border border-input bg-background pl-8 pr-8 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1089,19 +1087,7 @@ export default function LibraryPageInner() {
         )}
 
         {viewMode === "list" && (mediaItems.length > 0 || isLoading) && (
-          <Card className="mb-1 border-transparent bg-transparent shadow-none select-none">
-            <CardContent className={cn("p-4", isCompactList && "px-2 py-1")}>
-              <div className={cn("flex items-center", isCompactList ? "gap-2" : "gap-4")}>
-                <div className={cn("shrink-0", isCompactList ? "w-20" : "w-24")} aria-hidden />
-                <div className={cn("flex-1 flex items-center min-w-0 text-xs font-medium text-muted-foreground", isCompactList ? "gap-2" : "gap-4")}>
-                  <span className="flex-1 min-w-0">Title</span>
-                  <span className="w-24 shrink-0">Type</span>
-                  <span className="w-20 shrink-0 text-right">Size</span>
-                </div>
-                <div className="w-10 shrink-0" aria-hidden />
-              </div>
-            </CardContent>
-          </Card>
+          <MediaCardListHeader density={cardDensity} isSelectMode={isSelectMode} />
         )}
 
         {isLoading && mediaItems.length === 0 ? (

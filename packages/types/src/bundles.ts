@@ -21,6 +21,7 @@ export interface BundleMediaItem {
   thumbState: string;
   textState: string;
   thumbnailKey?: string | null;
+  tags: string[];
 }
 
 export interface BundleDetail extends Omit<BundleListItem, 'coverMediaId'> {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { Route } from 'next';
@@ -12,6 +12,7 @@ import { emitBundlesUpdated } from '@/lib/bundles';
 import { emitTagsUpdated } from '@/lib/tags';
 import type { BundleDetail, BundleMediaItem } from '@vault/types';
 import { MediaCard } from '@/components/media/MediaCard';
+import { TagFilterChip, type TagFilterState } from '@/components/media/TagFilterChip';
 import { Button } from '@/components/ui/Button';
 import {
   DropdownMenu,
@@ -87,6 +88,26 @@ export default function BundleDetailPage() {
   const [showPicker, setShowPicker] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [sort, setSort] = useState<SortValue>(DEFAULT_SORT);
+  const [tagFilter, setTagFilter] = useState<Record<string, TagFilterState>>({});
+
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    bundle?.items.forEach(item => item.tags?.forEach(t => set.add(t)));
+    return Array.from(set).sort();
+  }, [bundle]);
+
+  const cycleTag = (tag: string) => {
+    setTagFilter(prev => {
+      const cur = prev[tag] ?? 'unselected';
+      const next: TagFilterState = cur === 'unselected' ? 'include' : cur === 'include' ? 'exclude' : 'unselected';
+      const updated = { ...prev, [tag]: next };
+      if (next === 'unselected') delete updated[tag];
+      return updated;
+    });
+  };
+
+  const includedTags = Object.entries(tagFilter).filter(([, s]) => s === 'include').map(([t]) => t);
+  const excludedTags = Object.entries(tagFilter).filter(([, s]) => s === 'exclude').map(([t]) => t);
 
   const fetchBundle = useCallback(async () => {
     setIsLoading(true);
@@ -299,9 +320,9 @@ export default function BundleDetailPage() {
         </div>
       </div>
 
-      {/* Sort toolbar */}
+      {/* Sort + tag filter toolbar */}
       {bundle.items.length > 0 && (
-        <div className="flex items-center justify-start mb-3">
+        <div className="flex flex-wrap items-center gap-2 mb-4 rounded-lg border border-border bg-muted/30 px-3 py-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="flex items-center gap-2">
@@ -321,6 +342,19 @@ export default function BundleDetailPage() {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+          {allTags.length > 0 && (
+            <>
+              <div className="h-4 w-px shrink-0 bg-border" />
+              {allTags.map(tag => (
+                <TagFilterChip
+                  key={tag}
+                  tag={tag}
+                  state={tagFilter[tag] ?? 'unselected'}
+                  onCycle={cycleTag}
+                />
+              ))}
+            </>
+          )}
         </div>
       )}
 
@@ -339,16 +373,22 @@ export default function BundleDetailPage() {
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-          {sortItems(bundle.items, sort).map(item => (
-            <div key={item.mediaId} className="relative group">
-              <MediaCard
-                media={toMediaItem(item)}
-                variant="grid"
-                onDelete={() => removeItem(item.mediaId)}
-                isDeleting={removingId === item.mediaId}
-              />
-            </div>
-          ))}
+          {sortItems(bundle.items, sort)
+            .filter(item => {
+              if (includedTags.length > 0 && !includedTags.every(t => item.tags?.includes(t))) return false;
+              if (excludedTags.some(t => item.tags?.includes(t))) return false;
+              return true;
+            })
+            .map(item => (
+              <div key={item.mediaId} className="relative group">
+                <MediaCard
+                  media={toMediaItem(item)}
+                  variant="grid"
+                  onDelete={() => removeItem(item.mediaId)}
+                  isDeleting={removingId === item.mediaId}
+                />
+              </div>
+            ))}
         </div>
       )}
 

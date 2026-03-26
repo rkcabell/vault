@@ -3,9 +3,20 @@ import { type PrismaClient } from "@prisma/client";
 export class BundleRepository {
   constructor (private readonly prisma: PrismaClient) {}
 
-  async listBundles (userId: string) {
+  async listBundles (userId: string, q?: string) {
+    const where = q
+      ? {
+          userId,
+          OR: [
+            { name: { contains: q, mode: "insensitive" as const } },
+            { description: { contains: q, mode: "insensitive" as const } },
+            { items: { some: { media: { title: { contains: q, mode: "insensitive" as const } } } } },
+            { items: { some: { media: { document: { is: { rawText: { contains: q, mode: "insensitive" as const } } } } } } },
+          ],
+        }
+      : { userId };
     const bundles = await this.prisma.bundle.findMany({
-      where: { userId },
+      where,
       orderBy: [{ starredAt: { sort: "asc", nulls: "last" } }, { updatedAt: "desc" }],
       select: {
         id: true,
@@ -68,6 +79,7 @@ export class BundleRepository {
                 thumbState: true,
                 textState: true,
                 thumbnailKey: true,
+                tags: true,
               },
             },
           },
@@ -98,6 +110,7 @@ export class BundleRepository {
         thumbState: item.media.thumbState,
         textState: item.media.textState,
         thumbnailKey: item.media.thumbnailKey,
+        tags: item.media.tags,
       })),
     };
   }

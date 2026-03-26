@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, BookOpen, File as FileIcon, FileText, Film, FolderOpen, Image as ImageIcon, Loader2, Music, Search, Video, X } from 'lucide-react';
+import { Archive, BookOpen, File as FileIcon, FileText, Film, Image as ImageIcon, Loader2, Music, Search, Video, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { TagFilterChip, type TagFilterState } from '@/components/media/TagFilterChip';
 import { Dialog } from '@/components/ui/Dialog';

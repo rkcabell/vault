@@ -156,6 +156,13 @@ function getMimeTypeLabel(mimeType?: string | null, filename?: string | null): s
   return sub ? sub.toUpperCase().slice(0, 8) : "File";
 }
 
+// Shared layout constants for list variant — used by both MediaCard and MediaCardListHeader
+// so column positions stay in sync when values change.
+const LIST_THUMB_W = { comfortable: 'w-24', compact: 'w-20' } as const;
+const LIST_INNER_GAP = { comfortable: 'gap-3', compact: 'gap-2' } as const;
+const LIST_TYPE_W = 'w-34' as const;
+const LIST_SIZE_W = 'w-12' as const;
+
 export function MediaCard({
   media,
   variant = 'grid',
@@ -338,8 +345,8 @@ export function MediaCard({
             {isSelectMode ? (
               <div
                 className={cn(
-                  "relative aspect-[4/3] h-16 w-24 flex-shrink-0 cursor-pointer overflow-hidden rounded-md bg-muted",
-                  isCompact && "h-12 w-20",
+                  "relative aspect-[4/3] flex-shrink-0 cursor-pointer overflow-hidden rounded-md bg-muted",
+                  isCompact ? `h-12 ${LIST_THUMB_W.compact}` : `h-16 ${LIST_THUMB_W.comfortable}`,
                 )}
                 onClick={handleSelectClick}
               >
@@ -362,8 +369,8 @@ export function MediaCard({
               <Link href={hrefWithQuery} className="flex-shrink-0 items-center">
                 <div
                   className={cn(
-                    "relative aspect-[4/3] h-16 w-24 overflow-hidden rounded-md bg-muted",
-                    isCompact && "h-12 w-20",
+                    "relative aspect-[4/3] overflow-hidden rounded-md bg-muted",
+                    isCompact ? `h-12 ${LIST_THUMB_W.compact}` : `h-16 ${LIST_THUMB_W.comfortable}`,
                   )}
                 >
                   {thumbError ? (
@@ -385,7 +392,7 @@ export function MediaCard({
             )}
 
             <div className="flex-1 min-w-0 cursor-pointer" onClick={handleInfoAreaClick}>
-              <div className={cn("flex items-center min-w-0", isCompact ? "gap-2" : "gap-4")}>
+              <div className={cn("flex items-center min-w-0", isCompact ? LIST_INNER_GAP.compact : LIST_INNER_GAP.comfortable)}>
                 <div className="flex-1 min-w-0">
                   {isRenaming ? (
                     <div className={cn("flex items-center gap-2", isCompact && "gap-1")}>
@@ -437,10 +444,10 @@ export function MediaCard({
                 </div>
                 {!isRenaming && (
                   <>
-                    <span className="w-24 shrink-0 text-xs text-muted-foreground truncate">
+                    <span className={cn(LIST_TYPE_W, "shrink-0 text-xs text-muted-foreground truncate")}>
                       {getMimeTypeLabel(media.mimeType, media.filename)}
                     </span>
-                    <span className="w-20 shrink-0 text-xs text-muted-foreground text-right tabular-nums">
+                    <span className={cn(LIST_SIZE_W, "shrink-0 text-xs text-muted-foreground text-right tabular-nums")}>
                       {media.sizeBytes != null ? formatBytes(media.sizeBytes) : "—"}
                     </span>
                   </>
@@ -697,6 +704,55 @@ export function MediaCard({
             )}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function MediaCardListHeader({
+  density = "comfortable",
+  isSelectMode = false,
+}: {
+  density?: "comfortable" | "compact";
+  isSelectMode?: boolean;
+}) {
+  const isCompact = density === "compact";
+  return (
+    // Use Card for identical border width (1px) so content box matches actual cards.
+    // shadow-sm can't be overridden reliably via cn (no tailwind-merge), so use inline style.
+    <Card
+      className="border-transparent bg-transparent select-none"
+      style={{ boxShadow: 'none' }}
+    >
+      <CardContent className={cn("p-4", isCompact && "px-2 py-1")}>
+        <div className={cn("flex items-center border-b pb-1 text-xs font-medium text-muted-foreground", isCompact ? "gap-2" : "gap-4")}>
+          {/* Selection circle placeholder */}
+          {isSelectMode && (
+            <div className="flex-shrink-0 p-0.5" aria-hidden>
+              <div className="h-6 w-6" />
+            </div>
+          )}
+          {/* Visible thumbnail placeholder — same width as actual thumbnail */}
+          <div
+            className={cn(
+              "flex-shrink-0 rounded-md bg-muted/40 self-stretch",
+              isCompact ? LIST_THUMB_W.compact : LIST_THUMB_W.comfortable,
+            )}
+            aria-hidden
+          />
+          {/* Columns — mirrors: div.flex-1.min-w-0 > div.flex.items-center.min-w-0 */}
+          <div className="flex-1 min-w-0">
+            <div className={cn("flex items-center min-w-0", isCompact ? LIST_INNER_GAP.compact : LIST_INNER_GAP.comfortable)}>
+              <div className="flex-1">Title</div>
+              <span className={cn(LIST_TYPE_W, "shrink-0")}>Type</span>
+              <span className={cn(LIST_SIZE_W, "shrink-0")}>Size</span>
+            </div>
+          </div>
+          {/* Actions placeholder */}
+          <div className={cn("flex items-center", isCompact ? "gap-1" : "gap-2")}>
+            {!isSelectMode && <div className="h-10 w-10" aria-hidden />}
+          </div>
+        </div>
       </CardContent>
     </Card>
   );

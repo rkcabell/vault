@@ -17,7 +17,8 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
 
   // GET / — list user's bundles
   app.get("/", { preHandler: [requireAuth] }, async req => {
-    const bundles = await repo.listBundles(req.userId!);
+    const { q } = z.object({ q: z.string().optional() }).parse(req.query);
+    const bundles = await repo.listBundles(req.userId!, q?.trim() || undefined);
     return { bundles };
   });
 

@@ -1,4 +1,4 @@
-export { MediaCard } from './MediaCard'
+export { MediaCard, MediaCardListHeader } from './MediaCard'
 export { MediaCardSkeleton } from './MediaCardSkeleton'
 export { UploadDialog } from './UploadDialog'
 export type { MediaItem } from './MediaCard'
