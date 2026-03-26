@@ -67,16 +67,19 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
       cursor: query.cursor ?? null,
     };
 
-    const [items, totalCount] = await Promise.all([
+    const isFirstPage = !query.cursor;
+
+    const [items, totalCount, hasExtractedItems] = await Promise.all([
       deps.repository.listMedia(listFilters),
-      deps.repository.countMedia({ ...listFilters, cursor: null }),
+      isFirstPage ? deps.repository.countMedia({ ...listFilters, cursor: null }) : Promise.resolve(undefined),
+      isFirstPage ? deps.repository.hasExtractedItems(userId) : Promise.resolve(undefined),
     ]);
 
     const hasMore = items.length > take;
     const sliced = hasMore ? items.slice(0, take) : items;
     const nextCursor = hasMore ? sliced[sliced.length - 1]?.id ?? null : null;
 
-    return { items: sliced, nextCursor, totalCount };
+    return { items: sliced, nextCursor, totalCount, hasExtractedItems };
   };
 
   const listTopTags = async (userId: string, limit: number) => {

@@ -10,7 +10,7 @@ import {
   ReactNode,
 } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAppInit } from '@/hooks/useAppInit';
+import { useAppInit, resetAppInit } from '@/hooks/useAppInit';
 
 interface User {
   id: string;
@@ -44,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Logout failed:', error);
     } finally {
+      resetAppInit();
       setUserState(null);
       setStatus('unauthenticated');
       router.push('/auth');

@@ -79,6 +79,15 @@ export class MediaRepository {
     return this._countMediaOrm(filters);
   }
 
+  /** Returns true if the user has any media items extracted from an archive. */
+  async hasExtractedItems (userId: string): Promise<boolean> {
+    const row = await this.prisma.media.findFirst({
+      where: { userId, isExtractedFromArchive: true },
+      select: { id: true },
+    });
+    return row !== null;
+  }
+
   private async _listMediaOrm (filters: MediaListFilters) {
     const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor, excludeUnpacked } = filters;
     return this.prisma.media.findMany({
@@ -477,6 +486,17 @@ export class MediaRepository {
         update: { count: { increment: 1 } },
         create: { userId: media.userId, name: tagName, count: 1 },
       });
+    });
+  }
+
+  async setContentHash (mediaId: string, hash: string): Promise<void> {
+    await this.prisma.media.update({ where: { id: mediaId }, data: { contentHash: hash } });
+  }
+
+  async findDuplicateByHash (userId: string, hash: string, excludeId: string): Promise<{ id: string } | null> {
+    return this.prisma.media.findFirst({
+      where: { userId, contentHash: hash, id: { not: excludeId } },
+      select: { id: true },
     });
   }
 

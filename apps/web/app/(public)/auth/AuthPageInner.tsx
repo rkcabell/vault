@@ -177,6 +177,16 @@ export default function AuthPage() {
               ? <div className={styles.fieldError}>{fieldErrors.password}</div>
               : isRegister && <p className={styles.fieldHint}>Must be at least 8 characters.</p>
             }
+            {!isRegister && (
+              <button
+                type="button"
+                className={styles.forgotPassword}
+                onClick={() => router.push("/auth/forgot-password")}
+                disabled={loading}
+              >
+                Forgot password?
+              </button>
+            )}
           </div>
 
           <button type="submit" className={styles.submitBtn} disabled={loading}>

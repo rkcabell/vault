@@ -12,7 +12,6 @@ export type Preferences = {
   autoTagOnUpload: boolean;
   extractMetadata: boolean;
   detectDuplicates: boolean;
-  collapseMetadataByDefault: boolean;
   lowMemoryMode: boolean;
   autoUnpackArchives: boolean;
   hideUnpackedItems: boolean;
@@ -29,7 +28,6 @@ export const DEFAULT_PREFERENCES: Preferences = {
   autoTagOnUpload: true,
   extractMetadata: true,
   detectDuplicates: false,
-  collapseMetadataByDefault: true,
   lowMemoryMode: false,
   autoUnpackArchives: false,
   hideUnpackedItems: false,
@@ -46,7 +44,6 @@ const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
   autoTagOnUpload: "prefs:autoTagOnUpload",
   extractMetadata: "prefs:extractMetadata",
   detectDuplicates: "prefs:detectDuplicates",
-  collapseMetadataByDefault: "prefs:collapseMetadataByDefault",
   lowMemoryMode: "prefs:lowMemoryMode",
   autoUnpackArchives: "prefs:autoUnpackArchives",
   hideUnpackedItems: "prefs:hideUnpackedItems",
@@ -76,9 +73,6 @@ function readFromLocalStorage(): Partial<Preferences> {
 
     const detectDups = localStorage.getItem("prefs:detectDuplicates");
     if (detectDups !== null) out.detectDuplicates = detectDups === "true";
-
-    const collapseMeta = localStorage.getItem("prefs:collapseMetadataByDefault");
-    if (collapseMeta !== null) out.collapseMetadataByDefault = collapseMeta === "true";
 
     const lowMemory = localStorage.getItem("prefs:lowMemoryMode");
     if (lowMemory !== null) out.lowMemoryMode = lowMemory === "true";

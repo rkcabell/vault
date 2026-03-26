@@ -13,6 +13,8 @@ import { MediaRepository } from "../repositories/mediaRepository.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
 import { MediaMetadataRepository } from "../repositories/mediaMetadataRepository.js";
 import { DocumentRepository } from "../repositories/documentRepository.js";
+import { PreferencesRepository } from "../repositories/preferencesRepository.js";
+import { PreferencesService } from "../services/preferencesService.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
 import { TextJobError } from "../lib/text/processTextJob.js";
@@ -54,6 +56,7 @@ async function main () {
   const bundleRepository = new BundleRepository(prisma);
   const metadataRepository = new MediaMetadataRepository(prisma);
   const documentRepository = new DocumentRepository(prisma);
+  const preferencesService = new PreferencesService(new PreferencesRepository(prisma));
 
   const ocrLogger = logger.child({ queue: OCR_QUEUE, jobName: "ocr" });
   const thumbLogger = logger.child({ queue: THUMB_QUEUE, jobName: "thumb" });
@@ -87,6 +90,7 @@ async function main () {
     createThumbProcessor({
       prismaMedia: mediaRepository,
       metadataRepository,
+      preferencesService,
       s3,
       bucket: BUCKET,
       logger: thumbLogger,

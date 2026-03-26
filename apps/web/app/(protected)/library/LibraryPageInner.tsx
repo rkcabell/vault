@@ -71,11 +71,9 @@ type MediaListResponse = {
   items: MediaListItem[];
   nextCursor?: string | null;
   totalCount?: number;
+  hasExtractedItems?: boolean;
 };
 
-type BundlesListResponse = {
-  bundles?: Array<{ isUnpackedArchive?: boolean }>;
-};
 
 async function readErrorMessage(response: Response) {
   try {
@@ -354,6 +352,11 @@ export default function LibraryPageInner() {
 
         if (requestId !== fetchIdRef.current) return;
 
+        if (res.status === 401) {
+          router.push("/auth");
+          return;
+        }
+
         if (!res.ok) {
           const msg = await readErrorMessage(res);
           if (requestId !== fetchIdRef.current) return;
@@ -381,6 +384,7 @@ export default function LibraryPageInner() {
 
         setNextCursor(data.nextCursor ?? null);
         if (!append && data.totalCount !== undefined) setTotalCount(data.totalCount);
+        if (!append && data.hasExtractedItems !== undefined) setHasUnpackedArchiveBundles(data.hasExtractedItems);
         setError(null);
       } catch (err) {
         if (requestId !== fetchIdRef.current) return;
@@ -393,23 +397,8 @@ export default function LibraryPageInner() {
         }
       }
     },
-    [buildQuery, hydrateItems]
+    [buildQuery, hydrateItems, router]
   );
-
-  const refreshUnpackedArchiveBundleState = useCallback(async () => {
-    try {
-      const res = await fetch("/api/bundles", {
-        method: "GET",
-        credentials: "include",
-      });
-      if (!res.ok) return;
-      const data = (await res.json()) as BundlesListResponse;
-      const hasAny = (data.bundles ?? []).some(bundle => bundle.isUnpackedArchive === true);
-      setHasUnpackedArchiveBundles(hasAny);
-    } catch {
-      // Ignore: this only controls a convenience toggle.
-    }
-  }, []);
 
   // Keep a stable ref to the latest fetchMedia so effects can call it without
   // re-running on layout-only preference changes (e.g. grid column density).
@@ -435,12 +424,13 @@ export default function LibraryPageInner() {
     fetchMediaRef.current();
   }, [excludeTagsParam, hasHandledRefreshParam, hideUnpackedItems, q, refreshToken, sort, tagsParam, textState, thumbState]);
 
+  // On bundle mutations, do a silent re-fetch — this also refreshes hasExtractedItems
+  // (previously a separate pair of probing requests).
   useEffect(() => {
-    void refreshUnpackedArchiveBundleState();
-    const handler = () => { void refreshUnpackedArchiveBundleState(); };
+    const handler = () => { fetchMediaRef.current({ silent: true }); };
     window.addEventListener(BUNDLES_UPDATED_EVENT, handler);
     return () => window.removeEventListener(BUNDLES_UPDATED_EVENT, handler);
-  }, [refreshUnpackedArchiveBundleState]);
+  }, []);
 
   // Fetch tag options when the panel is opened.
   useEffect(() => {
@@ -489,13 +479,6 @@ export default function LibraryPageInner() {
   // version without causing reconnects on every buildQuery/gridCols change.
   useEffect(() => {
     const es = new EventSource("/api/media/events");
-
-    // Once the SSE connection is fully established on the server, do a silent
-    // re-fetch to catch any items that finished processing in the window between
-    // the initial fetchMedia call and the SSE listener being registered.
-    es.onopen = () => {
-      fetchMediaRef.current({ silent: true });
-    };
 
     es.onmessage = (e: MessageEvent<string>) => {
       try {
@@ -1027,7 +1010,7 @@ export default function LibraryPageInner() {
             </div>
           )}
 
-          {!tag && hasUnpackedArchiveBundles && (
+          {!tag && !q && hasUnpackedArchiveBundles && (
             <div>
               <Button
                 variant={hideUnpackedItems ? "outline" : "default"}

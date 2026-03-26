@@ -12,7 +12,6 @@ const preferencesSchema = z
     autoTagOnUpload: z.boolean().optional(),
     extractMetadata: z.boolean().optional(),
     detectDuplicates: z.boolean().optional(),
-    collapseMetadataByDefault: z.boolean().optional(),
     lowMemoryMode: z.boolean().optional(),
     autoUnpackArchives: z.boolean().optional(),
     hideUnpackedItems: z.boolean().optional(),

@@ -7,7 +7,6 @@ export type Preferences = {
   autoTagOnUpload: boolean;
   extractMetadata: boolean;
   detectDuplicates: boolean;
-  collapseMetadataByDefault: boolean;
   lowMemoryMode: boolean;
   autoUnpackArchives: boolean;
   hideUnpackedItems: boolean;
@@ -24,7 +23,6 @@ export const DEFAULT_PREFERENCES: Preferences = {
   autoTagOnUpload: true,
   extractMetadata: true,
   detectDuplicates: false,
-  collapseMetadataByDefault: true,
   lowMemoryMode: false,
   autoUnpackArchives: false,
   hideUnpackedItems: false,

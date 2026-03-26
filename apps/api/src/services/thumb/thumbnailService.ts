@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { GetObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import type { Logger } from "pino";
@@ -12,9 +13,12 @@ import { renderHeicThumbnail } from "./renderHeicThumbnail.js";
 import { computeThumbKey, type ThumbJob } from "../../queues/enqueueThumbnail.js";
 import { extractMetadataFromBuffer } from "../media/metadata/extractMediaMetadata.js";
 
+type PrefsLookup = { getPreferences: (userId: string) => Promise<{ extractMetadata?: boolean; detectDuplicates?: boolean }> };
+
 export type ThumbDeps = {
   prismaMedia: MediaRepository;
   metadataRepository?: MediaMetadataRepository;
+  preferencesService?: PrefsLookup;
   s3: S3Client;
   bucket: string;
   logger: Logger;
@@ -156,14 +160,38 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   let inputForSharp: Buffer = original;
   const mimeType = existing?.mimeType ?? "";
 
+  // Fetch user preferences once — used for extractMetadata and detectDuplicates gates.
+  const prefs = deps.preferencesService && job.userId
+    ? await deps.preferencesService.getPreferences(job.userId).catch(() => null)
+    : null;
+
   // Extract and persist file metadata from the buffer we already have.
   // Non-fatal: a metadata failure must never fail the thumbnail job.
-  if (deps.metadataRepository && mimeType) {
+  // Skipped when the user has disabled extractMetadata (privacy — avoids storing EXIF/GPS).
+  if (deps.metadataRepository && mimeType && prefs?.extractMetadata !== false) {
     extractMetadataFromBuffer(original, mimeType)
       .then((meta) => {
         if (meta) return deps.metadataRepository!.upsert(job.mediaId, meta);
       })
       .catch((err: unknown) => logger.warn({ err, mediaId: job.mediaId }, "metadata extraction failed"));
+  }
+
+  // Compute SHA-256 hash, store it, and tag duplicates when detectDuplicates is enabled.
+  // Non-fatal: hash/duplicate failures must never fail the thumbnail job.
+  try {
+    const contentHash = crypto.createHash("sha256").update(original).digest("hex");
+    await prismaMedia.setContentHash(job.mediaId, contentHash);
+    if (prefs?.detectDuplicates && job.userId) {
+      const existing2 = await prismaMedia.findDuplicateByHash(job.userId, contentHash, job.mediaId);
+      if (existing2) {
+        await Promise.all([
+          prismaMedia.addTagIfAbsent(job.mediaId, "duplicate"),
+          prismaMedia.addTagIfAbsent(existing2.id, "duplicate"),
+        ]);
+      }
+    }
+  } catch (err: unknown) {
+    logger.warn({ err, mediaId: job.mediaId }, "hash/duplicate check failed");
   }
   const targetWidth = Math.min(1600, Math.max(800, size * 3));
 

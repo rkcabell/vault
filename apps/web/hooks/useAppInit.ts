@@ -64,8 +64,11 @@ function _initOnce() {
 export function useAppInit() {
   const [, rerender] = useState(0);
 
+  // Called in render body (not just on mount) so a reset → re-render triggers
+  // a fresh fetch for the newly logged-in user without needing a full page reload.
+  _initOnce();
+
   useEffect(() => {
-    _initOnce();
     const listener = () => rerender(n => n + 1);
     _listeners.add(listener);
     rerender(n => n + 1);
@@ -73,6 +76,15 @@ export function useAppInit() {
   }, []);
 
   return { data: _data, isLoaded: _isLoaded, unauthenticated: _unauthenticated };
+}
+
+/** Resets all singleton state — call on logout so the next login gets a fresh fetch. */
+export function resetAppInit() {
+  _data = null;
+  _isLoaded = false;
+  _initialized = false;
+  _unauthenticated = false;
+  _notify();
 }
 
 /** Synchronous accessor for other modules that don't need reactivity. */
