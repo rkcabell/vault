@@ -58,7 +58,7 @@ Should work right out of the box
 1. git clone https://github.com/rkcabell/vault.git
 2. cd vault
 3. bash scripts/setup.sh
-4. npm run boot
+4. npm run start
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
@@ -155,7 +155,7 @@ npm -w api run worker:dev    # OCR + thumbnail workers
 | Command                     | Description                                                      |
 | --------------------------- | ---------------------------------------------------------------- |
 | `npm run boot`              | Start API + web + worker in dev mode (hot reload)                |
-| `npm run start`             | Start infrastructure, then run API + web + worker (no hot reload) |
+| `npm run start`             | Build, start infrastructure, and run API + web + worker           |
 | `npm run api:dev`           | Start API server only (hot reload)                               |
 | `npm run web:dev`           | Start web app only (hot reload)                                  |
 | `npm -w api run worker:dev` | Start background workers only (hot reload)                       |
