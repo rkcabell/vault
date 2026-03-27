@@ -8,7 +8,8 @@ export async function initUpload (
   filename: string,
   mimeType: string,
   sizeBytes?: number,
-  title?: string
+  title?: string,
+  autoTagOnUpload?: boolean,
 ): Promise<InitUploadResp> {
   const res = await fetch(`${API_BASE}/api/media`, {
     method: 'POST',
@@ -19,7 +20,8 @@ export async function initUpload (
       mimeType,
       sizeBytes: sizeBytes ?? 0,
       title: title ?? filename,
-      tags: []
+      tags: [],
+      ...(autoTagOnUpload !== undefined ? { autoTagOnUpload } : {}),
     })
   })
 

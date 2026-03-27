@@ -120,8 +120,45 @@ export class MediaRepository {
     });
   }
 
+  /** Build the shared WHERE conditions for all raw media queries. Returns conditions, params,
+   *  and the next available param index so callers can continue appending. */
+  private _buildMediaFilterConditions (
+    filters: Pick<MediaListFilters, "userId" | "queryText" | "tags" | "excludeTags" | "thumbState" | "textState" | "mimeTypePrefix" | "excludeUnpacked">
+  ): { conditions: string[]; params: unknown[]; p: number } {
+    const { userId, queryText, tags, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    const conditions: string[] = [`m."userId" = $1`];
+    const params: unknown[] = [userId];
+    let p = 2;
+
+    if (tags?.length) {
+      const tagPlaceholders = tags.map(() => `$${p++}`).join(", ");
+      conditions.push(`ARRAY(SELECT lower(t) FROM unnest(m.tags) AS t) @> ARRAY[${tagPlaceholders}]::text[]`);
+      params.push(...tags.map(t => t.toLowerCase()));
+    }
+
+    if (excludeTags?.length) {
+      for (const t of excludeTags) {
+        conditions.push(`NOT ($${p++} = ANY(ARRAY(SELECT lower(x) FROM unnest(m.tags) AS x)))`);
+        params.push(t.toLowerCase());
+      }
+    }
+
+    if (queryText) {
+      // $p is used twice in the OR — Postgres reuses the same bound value.
+      conditions.push(`(m.title ILIKE $${p} OR EXISTS (SELECT 1 FROM "Document" d WHERE d."mediaId" = m.id AND d."rawText" ILIKE $${p}))`);
+      params.push(`%${queryText}%`);
+      p++;
+    }
+    if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
+    if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
+    if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
+    if (excludeUnpacked) conditions.push(`m."isExtractedFromArchive" = false`);
+
+    return { conditions, params, p };
+  }
+
   private async _listMediaRaw (filters: MediaListFilters) {
-    const { userId, queryText, tags, excludeTags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor, excludeUnpacked } = filters;
+    const { orderBy, take, cursor } = filters;
 
     // Derive sort column and direction from the Prisma orderBy structure.
     // buildOrderBy always puts the primary column first; the tiebreaker id second.
@@ -152,36 +189,9 @@ export class MediaRepository {
       cursorId = row.id as string;
     }
 
-    // Build WHERE conditions; all user-supplied values are bound as $n params.
-    const conditions: string[] = [`m."userId" = $1`];
-    const params: unknown[] = [userId];
-    let p = 2;
-
-    // Tag include condition: all specified tags must be present (case-insensitive).
-    if (tags?.length) {
-      const tagPlaceholders = tags.map(() => `$${p++}`).join(", ");
-      conditions.push(`ARRAY(SELECT lower(t) FROM unnest(m.tags) AS t) @> ARRAY[${tagPlaceholders}]::text[]`);
-      params.push(...tags.map(t => t.toLowerCase()));
-    }
-
-    // Tag exclude conditions: item must not have any of these tags.
-    if (excludeTags?.length) {
-      for (const t of excludeTags) {
-        conditions.push(`NOT ($${p++} = ANY(ARRAY(SELECT lower(x) FROM unnest(m.tags) AS x)))`);
-        params.push(t.toLowerCase());
-      }
-    }
-
-    if (queryText) {
-      // $p is used twice in the OR — Postgres reuses the same bound value.
-      conditions.push(`(m.title ILIKE $${p} OR EXISTS (SELECT 1 FROM "Document" d WHERE d."mediaId" = m.id AND d."rawText" ILIKE $${p}))`);
-      params.push(`%${queryText}%`);
-      p++;
-    }
-    if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
-    if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
-    if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
-    if (excludeUnpacked) conditions.push(`m."isExtractedFromArchive" = false`);
+    // Build shared WHERE conditions.
+    const { conditions, params, p: pAfterFilters } = this._buildMediaFilterConditions(filters);
+    let p = pAfterFilters;
 
     if (cursorId !== null) {
       // Keyset: (col, id) cmp (cursorColVal, cursorId). $p is reused for col equality.
@@ -232,34 +242,7 @@ export class MediaRepository {
   }
 
   private async _countMediaRaw (filters: MediaListFilters): Promise<number> {
-    const { userId, queryText, tags, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
-    const conditions: string[] = [`m."userId" = $1`];
-    const params: unknown[] = [userId];
-    let p = 2;
-
-    if (tags?.length) {
-      const tagPlaceholders = tags.map(() => `$${p++}`).join(", ");
-      conditions.push(`ARRAY(SELECT lower(t) FROM unnest(m.tags) AS t) @> ARRAY[${tagPlaceholders}]::text[]`);
-      params.push(...tags.map(t => t.toLowerCase()));
-    }
-
-    if (excludeTags?.length) {
-      for (const t of excludeTags) {
-        conditions.push(`NOT ($${p++} = ANY(ARRAY(SELECT lower(x) FROM unnest(m.tags) AS x)))`);
-        params.push(t.toLowerCase());
-      }
-    }
-
-    if (queryText) {
-      conditions.push(`(m.title ILIKE $${p} OR EXISTS (SELECT 1 FROM "Document" d WHERE d."mediaId" = m.id AND d."rawText" ILIKE $${p}))`);
-      params.push(`%${queryText}%`);
-      p++;
-    }
-    if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
-    if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
-    if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
-    if (excludeUnpacked) conditions.push(`m."isExtractedFromArchive" = false`);
-
+    const { conditions, params } = this._buildMediaFilterConditions(filters);
     const sql = `SELECT COUNT(*)::int AS count FROM "Media" m WHERE ${conditions.join(" AND ")}`;
     const result = await this.prisma.$queryRawUnsafe<[{ count: number }]>(sql, ...params);
     return result[0]?.count ?? 0;
@@ -299,32 +282,7 @@ export class MediaRepository {
   }
 
   private async _listAllMediaIdsRaw (filters: Omit<MediaListFilters, "orderBy" | "take" | "cursor">): Promise<string[]> {
-    const { userId, queryText, tags, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
-    const conditions: string[] = [`m."userId" = $1`];
-    const params: unknown[] = [userId];
-    let p = 2;
-
-    if (tags?.length) {
-      const tagPlaceholders = tags.map(() => `$${p++}`).join(", ");
-      conditions.push(`ARRAY(SELECT lower(t) FROM unnest(m.tags) AS t) @> ARRAY[${tagPlaceholders}]::text[]`);
-      params.push(...tags.map(t => t.toLowerCase()));
-    }
-    if (excludeTags?.length) {
-      for (const t of excludeTags) {
-        conditions.push(`NOT ($${p++} = ANY(ARRAY(SELECT lower(x) FROM unnest(m.tags) AS x)))`);
-        params.push(t.toLowerCase());
-      }
-    }
-    if (queryText) {
-      conditions.push(`(m.title ILIKE $${p} OR EXISTS (SELECT 1 FROM "Document" d WHERE d."mediaId" = m.id AND d."rawText" ILIKE $${p}))`);
-      params.push(`%${queryText}%`);
-      p++;
-    }
-    if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
-    if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
-    if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
-    if (excludeUnpacked) conditions.push(`m."isExtractedFromArchive" = false`);
-
+    const { conditions, params } = this._buildMediaFilterConditions(filters);
     const sql = `SELECT m.id FROM "Media" m WHERE ${conditions.join(" AND ")}`;
     const result = await this.prisma.$queryRawUnsafe<{ id: string }[]>(sql, ...params);
     return result.map(r => r.id);

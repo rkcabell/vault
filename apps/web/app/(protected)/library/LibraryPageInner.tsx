@@ -85,6 +85,25 @@ async function readErrorMessage(response: Response) {
   return `Failed to load media (${response.status})`;
 }
 
+function applyFilterParams(
+  params: URLSearchParams,
+  opts: {
+    q: string;
+    includedTagsList: string[];
+    excludedTagsList: string[];
+    thumbState: string;
+    textState: string;
+    hideUnpackedItems: boolean;
+  },
+) {
+  if (opts.q) params.set("q", opts.q);
+  if (opts.includedTagsList.length > 0) params.set("tags", opts.includedTagsList.join(","));
+  if (opts.excludedTagsList.length > 0) params.set("excludeTags", opts.excludedTagsList.join(","));
+  if (opts.thumbState) params.set("thumbState", opts.thumbState);
+  if (opts.textState) params.set("textState", opts.textState);
+  if (opts.hideUnpackedItems && !opts.q && opts.includedTagsList.length === 0) params.set("excludeUnpacked", "1");
+}
+
 export default function LibraryPageInner() {
   const router = useRouter();
 
@@ -224,12 +243,7 @@ export default function LibraryPageInner() {
       const params = new URLSearchParams();
       params.set("limit", String(itemLimit));
       params.set("sort", sort);
-      if (q) params.set("q", q);
-      if (includedTagsList.length > 0) params.set("tags", includedTagsList.join(","));
-      if (excludedTagsList.length > 0) params.set("excludeTags", excludedTagsList.join(","));
-      if (thumbState) params.set("thumbState", thumbState);
-      if (textState) params.set("textState", textState);
-      if (hideUnpackedItems && !q && includedTagsList.length === 0) params.set("excludeUnpacked", "1");
+      applyFilterParams(params, { q, includedTagsList, excludedTagsList, thumbState, textState, hideUnpackedItems });
       if (cursor) params.set("cursor", cursor);
       return params.toString();
     },
@@ -238,12 +252,7 @@ export default function LibraryPageInner() {
 
   const buildDeleteAllQuery = useCallback(() => {
     const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    if (includedTagsList.length > 0) params.set("tags", includedTagsList.join(","));
-    if (excludedTagsList.length > 0) params.set("excludeTags", excludedTagsList.join(","));
-    if (thumbState) params.set("thumbState", thumbState);
-    if (textState) params.set("textState", textState);
-    if (hideUnpackedItems && !q && includedTagsList.length === 0) params.set("excludeUnpacked", "1");
+    applyFilterParams(params, { q, includedTagsList, excludedTagsList, thumbState, textState, hideUnpackedItems });
     return params.toString();
   }, [excludedTagsList, hideUnpackedItems, includedTagsList, q, textState, thumbState]);
 

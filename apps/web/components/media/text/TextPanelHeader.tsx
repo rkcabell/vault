@@ -48,7 +48,7 @@ export function TextPanelHeader (props: {
         <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
           <Badge
             variant={statusChip.variant}
-            className='rounded-full px-3 py-1 text-[11px]'
+            className='rounded-full px-3 py-1 text-[11px] pointer-events-none'
           >
             {statusChip.label}
           </Badge>

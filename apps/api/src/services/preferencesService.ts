@@ -1,36 +1,5 @@
 import type { PreferencesRepository } from "../repositories/preferencesRepository.js";
-
-export type Preferences = {
-  libraryViewMode: "grid" | "list";
-  libraryGridCols: 4 | 5 | 6 | 7 | 8;
-  libraryIsCompactList: boolean;
-  autoTagOnUpload: boolean;
-  extractMetadata: boolean;
-  detectDuplicates: boolean;
-  lowMemoryMode: boolean;
-  autoUnpackArchives: boolean;
-  hideUnpackedItems: boolean;
-  soonWindowDays: number;
-  themePreference: "system" | "light" | "dark";
-  lightTheme: string;
-  darkTheme: string;
-};
-
-export const DEFAULT_PREFERENCES: Preferences = {
-  libraryViewMode: "grid",
-  libraryGridCols: 5,
-  libraryIsCompactList: false,
-  autoTagOnUpload: true,
-  extractMetadata: true,
-  detectDuplicates: false,
-  lowMemoryMode: false,
-  autoUnpackArchives: false,
-  hideUnpackedItems: false,
-  soonWindowDays: 7,
-  themePreference: "system",
-  lightTheme: "default",
-  darkTheme: "new-moon",
-};
+import { type Preferences, DEFAULT_PREFERENCES } from "@vault/types";
 
 export class PreferencesService {
   constructor(private readonly repo: PreferencesRepository) {}

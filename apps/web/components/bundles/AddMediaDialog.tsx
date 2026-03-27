@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import type { MediaWorkerState } from '@/lib/media/types';
 import { getBundleIcon, DEFAULT_BUNDLE_ICON } from '@/lib/bundleIcons';
+import { httpStatusMessage } from '@/lib/http';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,8 @@ export function AddMediaDialog({
   const [tagSearch, setTagSearch] = useState('');
   const [activeType, setActiveType] = useState<ActiveType>(null);
   const [fetchedExistingIds, setFetchedExistingIds] = useState<Set<string>>(new Set());
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
   const loadingMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -103,6 +106,7 @@ export function AddMediaDialog({
     const controller = new AbortController();
     searchAbortRef.current = controller;
     setIsSearching(true);
+    setSearchError(null);
     setResults([]);
     setNextCursor(null);
     setHasMore(false);
@@ -111,14 +115,19 @@ export function AddMediaDialog({
         credentials: 'include',
         signal: controller.signal,
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (searchAbortRef.current === controller) setSearchError(`Could not load media: ${httpStatusMessage(res.status)}`);
+        return;
+      }
       const data = (await res.json()) as { items: PickerItem[]; nextCursor: string | null };
       if (searchAbortRef.current !== controller) return;
       setResults(data.items ?? []);
       setNextCursor(data.nextCursor ?? null);
       setHasMore(!!data.nextCursor);
-    } catch {
-      // aborted or error
+    } catch (e) {
+      if (e instanceof Error && e.name !== 'AbortError' && searchAbortRef.current === controller) {
+        setSearchError('Could not load media — check your connection.');
+      }
     } finally {
       if (searchAbortRef.current === controller) setIsSearching(false);
     }
@@ -128,15 +137,19 @@ export function AddMediaDialog({
     if (loadingMoreRef.current) return;
     loadingMoreRef.current = true;
     setIsLoadingMore(true);
+    setLoadMoreError(null);
     try {
       const res = await fetch(`/api/media?${buildQS(q, tags, excludeTags, type, cursor)}`, { credentials: 'include' });
-      if (!res.ok) return;
+      if (!res.ok) {
+        setLoadMoreError(`Could not load more: ${httpStatusMessage(res.status)}`);
+        return;
+      }
       const data = (await res.json()) as { items: PickerItem[]; nextCursor: string | null };
       setResults(prev => [...prev, ...(data.items ?? [])]);
       setNextCursor(data.nextCursor ?? null);
       setHasMore(!!data.nextCursor);
     } catch {
-      // error
+      setLoadMoreError('Could not load more — check your connection.');
     } finally {
       loadingMoreRef.current = false;
       setIsLoadingMore(false);
@@ -152,6 +165,8 @@ export function AddMediaDialog({
       setExcludeActiveTags(new Set());
       setTagSearch('');
       setActiveType(null);
+      setSearchError(null);
+      setLoadMoreError(null);
       void freshSearch('', new Set(), new Set(), null);
       fetch('/api/tags?limit=200', { credentials: 'include' })
         .then(r => r.ok ? r.json() : { tags: [] })
@@ -343,7 +358,7 @@ export function AddMediaDialog({
 
         {/* Results grid */}
         <div className="flex-1 overflow-y-auto p-4">
-          {!isSearching && (
+          {!isSearching && !searchError && (
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs text-muted-foreground">
                 {results.length === 0
@@ -380,6 +395,8 @@ export function AddMediaDialog({
             <div className="flex items-center justify-center py-10">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
+          ) : searchError ? (
+            <p className="py-10 text-center text-sm text-destructive">{searchError}</p>
           ) : results.length === 0 ? null : (
             <>
               <div className="grid grid-cols-5 gap-2">
@@ -435,6 +452,7 @@ export function AddMediaDialog({
               {/* Infinite scroll sentinel */}
               <div ref={sentinelRef} className="h-8 flex items-center justify-center mt-2">
                 {isLoadingMore && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                {loadMoreError && <p className="text-xs text-destructive">{loadMoreError}</p>}
               </div>
             </>
           )}

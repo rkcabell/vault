@@ -10,6 +10,8 @@ interface DialogProps {
 }
 
 function Dialog({ open, onOpenChange, children }: DialogProps) {
+  const mouseDownOnBackdrop = React.useRef(false);
+
   React.useEffect(() => {
     if (open) {
       document.body.style.overflow = 'hidden';
@@ -36,7 +38,8 @@ function Dialog({ open, onOpenChange, children }: DialogProps) {
   return ReactDOM.createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4 bg-background/80 backdrop-blur-sm"
-      onClick={() => onOpenChange(false)}
+      onMouseDown={(e) => { mouseDownOnBackdrop.current = e.target === e.currentTarget; }}
+      onClick={() => { if (mouseDownOnBackdrop.current) onOpenChange(false); }}
     >
       {children}
     </div>,

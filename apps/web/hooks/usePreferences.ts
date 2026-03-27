@@ -1,41 +1,10 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
+import { type Preferences, type LightTheme, type DarkTheme, DEFAULT_PREFERENCES } from "@vault/types";
 
-export type LightTheme = "default" | "latte" | "sandstone" | "mist" | "lavender" | "dream" | "cotton-candy" | "mint" | "garden";
-export type DarkTheme = "new-moon" | "matrix" | "charcoal" | "solarized";
-
-export type Preferences = {
-  libraryViewMode: "grid" | "list";
-  libraryGridCols: 4 | 5 | 6 | 7 | 8;
-  libraryIsCompactList: boolean;
-  autoTagOnUpload: boolean;
-  extractMetadata: boolean;
-  detectDuplicates: boolean;
-  lowMemoryMode: boolean;
-  autoUnpackArchives: boolean;
-  hideUnpackedItems: boolean;
-  soonWindowDays: number;
-  themePreference: "system" | "light" | "dark";
-  lightTheme: LightTheme;
-  darkTheme: DarkTheme;
-};
-
-export const DEFAULT_PREFERENCES: Preferences = {
-  libraryViewMode: "grid",
-  libraryGridCols: 5,
-  libraryIsCompactList: false,
-  autoTagOnUpload: true,
-  extractMetadata: true,
-  detectDuplicates: false,
-  lowMemoryMode: false,
-  autoUnpackArchives: false,
-  hideUnpackedItems: false,
-  soonWindowDays: 7,
-  themePreference: "system",
-  lightTheme: "default",
-  darkTheme: "new-moon",
-};
+export type { LightTheme, DarkTheme, Preferences };
+export { DEFAULT_PREFERENCES };
 
 const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
   libraryViewMode: "library:viewMode",
@@ -56,44 +25,26 @@ const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
 function readFromLocalStorage(): Partial<Preferences> {
   const out: Partial<Preferences> = {};
   try {
-    const viewMode = localStorage.getItem("library:viewMode");
-    if (viewMode === "grid" || viewMode === "list") out.libraryViewMode = viewMode;
-
-    const gridCols = Number(localStorage.getItem("library:gridCols"));
-    if ([4, 5, 6, 7, 8].includes(gridCols)) out.libraryGridCols = gridCols as Preferences["libraryGridCols"];
-
-    const compactList = localStorage.getItem("library:isCompactList");
-    if (compactList !== null) out.libraryIsCompactList = compactList === "true";
-
-    const autoTag = localStorage.getItem("prefs:autoTagOnUpload");
-    if (autoTag !== null) out.autoTagOnUpload = autoTag === "true";
-
-    const extractMeta = localStorage.getItem("prefs:extractMetadata");
-    if (extractMeta !== null) out.extractMetadata = extractMeta === "true";
-
-    const detectDups = localStorage.getItem("prefs:detectDuplicates");
-    if (detectDups !== null) out.detectDuplicates = detectDups === "true";
-
-    const lowMemory = localStorage.getItem("prefs:lowMemoryMode");
-    if (lowMemory !== null) out.lowMemoryMode = lowMemory === "true";
-
-    const autoUnpack = localStorage.getItem("prefs:autoUnpackArchives");
-    if (autoUnpack !== null) out.autoUnpackArchives = autoUnpack === "true";
-
-    const hideZip = localStorage.getItem("prefs:hideUnpackedItems");
-    if (hideZip !== null) out.hideUnpackedItems = hideZip === "true";
-
-    const soonWindowDays = Number(localStorage.getItem("prefs:soonWindowDays"));
-    if (soonWindowDays >= 2 && soonWindowDays <= 14) out.soonWindowDays = soonWindowDays;
-
-    const theme = localStorage.getItem("prefs:themePreference");
-    if (theme === "system" || theme === "light" || theme === "dark") out.themePreference = theme;
-
-    const lightTheme = localStorage.getItem("prefs:lightTheme");
-    if (lightTheme === "default" || lightTheme === "latte" || lightTheme === "sandstone" || lightTheme === "mist" || lightTheme === "lavender" || lightTheme === "dream" || lightTheme === "cotton-candy" || lightTheme === "mint" || lightTheme === "garden") out.lightTheme = lightTheme;
-
-    const darkTheme = localStorage.getItem("prefs:darkTheme");
-    if (darkTheme === "new-moon" || darkTheme === "matrix" || darkTheme === "charcoal" || darkTheme === "solarized") out.darkTheme = darkTheme;
+    for (const [key, lsKey] of Object.entries(LS_KEYS) as [keyof Preferences, string][]) {
+      const raw = localStorage.getItem(lsKey);
+      if (raw === null) continue;
+      const defaultVal = DEFAULT_PREFERENCES[key];
+      if (typeof defaultVal === "boolean") {
+        (out as Record<string, unknown>)[key] = raw === "true";
+      } else if (typeof defaultVal === "number") {
+        const n = Number(raw);
+        if (!isNaN(n)) (out as Record<string, unknown>)[key] = n;
+      } else {
+        (out as Record<string, unknown>)[key] = raw;
+      }
+    }
+    // Post-validate values that have restricted allowlists or ranges
+    if (out.libraryViewMode !== undefined && !["grid", "list"].includes(out.libraryViewMode)) delete out.libraryViewMode;
+    if (out.libraryGridCols !== undefined && ![4, 5, 6, 7, 8].includes(out.libraryGridCols)) delete out.libraryGridCols;
+    if (out.soonWindowDays !== undefined && (out.soonWindowDays < 2 || out.soonWindowDays > 14)) delete out.soonWindowDays;
+    if (out.themePreference !== undefined && !["system", "light", "dark"].includes(out.themePreference)) delete out.themePreference;
+    if (out.lightTheme !== undefined && !["default", "latte", "sandstone", "mist", "lavender", "dream", "cotton-candy", "mint", "garden"].includes(out.lightTheme)) delete out.lightTheme;
+    if (out.darkTheme !== undefined && !["new-moon", "matrix", "charcoal", "solarized"].includes(out.darkTheme)) delete out.darkTheme;
   } catch {
     // ignore
   }

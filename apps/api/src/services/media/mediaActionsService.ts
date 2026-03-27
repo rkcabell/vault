@@ -13,6 +13,7 @@ import { enqueueOcrBulk } from "../../queues/enqueueOcr.js";
 import { makeStorageKey } from "../../lib/media/keys.js";
 import { extractArchive, isCoverCandidate } from "../archive/extractArchive.js";
 import { normalizeTag } from "../../lib/tags/normalizeTags.js";
+import { ARCHIVE_MIME_TYPES } from "../../lib/media/archiveTypes.js";
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/jpeg": ".jpg",
@@ -116,16 +117,6 @@ export type TextExtractionOptions = {
   forceOcr?: boolean;
 };
 
-export const ARCHIVE_MIME_TYPES = new Set([
-  "application/zip",
-  "application/x-zip-compressed",
-  "application/x-tar",
-  "application/gzip",
-  "application/x-gzip",
-  "application/x-7z-compressed",
-  "application/x-rar-compressed",
-  "application/vnd.rar",
-]);
 
 type MediaActionsDeps = {
   repository: MediaRepository;
@@ -289,7 +280,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
   const unpackArchive = async (
     userId: string,
     mediaId: string,
-  ): Promise<{ bundleId: string } | null | "already-linked"> => {
+  ): Promise<{ bundleId: string } | null | "already-linked" | "not-archive"> => {
     // Load the media item including its mimeType and title
     const media = await deps.repository.findDetail(userId, mediaId);
     if (!media) return null;
@@ -299,7 +290,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     if ((media as any).linkedBundleId) return "already-linked";
 
     // Only proceed for recognised archive types (ZIP, TAR, GZ)
-    if (!ARCHIVE_MIME_TYPES.has(media.mimeType)) return null;
+    if (!ARCHIVE_MIME_TYPES.has(media.mimeType)) return "not-archive";
 
     // Fetch the archive stream from S3
     const s3Result = await deps.s3Adapter.getObjectStream({ bucket: deps.bucket, key: media.storageKey });

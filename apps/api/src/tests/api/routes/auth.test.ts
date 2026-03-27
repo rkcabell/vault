@@ -19,7 +19,9 @@ type UserRow = {
 
 interface PrismaMockOpts {
   userFindUnique?: (args: unknown) => Promise<UserRow | null>;
+  userFindFirst?: (args: unknown) => Promise<{ id: string; email: string } | null>;
   userCreate?: (args: unknown) => Promise<{ id: string; email: string }>;
+  userUpdate?: (args: unknown) => Promise<unknown>;
 }
 
 interface JwtMockOpts {
@@ -31,9 +33,18 @@ interface JwtMockOpts {
 
 function makePrisma({
   userFindUnique = async () => null,
+  userFindFirst = async () => null,
   userCreate = async () => ({ id: "user-1", email: "u@example.com" }),
+  userUpdate = async () => ({}),
 }: PrismaMockOpts = {}) {
-  return { user: { findUnique: userFindUnique, create: userCreate } };
+  return {
+    user: {
+      findUnique: userFindUnique,
+      findFirst: userFindFirst,
+      create: userCreate,
+      update: userUpdate,
+    },
+  };
 }
 
 function makeJwt({
@@ -312,4 +323,123 @@ test("POST /refresh: invalid token returns 401", async () => {
 
   assert.equal(res.statusCode, 401);
   assert.match(res.json().message, /invalid or expired/i);
+});
+
+// ── POST /forgot-password ─────────────────────────────────────────────────────
+
+test("POST /forgot-password: known email returns token", async () => {
+  const app = await buildApp({
+    prisma: {
+      userFindUnique: async () => ({
+        id: "user-1", email: "u@example.com", passwordHash: "h", name: null, username: null,
+      }),
+      userUpdate: async () => ({}),
+    },
+  });
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/forgot-password",
+    headers: JSON_CT,
+    payload: JSON.stringify({ email: "u@example.com" }),
+  });
+
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.ok(typeof body.token === "string" && body.token.length > 0, "token must be a non-empty string");
+});
+
+test("POST /forgot-password: unknown email returns empty object (no token leakage)", async () => {
+  const app = await buildApp({
+    prisma: { userFindUnique: async () => null },
+  });
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/forgot-password",
+    headers: JSON_CT,
+    payload: JSON.stringify({ email: "nobody@example.com" }),
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), {});
+});
+
+test("POST /forgot-password: invalid email format returns empty object (not 400)", async () => {
+  const app = await buildApp();
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/forgot-password",
+    headers: JSON_CT,
+    payload: JSON.stringify({ email: "not-an-email" }),
+  });
+
+  // Route silently ignores invalid input to avoid user enumeration
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), {});
+});
+
+// ── POST /reset-password ──────────────────────────────────────────────────────
+
+test("POST /reset-password: valid token and password returns success message", async () => {
+  const app = await buildApp({
+    prisma: {
+      userFindFirst: async () => ({ id: "user-1", email: "u@example.com" }),
+      userUpdate: async () => ({}),
+    },
+  });
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/reset-password",
+    headers: JSON_CT,
+    payload: JSON.stringify({ token: "valid-reset-token", password: "newpassword1" }),
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().message, "Password updated");
+});
+
+test("POST /reset-password: unknown or expired token returns 400", async () => {
+  const app = await buildApp({
+    prisma: { userFindFirst: async () => null },
+  });
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/reset-password",
+    headers: JSON_CT,
+    payload: JSON.stringify({ token: "expired-token", password: "newpassword1" }),
+  });
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.json().message, /invalid or has expired/i);
+});
+
+test("POST /reset-password: short password returns 400", async () => {
+  const app = await buildApp();
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/reset-password",
+    headers: JSON_CT,
+    payload: JSON.stringify({ token: "some-token", password: "short" }),
+  });
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.json().message, /8 characters/i);
+});
+
+test("POST /reset-password: missing token field returns 400", async () => {
+  const app = await buildApp();
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/reset-password",
+    headers: JSON_CT,
+    payload: JSON.stringify({ password: "newpassword1" }),
+  });
+
+  assert.equal(res.statusCode, 400);
 });
