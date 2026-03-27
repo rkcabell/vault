@@ -150,21 +150,52 @@ npm -w api run worker:dev    # OCR + thumbnail workers
 
 ## Available Scripts
 
-| Command                     | Description                           |
-| --------------------------- | ------------------------------------- |
-| `npm run boot`              | Start API + web + worker (hot reload) |
-| `npm run api:dev`           | Start API only                        |
-| `npm run web:dev`           | Start web app only                    |
-| `npm -w api run worker:dev` | Start background workers              |
-| `npm run build`             | Build all packages                    |
-| `npm run lint`              | Run ESLint across API and web         |
-| `npm run test:api`          | Run API test suite                    |
-| `npm run prismagen`         | Regenerate Prisma client              |
-| `npm run prismigrate`       | Apply database migrations             |
-| `npm run prismareset`       | Reset database (destructive)          |
-| `npm run localdocker`       | Start infrastructure containers       |
-| `npm run docker:build`      | Build and start full Docker stack     |
-| `npm run docker:logs`       | Tail Docker logs                      |
+### Development
+
+| Command                     | Description                                                      |
+| --------------------------- | ---------------------------------------------------------------- |
+| `npm run boot`              | Start API + web + worker in dev mode (hot reload)                |
+| `npm run start`             | Start infrastructure, then run API + web + worker (no hot reload) |
+| `npm run api:dev`           | Start API server only (hot reload)                               |
+| `npm run web:dev`           | Start web app only (hot reload)                                  |
+| `npm -w api run worker:dev` | Start background workers only (hot reload)                       |
+
+### Build & quality
+
+| Command          | Description                                     |
+| ---------------- | ----------------------------------------------- |
+| `npm run build`  | Build all packages                              |
+| `npm run lint`   | Run ESLint across API and web                   |
+| `npm run sweep`  | Clean, lint, and build all packages             |
+| `npm run clean`  | Remove Next.js build output                     |
+
+### Testing
+
+| Command             | Description                                  |
+| ------------------- | -------------------------------------------- |
+| `npm run test`      | Run full test suite (API + web)              |
+| `npm run test:api`  | Run API tests and generate HTML report       |
+| `npm run test:web`  | Run web tests                                |
+| `npm run coverage`  | Run tests with coverage report               |
+
+### Database
+
+| Command               | Description                              |
+| --------------------- | ---------------------------------------- |
+| `npm run prismagen`   | Regenerate Prisma client                 |
+| `npm run prismigrate` | Apply database migrations                |
+| `npm run prismareset` | Reset database — **destructive**         |
+
+### Infrastructure
+
+| Command                      | Description                                      |
+| ---------------------------- | ------------------------------------------------ |
+| `npm run localdocker`        | Start local infrastructure (Postgres, Redis, MinIO) |
+| `npm run docker:build`       | Build images and start full Docker stack         |
+| `npm run docker:rebuild-clean` | Rebuild images without cache and start stack   |
+| `npm run dockerup`           | Start full Docker stack (no build)               |
+| `npm run dockerdown`         | Stop full Docker stack                           |
+| `npm run docker:logs`        | Tail Docker compose logs                         |
 
 ---
 
@@ -200,4 +231,4 @@ Key endpoint groups:
 
 ## License
 
-Private — all rights reserved.
+[PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal and noncommercial use.
