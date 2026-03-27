@@ -53,6 +53,7 @@ const originalSend = s3.send.bind(s3);
 const originalFindUnique = prisma.media.findUnique.bind(prisma.media);
 const originalUpdateMany = prisma.media.updateMany.bind(prisma.media);
 const originalUpsert = prisma.document.upsert.bind(prisma.document);
+const originalTransaction = (prisma as any).$transaction.bind(prisma);
 
 function mockS3Send (fn: (cmd: any) => any) {
   (s3 as any).send = async (cmd: any) => fn(cmd);
@@ -89,7 +90,17 @@ afterEach(() => {
   (prisma.media as any).findUnique = originalFindUnique;
   (prisma.media as any).updateMany = originalUpdateMany;
   (prisma.document as any).upsert = originalUpsert;
+  (prisma as any).$transaction = originalTransaction;
 });
+
+/** Stub $transaction so addTagIfAbsent never touches the real DB. */
+function mockNoopTransaction () {
+  (prisma as any).$transaction = async (fn: (tx: any) => Promise<void>) =>
+    fn({
+      media: { findUnique: async () => null, update: async () => ({}) },
+      tag:   { upsert: async () => ({}) },
+    });
+}
 
 test("processOcrJob returns when media is missing", async () => {
   let s3Called = false;
@@ -111,6 +122,7 @@ test("processOcrJob writes OCR text for non-PDF media", async () => {
   });
 
   mockMediaFindUnique({ id: "media-1", storageKey: "orig/key", mimeType: "image/png" });
+  mockNoopTransaction();
 
   let upsertArgs: unknown = null;
   mockDocumentUpsert(args => {
