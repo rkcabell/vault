@@ -13,6 +13,7 @@ import {
   DialogFooter,
 } from '@/components/ui/Dialog';
 import { emitBundlesUpdated } from '@/lib/bundles';
+import { httpStatusMessage } from '@/lib/http';
 
 interface BundleSummary {
   id: string;
@@ -44,7 +45,7 @@ export function BulkBundleDialog({ open, onOpenChange, selectedIds, onDone }: Bu
     setNewBundleName('');
     setIsLoading(true);
     fetch('/api/bundles', { credentials: 'include' })
-      .then(res => res.ok ? res.json() as Promise<{ bundles: BundleSummary[] }> : Promise.reject(new Error(`Error ${res.status}`)))
+      .then(res => res.ok ? res.json() as Promise<{ bundles: BundleSummary[] }> : Promise.reject(new Error(`Could not load bundles: ${httpStatusMessage(res.status)}`)))
       .then(data => setBundles(data.bundles ?? []))
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load bundles'))
       .finally(() => setIsLoading(false));
@@ -66,7 +67,7 @@ export function BulkBundleDialog({ open, onOpenChange, selectedIds, onDone }: Bu
           body: JSON.stringify({ name: trimmed }),
         });
         const createData = await createRes.json().catch(() => ({})) as { bundle?: BundleSummary; error?: string };
-        if (!createRes.ok) throw new Error(createData.error ?? `Failed to create bundle (${createRes.status})`);
+        if (!createRes.ok) throw new Error(createData.error ?? `Could not create bundle: ${httpStatusMessage(createRes.status)}`);
         targetId = createData.bundle!.id;
       }
 
@@ -80,7 +81,7 @@ export function BulkBundleDialog({ open, onOpenChange, selectedIds, onDone }: Bu
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(data.error ?? `Failed (${res.status})`);
+        throw new Error(data.error ?? `Could not add to bundle: ${httpStatusMessage(res.status)}`);
       }
       emitBundlesUpdated();
       onDone();

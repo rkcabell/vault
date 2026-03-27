@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Archive, Ban, BookOpen, Check, CheckCircle2, Circle, Download, ExternalLink, File as FileIcon, FileText, Film, MoreVertical, Music, Pencil, Trash2, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ARCHIVE_MIME_TYPES, formatBytes } from '@/lib/media/utils';
 import { Button } from '@/ui/Button';
 import { Input } from '@/ui/Input';
 import { Badge } from '@/ui/Badge';
@@ -58,13 +59,7 @@ function getMediaTypeIcon (mimeType?: string | null): LucideIcon {
   if (m.startsWith("audio/")) return Music;
   if (m === "application/epub+zip") return BookOpen;
   if (m.startsWith("video/")) return Film;
-  if (
-    m === "application/zip" ||
-    m === "application/x-zip-compressed" ||
-    m === "application/x-7z-compressed" ||
-    m === "application/x-rar-compressed" ||
-    m === "application/vnd.rar"
-  ) return Archive;
+  if (ARCHIVE_MIME_TYPES.has(m)) return Archive;
   if (
     m.startsWith("text/") ||
     m === "application/json" ||
@@ -80,13 +75,7 @@ function getFallbackKind (mimeType?: string | null): FallbackKind {
   if (m.startsWith("image/")) return "image";
   if (m === "application/pdf") return "pdf";
   if (m.startsWith("audio/")) return "audio";
-  if (
-    m === "application/zip" ||
-    m === "application/x-zip-compressed" ||
-    m === "application/x-7z-compressed" ||
-    m === "application/x-rar-compressed" ||
-    m === "application/vnd.rar"
-  ) return "archive";
+  if (ARCHIVE_MIME_TYPES.has(m)) return "archive";
   if (
     m.startsWith("application/vnd.oasis.opendocument") ||
     m === "application/json" ||
@@ -98,12 +87,6 @@ function getFallbackKind (mimeType?: string | null): FallbackKind {
 
 
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
 
 function getMimeTypeLabel(mimeType?: string | null, filename?: string | null): string {
   if (!mimeType) {

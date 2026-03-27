@@ -65,34 +65,19 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const userId = req.userId!;
 
-    const bundle = await app.prisma.bundle.findFirst({
-      where: { id, userId },
-      select: {
-        isUnpackedArchive: true,
-        sourceMediaId: true,
-        items: { select: { mediaId: true } },
-      },
-    });
+    const result = await repo.deleteBundleWithCascade(id, userId);
 
-    await repo.deleteBundle(id, userId);
-
-    if (bundle?.sourceMediaId) {
-      await app.prisma.media.updateMany({
-        where: { id: bundle.sourceMediaId },
-        data: { linkedBundleId: null },
-      });
-    }
+    if (!result.found) return reply.notFound();
 
     // If this bundle was created by unpacking an archive, delete all extracted
     // media items that are not members of any other bundle.
-    if (bundle?.isUnpackedArchive && bundle.items.length > 0) {
-      const mediaIds = bundle.items.map(i => i.mediaId);
+    if (result.extractedMediaIds.length > 0) {
       const stillMembered = await app.prisma.bundleItem.findMany({
-        where: { mediaId: { in: mediaIds } },
+        where: { mediaId: { in: result.extractedMediaIds } },
         select: { mediaId: true },
       });
       const stillMemberedSet = new Set(stillMembered.map(r => r.mediaId));
-      const toDelete = mediaIds.filter(mid => !stillMemberedSet.has(mid));
+      const toDelete = result.extractedMediaIds.filter(mid => !stillMemberedSet.has(mid));
       await Promise.all(
         toDelete.map(mid => app.mediaServices.actionsService.deleteMedia(userId, mid)),
       );

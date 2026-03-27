@@ -24,7 +24,7 @@
     "prismigrate": "npx prisma migrate dev --schema packages/db/prisma/schema.prisma",
     "prismareset": "npx prisma migrate reset --schema packages/db/prisma/schema.prisma",
     "boot": "concurrently -n API,WEB,WORKER -c auto \"npm -w api run dev\" \"npm -w web run dev\" \"npm -w api run worker:dev\"",
-    "start": "concurrently -n API,WEB,WORKER -c auto \"npm -w api run start\" \"npm -w web run start\" \"npm -w api run worker\"",
+    "start": "npm run localdocker && concurrently -n API,WEB,WORKER -c auto \"npm -w api run start\" \"npm -w web run start\" \"npm -w api run worker\"",
     "localdocker": "docker compose -f infra/docker/docker-minimal.yml up -d",
     "docker:build": "docker compose -f infra/docker/docker-compose.yml up -d --build",
     "docker:rebuild-clean": "docker compose -f infra/docker/docker-compose.yml build --no-cache && docker compose -f infra/docker/docker-compose.yml up -d",

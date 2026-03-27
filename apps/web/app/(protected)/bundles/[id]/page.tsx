@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { emitBundlesUpdated } from '@/lib/bundles';
 import { emitTagsUpdated } from '@/lib/tags';
 import type { BundleDetail, BundleMediaItem } from '@vault/types';
+import { httpStatusMessage } from '@/lib/http';
 import { MediaCard } from '@/components/media/MediaCard';
 import { TagFilterChip, type TagFilterState } from '@/components/media/TagFilterChip';
 import { Button } from '@/components/ui/Button';
@@ -66,7 +67,7 @@ function toMediaItem(item: BundleMediaItem) {
 
 async function readError(res: Response): Promise<string> {
   const text = await res.text().catch(() => '');
-  return text || `Error ${res.status}`;
+  return text || httpStatusMessage(res.status);
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -134,14 +135,20 @@ export default function BundleDetailPage() {
     if (removingId) return;
     setRemovingId(mediaId);
     try {
-      await fetch(`/api/bundles/${id}/items/${mediaId}`, {
+      const res = await fetch(`/api/bundles/${id}/items/${mediaId}`, {
         method: 'DELETE',
         credentials: 'include',
       });
+      if (!res.ok) {
+        setError(`Could not remove item: ${httpStatusMessage(res.status)}`);
+        return;
+      }
       setBundle(prev =>
         prev ? { ...prev, items: prev.items.filter(i => i.mediaId !== mediaId), itemCount: prev.itemCount - 1 } : prev
       );
       emitBundlesUpdated();
+    } catch {
+      setError('Could not remove item — check your connection and try again.');
     } finally {
       setRemovingId(null);
     }

@@ -1,8 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { requireAuth } from "../utils/authGuard.js";
-import { PreferencesRepository } from "../repositories/preferencesRepository.js";
-import { PreferencesService, type Preferences } from "../services/preferencesService.js";
+import type { Preferences } from "@vault/types";
 
 const preferencesSchema = z
   .object({
@@ -17,22 +16,20 @@ const preferencesSchema = z
     hideUnpackedItems: z.boolean().optional(),
     soonWindowDays: z.number().int().min(2).max(14).optional(),
     themePreference: z.enum(["system", "light", "dark"]).optional(),
-    lightTheme: z.string().optional(),
-    darkTheme: z.string().optional(),
+    lightTheme: z.enum(["default", "latte", "sandstone", "mist", "lavender", "dream", "cotton-candy", "mint", "garden"]).optional(),
+    darkTheme: z.enum(["new-moon", "matrix", "charcoal", "solarized"]).optional(),
   })
   .strict();
 
 export const preferencesRoutes: FastifyPluginAsync = async app => {
-  const service = new PreferencesService(new PreferencesRepository(app.prisma));
-
   app.get("/", { preHandler: [requireAuth] }, async (req, reply) => {
-    const preferences = await service.getPreferences(req.userId!);
+    const preferences = await app.preferencesService.getPreferences(req.userId!);
     return reply.send({ preferences });
   });
 
   app.patch("/", { preHandler: [requireAuth] }, async (req, reply) => {
     const patch: Partial<Preferences> = preferencesSchema.parse(req.body ?? {});
-    const preferences = await service.updatePreferences(req.userId!, patch);
+    const preferences = await app.preferencesService.updatePreferences(req.userId!, patch);
     return reply.send({ preferences });
   });
 };

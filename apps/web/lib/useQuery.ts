@@ -27,7 +27,7 @@ export function useQuery<T> (key: unknown, fn: () => Promise<T>) {
     return () => {
       alive = false
     }
-  }, [keyString, fn])
+  }, [keyString]) // eslint-disable-line react-hooks/exhaustive-deps -- fn is intentionally excluded; callers encode all query params into key
 
   return { data, loading, error }
 }

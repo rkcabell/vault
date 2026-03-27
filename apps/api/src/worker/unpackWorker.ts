@@ -44,6 +44,11 @@ export function createUnpackProcessor (deps: UnpackWorkerDeps): Processor<Unpack
       return;
     }
 
+    if (result === "not-archive") {
+      deps.logger.info({ mediaId, userId }, "unpack: media is not a recognised archive type");
+      return;
+    }
+
     deps.logger.info({ mediaId, userId, bundleId: result.bundleId }, "unpack job completed");
   };
 }

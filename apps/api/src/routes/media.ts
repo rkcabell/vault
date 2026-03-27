@@ -7,11 +7,35 @@ import { getUploadSizeError } from "../lib/media/uploadLimits.js";
 import { normalizeTags, TagValidationError } from "../lib/tags/normalizeTags.js";
 import type { JobUpdateEvent } from "../plugins/queueEvents.js";
 import { Queue } from "bullmq";
-import { ARCHIVE_MIME_TYPES } from "../services/media/mediaActionsService.js";
+import { ARCHIVE_MIME_TYPES } from "../lib/media/archiveTypes.js";
 import { enqueueUnpack, type UnpackJob, UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
-import { PreferencesService } from "../services/preferencesService.js";
-import { PreferencesRepository } from "../repositories/preferencesRepository.js";
+import type { PrismaClient } from "@prisma/client";
+
+async function autoUnpackIfEnabled(
+  ids: string[],
+  userId: string,
+  autoUnpack: boolean,
+  getQueue: () => Queue<UnpackJob>,
+  prisma: PrismaClient,
+  log: { warn: (obj: unknown, msg: string) => void },
+): Promise<void> {
+  if (!autoUnpack) return;
+  const archiveItems = await prisma.media.findMany({
+    where: { id: { in: ids }, userId },
+    select: { id: true, storageKey: true, mimeType: true },
+  });
+  for (const item of archiveItems) {
+    if (ARCHIVE_MIME_TYPES.has(item.mimeType)) {
+      await enqueueUnpack(getQueue(), {
+        mediaId: item.id,
+        userId,
+        storageKey: item.storageKey,
+        mimeType: item.mimeType,
+      }).catch((err: unknown) => log.warn({ err, mediaId: item.id }, "failed to enqueue unpack"));
+    }
+  }
+}
 
 const paramsSchema = z.object({ id: z.string().uuid() }).strict();
 const SORT_OPTIONS = MEDIA_SORT_OPTIONS;
@@ -33,7 +57,6 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
   app.addHook("onClose", async () => {
     if (unpackQueue) await unpackQueue.close();
   });
-  const preferencesService = new PreferencesService(new PreferencesRepository(app.prisma));
   const assertUploadWithinLimit = (file: { filename: string; mimeType: string; sizeBytes: number }) => {
     const error = getUploadSizeError(file);
     if (error) throw app.httpErrors.badRequest(error);
@@ -56,13 +79,16 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         sizeBytes: z.number().int().positive(),
         title: z.string().min(1),
         tags: z.unknown().optional(),
+        autoTagOnUpload: z.boolean().optional(),
       })
       .parse(req.body);
 
     assertUploadWithinLimit(body);
 
-    const prefs = await preferencesService.getPreferences(req.userId!).catch(() => null);
-    const result = await uploadService.initUpload(req.userId!, { ...body, tags: parseTags(body.tags), autoTagOnUpload: prefs?.autoTagOnUpload ?? true });
+    const autoTagOnUpload = body.autoTagOnUpload !== undefined
+      ? body.autoTagOnUpload
+      : (await app.preferencesService.getPreferences(req.userId!).catch(() => null))?.autoTagOnUpload ?? true;
+    const result = await uploadService.initUpload(req.userId!, { ...body, tags: parseTags(body.tags), autoTagOnUpload });
     req.log.info({ filename: body.filename, mimeType: body.mimeType, sizeBytes: body.sizeBytes }, "upload init");
     return result;
   });
@@ -79,6 +105,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
               sizeBytes: z.number().int().positive(),
               title: z.string().trim().min(1).optional(),
               tags: z.unknown().optional(),
+              autoTagOnUpload: z.boolean().optional(),
             }),
           )
           .min(1)
@@ -88,9 +115,15 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     body.items.forEach(assertUploadWithinLimit);
 
-    const prefs = await preferencesService.getPreferences(req.userId!).catch(() => null);
-    const autoTagOnUpload = prefs?.autoTagOnUpload ?? true;
-    const items = body.items.map(item => ({ ...item, tags: parseTags(item.tags), autoTagOnUpload }));
+    const prefs = body.items.some(i => i.autoTagOnUpload === undefined)
+      ? await app.preferencesService.getPreferences(req.userId!).catch(() => null)
+      : null;
+    const autoTagDefault = prefs?.autoTagOnUpload ?? true;
+    const items = body.items.map(item => ({
+      ...item,
+      tags: parseTags(item.tags),
+      autoTagOnUpload: item.autoTagOnUpload !== undefined ? item.autoTagOnUpload : autoTagDefault,
+    }));
 
     const result = await uploadService.initBatchUploads(req.userId!, items);
     req.log.info({ count: body.items.length }, "batch upload init");
@@ -102,6 +135,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     const body = z
       .object({
         ids: z.array(z.string().uuid()).min(1).max(MAX_BATCH_ITEMS),
+        autoUnpack: z.boolean().optional(),
       })
       .parse(req.body);
 
@@ -110,23 +144,10 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     req.log.info({ count: body.ids.length }, "batch upload finalized");
 
     // Auto-unpack archives if the user preference is enabled
-    const prefs = await preferencesService.getPreferences(userId).catch(() => null);
-    if (prefs?.autoUnpackArchives) {
-      const archiveItems = await app.prisma.media.findMany({
-        where: { id: { in: body.ids }, userId },
-        select: { id: true, storageKey: true, mimeType: true },
-      });
-      for (const item of archiveItems) {
-        if (ARCHIVE_MIME_TYPES.has(item.mimeType)) {
-          await enqueueUnpack(getUnpackQueue(), {
-            mediaId: item.id,
-            userId,
-            storageKey: item.storageKey,
-            mimeType: item.mimeType,
-          }).catch(err => req.log.warn({ err, mediaId: item.id }, "failed to enqueue unpack"));
-        }
-      }
-    }
+    const autoUnpack = body.autoUnpack !== undefined
+      ? body.autoUnpack
+      : (await app.preferencesService.getPreferences(userId).catch(() => null))?.autoUnpackArchives ?? false;
+    await autoUnpackIfEnabled(body.ids, userId, autoUnpack, getUnpackQueue, app.prisma, req.log);
 
     return result;
   });
@@ -138,26 +159,16 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     async req => {
       const userId = req.userId!;
       const { id } = paramsSchema.parse(req.params);
+      const body = z.object({ autoUnpack: z.boolean().optional() }).parse(req.body ?? {});
 
       const result = await uploadService.finalizeBatch(userId, [id]);
       req.log.info({ mediaId: id }, "upload finalized");
 
       // Auto-unpack if archive and preference enabled
-      const prefs = await preferencesService.getPreferences(userId).catch(() => null);
-      if (prefs?.autoUnpackArchives) {
-        const mediaItem = await app.prisma.media.findFirst({
-          where: { id, userId },
-          select: { id: true, storageKey: true, mimeType: true },
-        });
-        if (mediaItem && ARCHIVE_MIME_TYPES.has(mediaItem.mimeType)) {
-          await enqueueUnpack(getUnpackQueue(), {
-            mediaId: mediaItem.id,
-            userId,
-            storageKey: mediaItem.storageKey,
-            mimeType: mediaItem.mimeType,
-          }).catch(err => req.log.warn({ err, mediaId: id }, "failed to enqueue unpack"));
-        }
-      }
+      const autoUnpack = body.autoUnpack !== undefined
+        ? body.autoUnpack
+        : (await app.preferencesService.getPreferences(userId).catch(() => null))?.autoUnpackArchives ?? false;
+      await autoUnpackIfEnabled([id], userId, autoUnpack, getUnpackQueue, app.prisma, req.log);
 
       return result;
     },
@@ -450,19 +461,12 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       const userId = req.userId!;
       const { id } = paramsSchema.parse(req.params);
 
-      // Gate: must be a recognised archive type
-      const media = await app.prisma.media.findFirst({
-        where: { id, userId },
-        select: { mimeType: true },
-      });
-      if (!media) return reply.notFound();
-      if (!ARCHIVE_MIME_TYPES.has(media.mimeType)) {
-        return reply.badRequest("File is not a recognised archive type.");
-      }
-
       const result = await actionsService.unpackArchive(userId, id);
 
       if (!result) return reply.notFound();
+      if (result === "not-archive") {
+        return reply.badRequest("File is not a recognised archive type.");
+      }
       if (result === "already-linked") {
         return reply.code(409).send({ error: "Archive is already linked to a bundle." });
       }

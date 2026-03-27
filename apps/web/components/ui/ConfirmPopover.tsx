@@ -59,18 +59,19 @@ export function ConfirmPopover({
   let W: number;
   let left: number;
   let top: number;
-  const H = 108;
+  // Approximate rendered height of the popover (padding + message + buttons)
+  const POPOVER_HEIGHT = 108;
 
   if (anchorWidth !== undefined) {
     // Anchor mode: center on x, width tracks the button
     W = Math.max(anchorWidth + 48, 148);
     left = Math.max(8, Math.min(x - W / 2, vw - W - 8));
-    top = bottomOffset !== undefined ? 0 : Math.max(8, y - H - 8);
+    top = bottomOffset !== undefined ? 0 : Math.max(8, y - POPOVER_HEIGHT - 8);
   } else {
     // Legacy cursor mode
     W = 224;
     left = Math.max(8, Math.min(x, vw - W - 8));
-    top = y + 12 + H > vh ? y - H - 8 : y + 12;
+    top = y + 12 + POPOVER_HEIGHT > vh ? y - POPOVER_HEIGHT - 8 : y + 12;
   }
 
   return (

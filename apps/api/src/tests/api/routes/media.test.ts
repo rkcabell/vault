@@ -37,6 +37,9 @@ interface BuildOpts {
     mediaFindMany?: (_a: unknown) => Promise<unknown[]>;
     mediaFindFirst?: (_a: unknown) => Promise<unknown>;
   };
+  preferencesService?: {
+    getPreferences?: (_userId: string) => Promise<{ autoTagOnUpload: boolean; autoUnpackArchives: boolean }>;
+  };
 }
 
 function makeMediaServices({
@@ -88,18 +91,23 @@ function makePrisma(opts: BuildOpts["prisma"] = {}) {
 async function buildApp(opts: BuildOpts = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   await app.register(sensible);
-   
+
   (app as any).decorate("jwt", {
     verifyAccess: () => ({ sub: "user-1" }),
     signAccess: () => "",
     signRefresh: () => "",
     verifyRefresh: () => ({ sub: "user-1" }),
   });
-   
+
   (app as any).decorate("prisma", makePrisma(opts.prisma));
-   
+
   (app as any).decorate("mediaServices", makeMediaServices(opts));
-   
+
+  (app as any).decorate("preferencesService", {
+    getPreferences: opts.preferencesService?.getPreferences
+      ?? (async () => ({ autoTagOnUpload: true, autoUnpackArchives: false })),
+  });
+
   (app as any).decorate("config", { REDIS_URL: "redis://localhost:6379" });
   await app.register(mediaRoutes);
   appsToClose.push(app);
@@ -483,7 +491,7 @@ test("POST /:id/unpack: media not found returns 404", async () => {
 
 test("POST /:id/unpack: non-archive MIME type returns 400", async () => {
   const app = await buildApp({
-    prisma: { mediaFindFirst: async () => ({ mimeType: "image/jpeg" }) },
+    actionsService: { unpackArchive: async () => "not-archive" },
   });
   const res = await app.inject({ method: "POST", url: `/${ID}/unpack`, headers: AUTH });
   assert.equal(res.statusCode, 400);

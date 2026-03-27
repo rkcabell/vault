@@ -11,9 +11,11 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 
 import { useUpload } from "@/components/contexts/UploadContext";
+import { usePreferences } from "@/hooks/usePreferences";
 import { toast } from "@/components/ui/Toaster";
 import { emitTagsUpdated } from "@/lib/tags";
 import { getFileSizeError, UPLOAD_LIMIT_LABELS } from "@/lib/media/uploadLimits";
+import { formatBytes } from "@/lib/media/utils";
 
 import {
   Upload,
@@ -32,13 +34,6 @@ const getFileIcon = (type: string) => {
   return FileText;
 };
 
-const formatFileSize = (bytes: number) => {
-  if (!bytes) return "0 Bytes";
-  const k = 1024;
-  const sizes = ["Bytes", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${Math.round((bytes / Math.pow(k, i)) * 100) / 100} ${sizes[i]}`;
-};
 
 const LIBRARY_PATH = "/library";
 
@@ -48,6 +43,7 @@ type BatchInitItem = {
   sizeBytes: number;
   title?: string;
   tags?: string[];
+  autoTagOnUpload?: boolean;
 };
 
 type BatchInitResponseItem = {
@@ -80,12 +76,12 @@ async function batchInit(items: BatchInitItem[]): Promise<BatchInitResponse> {
   return (await res.json()) as BatchInitResponse;
 }
 
-async function batchFinalize(ids: string[]): Promise<void> {
+async function batchFinalize(ids: string[], autoUnpack?: boolean): Promise<void> {
   const res = await fetch("/api/media/batch-finalize", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids }),
+    body: JSON.stringify({ ids, ...(autoUnpack !== undefined ? { autoUnpack } : {}) }),
   });
 
   if (!res.ok) {
@@ -207,6 +203,7 @@ export default function UploadPage() {
   const router = useRouter();
   const { files, addFiles, removeFile, clearFiles, updateFileStatus } =
     useUpload();
+  const { prefs } = usePreferences();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -314,6 +311,7 @@ export default function UploadPage() {
               sizeBytes: pending.file.size,
               title,
               tags: [],
+              autoTagOnUpload: prefs.autoTagOnUpload,
             } satisfies BatchInitItem,
           };
         });
@@ -336,7 +334,7 @@ export default function UploadPage() {
 
         if (completed.length > 0) {
           try {
-            await batchFinalize(completed.map((item) => item.mediaId));
+            await batchFinalize(completed.map((item) => item.mediaId), prefs.autoUnpackArchives);
             allCompleted.push(...completed);
           } catch (err) {
             const message = err instanceof Error ? err.message : "Upload finalize failed.";
@@ -461,7 +459,7 @@ export default function UploadPage() {
                           <div className="min-w-0 flex-1">
                             <p className="truncate font-medium">{uploadFile.file.name}</p>
                             <p className="text-sm text-muted-foreground">
-                              {formatFileSize(uploadFile.file.size)}
+                              {formatBytes(uploadFile.file.size)}
                             </p>
                           </div>
 

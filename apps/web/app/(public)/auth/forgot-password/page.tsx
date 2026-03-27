@@ -10,6 +10,7 @@ export default function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [resetToken, setResetToken] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const resetUrl =
     resetToken && typeof window !== "undefined"
@@ -19,19 +20,24 @@ export default function ForgotPasswordPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      const data = res.ok ? await res.json() : {};
+      if (!res.ok) {
+        setError('Something went wrong on the server. Please try again.');
+        return;
+      }
+      const data = await res.json() as { token?: string };
       setResetToken(data.token ?? null);
+      setDone(true);
     } catch {
-      setResetToken(null);
+      setError('Could not connect. Check your internet connection and try again.');
     } finally {
       setLoading(false);
-      setDone(true);
     }
   };
 
@@ -59,6 +65,7 @@ export default function ForgotPasswordPage() {
                 required
               />
             </div>
+            {error && <p style={{ color: 'var(--color-destructive, #dc2626)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>{error}</p>}
             <button type="submit" className={styles.submitBtn} disabled={loading || !email.includes("@")}>
               {loading ? "Generating link..." : "Get reset link"}
             </button>

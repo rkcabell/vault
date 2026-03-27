@@ -17,6 +17,7 @@ import { remindersRoutes } from "./routes/reminders.js";
 import { bundlesRoutes } from "./routes/bundles.js";
 import { preferencesRoutes } from "./routes/preferences.js";
 import { initRoutes } from "./routes/init.js";
+import preferencesPlugin from "./plugins/preferences.js";
 import queueEventsPlugin from "./plugins/queueEvents.js";
 import redisPlugin from "./plugins/redis.js";
 import rateLimitPlugin from "./plugins/rateLimit.js";
@@ -84,6 +85,7 @@ async function main () {
   await app.register(authRoutes, { prefix: "/api/auth" }); // auth routes plugin
   await app.register(profileRoutes, { prefix: "/api/profile" });
   await app.register(s3Plugin); // aws bucket storage
+  await app.register(preferencesPlugin); // shared PreferencesService singleton
   await app.register(mediaServicesPlugin); // media services + queues wiring
   await app.register(queueEventsPlugin); // shared QueueEvents + jobEvents emitter for SSE
   await app.register(mediaRoutes, { prefix: "/api/media" });

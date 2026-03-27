@@ -171,6 +171,34 @@ export class BundleRepository {
     await this.prisma.bundle.deleteMany({ where: { id, userId } });
   }
 
+  async deleteBundleWithCascade (id: string, userId: string): Promise<{ found: boolean; extractedMediaIds: string[] }> {
+    const bundle = await this.prisma.bundle.findFirst({
+      where: { id, userId },
+      select: {
+        isUnpackedArchive: true,
+        sourceMediaId: true,
+        items: { select: { mediaId: true } },
+      },
+    });
+
+    if (!bundle) return { found: false, extractedMediaIds: [] };
+
+    await this.prisma.bundle.deleteMany({ where: { id, userId } });
+
+    if (bundle.sourceMediaId) {
+      await this.prisma.media.updateMany({
+        where: { id: bundle.sourceMediaId },
+        data: { linkedBundleId: null },
+      });
+    }
+
+    const extractedMediaIds = bundle.isUnpackedArchive
+      ? bundle.items.map(i => i.mediaId)
+      : [];
+
+    return { found: true, extractedMediaIds };
+  }
+
   async addItems (bundleId: string, userId: string, mediaIds: string[]) {
     // Verify bundle belongs to user
     const bundle = await this.prisma.bundle.findFirst({
