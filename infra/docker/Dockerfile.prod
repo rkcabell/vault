@@ -1,0 +1,108 @@
+# syntax=docker/dockerfile:1.6
+# Production multi-stage build — no source bind-mounts, compiled output only.
+
+# ---------------------------------------------------------------------------
+# base: minimal Node runtime shared by all stages
+# ---------------------------------------------------------------------------
+FROM node:20-bookworm-slim AS base
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# deps: install all workspace dependencies (including devDeps needed for build)
+# packages/db postinstall runs `prisma generate` automatically
+# ---------------------------------------------------------------------------
+FROM base AS deps
+COPY package.json package-lock.json ./
+COPY apps/api/package.json    apps/api/
+COPY apps/web/package.json    apps/web/
+COPY packages/db/package.json     packages/db/
+COPY packages/types/package.json  packages/types/
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+# ---------------------------------------------------------------------------
+# builder: compile everything
+# ---------------------------------------------------------------------------
+FROM deps AS builder
+COPY packages/ packages/
+COPY apps/api/ apps/api/
+COPY apps/web/ apps/web/
+
+# 1. Build the @vault/db package (TypeScript → dist/)
+RUN npm run build -w packages/db
+
+# 2. Compile the Fastify API + workers (tsc -p . covers src/ incl. src/worker/)
+#    The build script also copies fileTransport.mjs into dist/.
+RUN npm run build -w apps/api
+
+# 3. Build Next.js (emits .next/standalone because output:'standalone' is set)
+RUN npm run build -w apps/web
+
+# ---------------------------------------------------------------------------
+# api-prod-deps: lean production node_modules (no devDependencies)
+# ---------------------------------------------------------------------------
+FROM base AS api-prod-deps
+COPY package.json package-lock.json ./
+COPY apps/api/package.json    apps/api/
+COPY packages/db/package.json     packages/db/
+COPY packages/types/package.json  packages/types/
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+
+# ---------------------------------------------------------------------------
+# api: production API image
+# ---------------------------------------------------------------------------
+FROM base AS api
+WORKDIR /app
+
+# Production node_modules
+COPY --from=api-prod-deps /app/node_modules          ./node_modules
+COPY --from=api-prod-deps /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=api-prod-deps /app/packages/db/node_modules ./packages/db/node_modules
+
+# Compiled API output
+COPY --from=builder /app/apps/api/dist ./apps/api/dist
+
+# Prisma-generated client — api-prod-deps skips `prisma` (devDep) so the
+# postinstall `prisma generate` never runs there; copy the already-generated
+# client from the builder stage instead.
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+
+# Compiled @vault/db (needed at runtime for Prisma schema path resolution)
+COPY --from=builder /app/packages/db/dist ./packages/db/dist
+
+# Prisma schema + migrations (needed by prisma migrate deploy in entrypoint)
+COPY packages/db/prisma ./packages/db/prisma
+
+# Startup entrypoint (runs migrations, then starts the server)
+COPY --chmod=755 infra/docker/entrypoint-api.sh ./entrypoint-api.sh
+
+EXPOSE 8000
+ENTRYPOINT ["/app/entrypoint-api.sh"]
+
+# ---------------------------------------------------------------------------
+# web: production Next.js standalone image
+# ---------------------------------------------------------------------------
+FROM base AS web
+WORKDIR /app
+
+# Next.js standalone server includes its own trimmed node_modules
+COPY --from=builder /app/apps/web/.next/standalone ./
+COPY --from=builder /app/apps/web/.next/static      ./apps/web/.next/static
+COPY --from=builder /app/apps/web/public            ./apps/web/public
+
+EXPOSE 3000
+ENV HOSTNAME=0.0.0.0
+CMD ["node", "server.js"]
+
+# ---------------------------------------------------------------------------
+# jobs: worker image — api + OCR system packages
+# ---------------------------------------------------------------------------
+FROM api AS jobs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ocrmypdf tesseract-ocr ghostscript qpdf curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Override the api entrypoint; CMD is set per-service in docker-compose.prod.yml
+ENTRYPOINT []
+CMD ["node", "apps/api/dist/worker/index.js"]

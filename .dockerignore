@@ -12,3 +12,8 @@
 **/tmp
 **/.env*
 !.env.example
+
+docs/
+scripts/
+coverage/
+**/*.test.ts
