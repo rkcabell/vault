@@ -80,13 +80,24 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### Windows
 
-Windows is not directly supported. Install prerequisites manually and run via WSL or Git Bash:
+```powershell
+# 1. Open PowerShell as Administrator and clone
+git clone https://github.com/rkcabell/vault.git
+cd vault
 
-- [Node.js ≥18.18](https://nodejs.org)
-- [Docker Desktop](https://www.docker.com/products/docker-desktop)
-- ocrmypdf, Tesseract, Ghostscript, qpdf (optional — required for OCR only)
+# 2. Allow the script to run and execute it
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\setup.ps1
+```
 
-Then clone and run `npm run start` from a WSL or Git Bash terminal.
+> Docker Desktop must be running before step 2. If it was just installed, restart your machine first.
+
+```powershell
+# 3. Start
+npm run start
+```
+
+Open [http://localhost:3000](http://localhost:3000).
 
 ### macOS
 
