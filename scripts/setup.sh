@@ -94,6 +94,7 @@ done
 # 2. npm install + build internal packages
 # ---------------------------------------------------------------------------
 step "Installing dependencies"
+rm -f "$ROOT/package-lock.json"
 npm install --prefix "$ROOT" --silent
 ok "node_modules ready"
 
