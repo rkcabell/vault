@@ -52,26 +52,51 @@ vault/
 
 ## Local Setup
 
-Should work right out of the box
+### Linux (Ubuntu/Debian)
 
 ```bash
-1. git clone https://github.com/rkcabell/vault.git
-2. cd vault
-3. bash scripts/setup.sh
-4. npm run start
+# 1. Install git and clipboard support (VMware guests)
+sudo apt-get update && sudo apt-get install -y git open-vm-tools-desktop
+
+# 2. Clone
+git clone https://github.com/rkcabell/vault.git
+cd vault
+
+# 3. Run setup (installs Node.js, Docker, OCR tools, starts infrastructure, runs migrations)
+sudo bash scripts/setup.sh
+
+# 4. Add your user to the docker group so you don't need sudo
+sudo usermod -aG docker $USER
+newgrp docker
+
+# 5. Fix file ownership (setup runs as root, this reclaims the files)
+sudo chown -R $USER:$USER ~/vault
+
+# 6. Start
+npm run start
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-The setup script handles everything automatically on Debian/Ubuntu — Node.js, Docker, OCR tools, `.env` generation, Docker infrastructure, database migrations, and MinIO bucket creation. On other platforms, install prerequisites manually before running it.
+### Windows
 
-**Prerequisites (non-Debian/Ubuntu):**
+Windows is not directly supported. Install prerequisites manually and run via WSL or Git Bash:
 
-- Node.js ≥18.18, npm ≥10.5.0
-- Docker + Docker Compose v2
+- [Node.js ≥18.18](https://nodejs.org)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop)
 - ocrmypdf, Tesseract, Ghostscript, qpdf (optional — required for OCR only)
 
-  macOS: `brew install ocrmypdf tesseract ghostscript qpdf`
+Then clone and run `npm run start` from a WSL or Git Bash terminal.
+
+### macOS
+
+```bash
+brew install git node ocrmypdf tesseract ghostscript qpdf
+git clone https://github.com/rkcabell/vault.git
+cd vault
+bash scripts/setup.sh
+npm run start
+```
 
 ---
 
