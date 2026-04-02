@@ -352,7 +352,7 @@ Ok "Required .env.prod values are present"
 # ---------------------------------------------------------------------------
 Step "Building and starting Vault (this may take a few minutes on first run)"
 
-if (-not (Invoke-ComposeUpWithProgress -EstimateSeconds 480 -RefreshIntervalMs 500)) {
+if (-not (Invoke-ComposeUpWithProgress -EstimateSeconds 480 -RefreshIntervalMs 1000)) {
     Show-ComposeDiagnostics
     Die "Failed to build/start Vault services."
 }

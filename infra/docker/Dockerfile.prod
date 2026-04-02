@@ -79,6 +79,9 @@ COPY --from=builder /app/apps/api/dist ./apps/api/dist
 # client from the builder stage instead.
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
+# @vault/db package — node_modules/@vault/db is a workspace symlink to packages/db,
+# so packages/db/package.json must exist or Node falls back to bare index.js lookup.
+COPY packages/db/package.json             ./packages/db/package.json
 # Compiled @vault/db (needed at runtime for Prisma schema path resolution)
 COPY --from=builder /app/packages/db/dist ./packages/db/dist
 
