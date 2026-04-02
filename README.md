@@ -78,21 +78,40 @@ npm run start
 
 Open [http://localhost:3000](http://localhost:3000).
 
-### Windows
+### Windows (PowerShell)
 
 ```powershell
 # 1. Clone the repo
 git clone https://github.com/rkcabell/vault.git
 cd vault
 
-# 2. Run setup — installs Docker Desktop if needed, generates secrets, starts everything
+# 2. Run these as separate commands (do not combine them on one line)
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\windows-setup.ps1
+```
+
+If you are in Git Bash, run the setup script through PowerShell:
+
+```bash
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-setup.ps1
 ```
 
 > If Docker Desktop was just installed, the script will ask you to restart your machine and re-run it.
 
 Open [http://localhost:3000](http://localhost:3000).
+
+#### Docker engine stuck on "Starting the Docker Engine"
+
+Run these checks in PowerShell:
+
+```powershell
+docker info
+Remove-Item Env:DOCKER_HOST -ErrorAction SilentlyContinue
+[Environment]::SetEnvironmentVariable("DOCKER_HOST", $null, "User")
+wsl --shutdown
+```
+
+Then fully quit Docker Desktop, open it again, wait until Docker is running, and re-run `.\scripts\windows-setup.ps1`.
 
 ### macOS
 
@@ -263,3 +282,4 @@ Key endpoint groups:
 ## License
 
 [PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal and noncommercial use.
+
