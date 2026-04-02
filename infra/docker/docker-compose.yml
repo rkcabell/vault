@@ -93,6 +93,8 @@ services:
     depends_on:
       api:
         condition: service_started
+      redis:
+        condition: service_healthy
       minio-init:
         condition: service_completed_successfully
     environment:
@@ -113,6 +115,8 @@ services:
     depends_on:
       api:
         condition: service_started
+      redis:
+        condition: service_healthy
       minio-init:
         condition: service_completed_successfully
     environment:

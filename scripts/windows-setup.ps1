@@ -8,9 +8,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ROOT = Split-Path -Parent $PSScriptRoot
-$ENV_FILE = Join-Path $ROOT ".env.docker"
+$ENV_FILE = Join-Path $ROOT ".env.prod"
 $EXAMPLE = Join-Path $ROOT ".env.docker.example"
-$COMPOSE_FILE = Join-Path $ROOT "infra\docker\docker-compose.yml"
+$COMPOSE_FILE = Join-Path $ROOT "infra\docker\docker-compose.prod.yml"
 $REQUIRED_ENV_KEYS = @(
     "POSTGRES_PASSWORD",
     "MINIO_ROOT_PASSWORD",
@@ -126,7 +126,7 @@ function Show-ComposeDiagnostics {
         Warn "Unable to read compose service status."
     }
 
-    & docker @(Get-ComposeBaseArgs) logs --tail 80 postgres redis minio minio-init api web jobs-ocr jobs-thumb 2>$null
+    & docker @(Get-ComposeBaseArgs) logs --tail 80 postgres redis minio minio-init api web jobs-ocr jobs-thumb nginx 2>$null
     if ($LASTEXITCODE -ne 0) {
         Warn "Unable to read compose logs."
     }
@@ -236,7 +236,7 @@ function Get-ContainerStateField {
 
 function Assert-ServicesHealthy {
     $issues = @()
-    $runningServices = @("postgres", "redis", "minio", "api", "web", "jobs-ocr", "jobs-thumb")
+    $runningServices = @("postgres", "redis", "minio", "api", "web", "jobs-ocr", "jobs-thumb", "nginx")
 
     foreach ($service in $runningServices) {
         $id = Get-ServiceContainerId -Service $service
@@ -297,12 +297,12 @@ if (Wait-DockerReady -TimeoutSeconds 120 -IntervalSeconds 2) {
 }
 
 # ---------------------------------------------------------------------------
-# 2. .env.docker
+# 2. .env.prod
 # ---------------------------------------------------------------------------
 Step "Configuring environment"
 
 if (Test-Path $ENV_FILE) {
-    Ok ".env.docker already exists - skipping"
+    Ok ".env.prod already exists - skipping"
 } else {
     if (-not (Test-Path $EXAMPLE)) {
         Die ".env.docker.example not found. Is this a complete clone of the repository?"
@@ -321,15 +321,16 @@ if (Test-Path $ENV_FILE) {
     $content = Get-Content $EXAMPLE -Raw
     $content = $content -replace "(?m)^JWT_SECRET=\S+", "JWT_SECRET=$jwtSecret"
     $content = $content -replace "(?m)^JWT_REFRESH_SECRET=\S+", "JWT_REFRESH_SECRET=$jwtRefreshSecret"
+    $content = $content -replace "(?m)^CORS_ORIGIN=\S+", "CORS_ORIGIN=http://localhost"
 
     # Write without BOM and with LF line endings so docker compose parses it cleanly.
     [System.IO.File]::WriteAllText($ENV_FILE, ($content -replace "`r`n", "`n"))
 
-    Ok ".env.docker created with generated JWT secrets"
+    Ok ".env.prod created with generated JWT secrets"
 }
 
 if (-not (Test-Path $ENV_FILE)) {
-    Die ".env.docker was not created."
+    Die ".env.prod was not created."
 }
 
 $missingKeys = @()
@@ -341,17 +342,17 @@ foreach ($key in $REQUIRED_ENV_KEYS) {
 }
 
 if ($missingKeys.Count -gt 0) {
-    Die ".env.docker is missing required non-empty values: $($missingKeys -join ', '). Update .env.docker and re-run setup."
+    Die ".env.prod is missing required non-empty values: $($missingKeys -join ', '). Update .env.prod and re-run setup."
 }
 
-Ok "Required .env.docker values are present"
+Ok "Required .env.prod values are present"
 
 # ---------------------------------------------------------------------------
 # 3. Build and start everything
 # ---------------------------------------------------------------------------
 Step "Building and starting Vault (this may take a few minutes on first run)"
 
-if (-not (Invoke-ComposeUpWithProgress -EstimateSeconds 300 -RefreshIntervalMs 500)) {
+if (-not (Invoke-ComposeUpWithProgress -EstimateSeconds 480 -RefreshIntervalMs 500)) {
     Show-ComposeDiagnostics
     Die "Failed to build/start Vault services."
 }
@@ -366,10 +367,10 @@ Ok "All services started and verified"
 Write-Host ""
 Write-Host "Vault is running!" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Web app       ->  http://localhost:3000"
+Write-Host "  Web app       ->  http://localhost"
 Write-Host "  API           ->  http://localhost:8000"
 Write-Host "  MinIO console ->  http://localhost:9001  (vault / vaultvault)"
 Write-Host ""
-Write-Host "To stop:   docker compose --env-file .env.docker -f infra\docker\docker-compose.yml down"
-Write-Host "To start:  docker compose --env-file .env.docker -f infra\docker\docker-compose.yml up -d"
+Write-Host "To stop:   docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml down"
+Write-Host "To start:  docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml up -d"
 Write-Host ""
