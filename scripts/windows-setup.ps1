@@ -143,7 +143,8 @@ function Assert-ServicesHealthy {
         }
     }
 
-    $initId = Get-ServiceContainerId -Service "minio-init"
+    $initRaw = & docker @(Get-ComposeBaseArgs) ps --all -q minio-init 2>$null
+    $initId = ($initRaw | Out-String).Trim()
     if (-not $initId) {
         $issues += "minio-init container is missing"
     } else {
