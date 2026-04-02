@@ -62,7 +62,6 @@ function Get-ComposeBaseArgs {
     return @(
         "compose",
         "--env-file", $ENV_FILE,
-        "--project-directory", $ROOT,
         "-f", $COMPOSE_FILE
     )
 }
