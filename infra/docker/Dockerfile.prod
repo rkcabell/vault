@@ -21,7 +21,11 @@ COPY packages/db/package.json     packages/db/
 COPY packages/types/package.json  packages/types/
 # Copy the schema so packages/db postinstall (`prisma generate`) can find it.
 COPY packages/db/prisma/schema.prisma packages/db/prisma/schema.prisma
-RUN --mount=type=cache,target=/root/.npm npm ci
+# Use `npm install` (not `npm ci`) so npm re-evaluates platform-specific optional
+# dependencies (lightningcss, @tailwindcss/oxide, @next/swc) for the Linux container.
+# package-lock.json was generated on Windows and only has the Win32 binaries in its
+# packages section; npm ci would therefore skip the Linux equivalents entirely.
+RUN --mount=type=cache,target=/root/.npm npm install
 
 # ---------------------------------------------------------------------------
 # builder: compile everything

@@ -88,20 +88,17 @@ powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
 
 Works from PowerShell, cmd, Git Bash, or Windows Terminal. If Docker Desktop was just installed, the script will ask you to restart and re-run.
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost](http://localhost).
 
-#### Docker engine stuck on "Starting the Docker Engine"
-
-Run these checks in PowerShell:
+To stop or restart Vault:
 
 ```powershell
-docker info
-Remove-Item Env:DOCKER_HOST -ErrorAction SilentlyContinue
-[Environment]::SetEnvironmentVariable("DOCKER_HOST", $null, "User")
-wsl --shutdown
-```
+# Stop all services
+docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml down
 
-Then fully quit Docker Desktop, open it again, wait until Docker is running, and re-run `.\scripts\windows-setup.ps1`.
+# Start again (no rebuild)
+docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml up -d
+```
 
 ### macOS
 
