@@ -15,6 +15,9 @@ COPY packages ./packages
 # Cache npm downloads between builds (BuildKit)
 RUN --mount=type=cache,target=/root/.npm npm ci
 
+# Build the shared db package so @vault/db/dist/index.js exists
+RUN npm run -w packages/db build
+
 # --- api target ---
 FROM deps AS api
 EXPOSE 8000
