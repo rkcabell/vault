@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/setup.sh — Bootstrap Vault for local development from scratch.
+# scripts/linux-setup.sh — Bootstrap Vault for local development from scratch.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

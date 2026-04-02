@@ -1,0 +1,5 @@
+# Normalize line endings on commit; enforce LF for files that run inside Linux containers
+* text=auto
+
+*.sh   text eol=lf
+*.bash text eol=lf

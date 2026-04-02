@@ -45,7 +45,7 @@ vault/
 │   └── docker/       # Dockerfiles and Compose configs
 ├── docs/             # OpenAPI spec and test coverage plan
 ├── test-results/     # Generated HTML test reports
-└── scripts/          # setup.sh
+└── scripts/          # linux-setup.sh, windows-setup.ps1
 ```
 
 ---
@@ -63,7 +63,7 @@ git clone https://github.com/rkcabell/vault.git
 cd vault
 
 # 3. Run setup (installs Node.js, Docker, OCR tools, starts infrastructure, runs migrations)
-sudo bash scripts/setup.sh
+sudo bash scripts/linux-setup.sh
 
 # 4. Add your user to the docker group so you don't need sudo
 sudo usermod -aG docker $USER
@@ -81,21 +81,16 @@ Open [http://localhost:3000](http://localhost:3000).
 ### Windows
 
 ```powershell
-# 1. Open PowerShell as Administrator and clone
+# 1. Clone the repo
 git clone https://github.com/rkcabell/vault.git
 cd vault
 
-# 2. Allow the script to run and execute it
+# 2. Run setup — installs Docker Desktop if needed, generates secrets, starts everything
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\setup.ps1
+.\scripts\windows-setup.ps1
 ```
 
-> Docker Desktop must be running before step 2. If it was just installed, restart your machine first.
-
-```powershell
-# 3. Start
-npm run start
-```
+> If Docker Desktop was just installed, the script will ask you to restart your machine and re-run it.
 
 Open [http://localhost:3000](http://localhost:3000).
 
@@ -105,7 +100,7 @@ Open [http://localhost:3000](http://localhost:3000).
 brew install git node ocrmypdf tesseract ghostscript qpdf
 git clone https://github.com/rkcabell/vault.git
 cd vault
-bash scripts/setup.sh
+bash scripts/linux-setup.sh
 npm run start
 ```
 

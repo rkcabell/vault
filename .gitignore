@@ -6,6 +6,8 @@
 !.env.example
 !.env.sample
 !.env.template
+!.env.docker.example
+!.env.prod.example
 
 # Common secret files
 *.pem
