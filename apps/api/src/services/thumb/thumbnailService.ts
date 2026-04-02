@@ -1,4 +1,10 @@
 import crypto from "crypto";
+import { createWriteStream } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pipeline } from "node:stream/promises";
+import type { Readable } from "node:stream";
 import { GetObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import type { Logger } from "pino";
@@ -99,6 +105,7 @@ const FORMAT_HANDLERS: FormatHandler[] = [
     label: "video",
     detect: (mime, buf) => mime.startsWith("video/") || looksLikeMp4(buf),
     render: (buf, w) => renderVideoThumbnail({ video: buf, targetWidth: w }),
+    // Note: when videoPath is available (pre-streamed), thumbnailService calls renderVideoThumbnail directly.
   },
   {
     label: "pdf",
@@ -154,11 +161,32 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   const exists = await waitUntilObjectExists(s3, bucket, storageKey, { maxTries: 4 });
   if (!exists) throw new Error("SOURCE_NOT_READY");
 
-  const original = await getObjectToBuffer(s3, bucket, storageKey);
-  if (!original) throw new Error("SOURCE_NOT_READY");
+  const mimeType = existing?.mimeType ?? "";
+  const isVideo = mimeType.startsWith("video/");
+
+  // For video files, stream directly from S3 to a temp file to avoid holding
+  // the full source in memory while ffmpeg also needs it on disk. For all other
+  // formats download to buffer as before.
+  let original: Buffer;
+  let videoTempDir: string | null = null;
+  let videoTempPath: string | null = null;
+
+  try {
+
+  if (isVideo) {
+    videoTempDir = await mkdtemp(join(tmpdir(), "vault-src-"));
+    videoTempPath = join(videoTempDir, "source.mp4");
+    const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: storageKey }));
+    if (!res.Body) throw new Error("SOURCE_NOT_READY");
+    await pipeline(res.Body as Readable, createWriteStream(videoTempPath));
+    original = await readFile(videoTempPath);
+  } else {
+    const buf = await getObjectToBuffer(s3, bucket, storageKey);
+    if (!buf) throw new Error("SOURCE_NOT_READY");
+    original = buf;
+  }
 
   let inputForSharp: Buffer = original;
-  const mimeType = existing?.mimeType ?? "";
 
   // Fetch user preferences once — used for extractMetadata and detectDuplicates gates.
   const prefs = deps.preferencesService && job.userId
@@ -219,7 +247,12 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
 
   const handler = FORMAT_HANDLERS.find(h => h.detect(mimeType, original));
   if (handler) {
-    const rendered = await tryRenderIntermediate(() => handler.render(original, targetWidth), handler.label);
+    // For video with a pre-streamed temp file, call renderVideoThumbnail directly
+    // to skip the redundant buffer→disk write inside the renderer.
+    const renderFn = handler.label === "video" && videoTempPath
+      ? () => renderVideoThumbnail({ videoPath: videoTempPath!, targetWidth })
+      : () => handler.render(original, targetWidth);
+    const rendered = await tryRenderIntermediate(renderFn, handler.label);
     if (!rendered) return;
     inputForSharp = rendered;
   }
@@ -251,6 +284,12 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
 
   await prismaMedia.setThumbReady(job.mediaId, outKey);
   deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "READY" });
+
+  } finally {
+    if (videoTempDir) {
+      rm(videoTempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
 }
 
 /**

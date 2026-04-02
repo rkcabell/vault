@@ -17,5 +17,10 @@ export class DocumentRepository {
       update: { rawText, pages: pages ?? [], textSource },
       create: { mediaId, rawText, pages: pages ?? [], textSource },
     });
+    await this.prisma.$executeRaw`
+      UPDATE "Document"
+      SET "searchVector" = to_tsvector('simple', ${rawText})
+      WHERE "mediaId" = ${mediaId}
+    `;
   }
 }

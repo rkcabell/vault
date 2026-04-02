@@ -69,13 +69,13 @@ export class MediaRepository {
    * unbounded IN list is materialised. Keyset pagination is used in that path.
    */
   async listMedia (filters: MediaListFilters) {
-    if (filters.tags?.length || filters.excludeTags?.length) return this._listMediaRaw(filters);
+    if (filters.tags?.length || filters.excludeTags?.length || filters.queryText) return this._listMediaRaw(filters);
     return this._listMediaOrm(filters);
   }
 
   /** Count media matching the same filters as listMedia, ignoring pagination (take/cursor). */
   async countMedia (filters: MediaListFilters): Promise<number> {
-    if (filters.tags?.length || filters.excludeTags?.length) return this._countMediaRaw(filters);
+    if (filters.tags?.length || filters.excludeTags?.length || filters.queryText) return this._countMediaRaw(filters);
     return this._countMediaOrm(filters);
   }
 
@@ -144,10 +144,9 @@ export class MediaRepository {
     }
 
     if (queryText) {
-      // $p is used twice in the OR — Postgres reuses the same bound value.
-      conditions.push(`(m.title ILIKE $${p} OR EXISTS (SELECT 1 FROM "Document" d WHERE d."mediaId" = m.id AND d."rawText" ILIKE $${p}))`);
-      params.push(`%${queryText}%`);
-      p++;
+      conditions.push(`(m.title ILIKE $${p} OR EXISTS (SELECT 1 FROM "Document" d WHERE d."mediaId" = m.id AND d."searchVector" @@ plainto_tsquery('simple', $${p + 1})))`);
+      params.push(`%${queryText}%`, queryText);
+      p += 2;
     }
     if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
     if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
@@ -250,8 +249,8 @@ export class MediaRepository {
 
   /** Return all media IDs matching the given filters — no pagination, used for bulk operations. */
   async listAllMediaIds (filters: Omit<MediaListFilters, "orderBy" | "take" | "cursor">): Promise<string[]> {
-    const { tags, excludeTags } = filters;
-    if (tags?.length || excludeTags?.length) return this._listAllMediaIdsRaw(filters);
+    const { tags, excludeTags, queryText } = filters;
+    if (tags?.length || excludeTags?.length || queryText) return this._listAllMediaIdsRaw(filters);
     return this._listAllMediaIdsOrm(filters);
   }
 

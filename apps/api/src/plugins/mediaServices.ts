@@ -49,7 +49,7 @@ export default fp(
         ocrQueue,
         logger: app.log,
       }),
-      queryService: createMediaQueryService({ repository }),
+      queryService: createMediaQueryService({ repository, redis: app.redis }),
       readService: createMediaReadService({
         repository,
         s3Adapter,
