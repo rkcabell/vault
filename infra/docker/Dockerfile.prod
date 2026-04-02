@@ -19,9 +19,9 @@ COPY apps/api/package.json    apps/api/
 COPY apps/web/package.json    apps/web/
 COPY packages/db/package.json     packages/db/
 COPY packages/types/package.json  packages/types/
-# --ignore-scripts skips the packages/db postinstall `prisma generate` — the
-# schema isn't available yet at this stage. We run it explicitly in builder.
-RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
+# Copy the schema so packages/db postinstall (`prisma generate`) can find it.
+COPY packages/db/prisma/schema.prisma packages/db/prisma/schema.prisma
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 # ---------------------------------------------------------------------------
 # builder: compile everything
@@ -31,17 +31,14 @@ COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/web/ apps/web/
 
-# 1. Generate the Prisma client (needs schema, skipped in deps stage above)
-RUN node_modules/.bin/prisma generate --schema packages/db/prisma/schema.prisma
-
-# 2. Build the @vault/db package (TypeScript → dist/)
+# 1. Build the @vault/db package (TypeScript → dist/)
 RUN npm run build -w packages/db
 
-# 3. Compile the Fastify API + workers (tsc -p . covers src/ incl. src/worker/)
+# 2. Compile the Fastify API + workers (tsc -p . covers src/ incl. src/worker/)
 #    The build script also copies fileTransport.mjs into dist/.
 RUN npm run build -w apps/api
 
-# 4. Build Next.js (emits .next/standalone because output:'standalone' is set)
+# 3. Build Next.js (emits .next/standalone because output:'standalone' is set)
 RUN npm run build -w apps/web
 
 # ---------------------------------------------------------------------------
@@ -52,9 +49,9 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json    apps/api/
 COPY packages/db/package.json     packages/db/
 COPY packages/types/package.json  packages/types/
-# --ignore-scripts skips `prisma generate` postinstall — the generated client
-# is copied from the builder stage instead.
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts
+# Copy the schema so packages/db postinstall (`prisma generate`) can find it.
+COPY packages/db/prisma/schema.prisma packages/db/prisma/schema.prisma
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 # ---------------------------------------------------------------------------
 # api: production API image
