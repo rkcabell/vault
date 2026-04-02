@@ -1,9 +1,8 @@
 # scripts/windows-setup.ps1 - One-shot Vault setup on Windows.
 # Requires only Docker Desktop - no Node.js needed.
 #
-# Run from the repo root in PowerShell:
-#   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-#   .\scripts\windows-setup.ps1
+# Run from the repo root (PowerShell, cmd, Git Bash, or Windows Terminal):
+#   powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"

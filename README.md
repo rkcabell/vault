@@ -78,25 +78,15 @@ npm run start
 
 Open [http://localhost:3000](http://localhost:3000).
 
-### Windows (PowerShell)
+### Windows
 
 ```powershell
-# 1. Clone the repo
 git clone https://github.com/rkcabell/vault.git
 cd vault
-
-# 2. Run these as separate commands (do not combine them on one line)
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\windows-setup.ps1
+powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
 ```
 
-If you are in Git Bash, run the setup script through PowerShell:
-
-```bash
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-setup.ps1
-```
-
-> If Docker Desktop was just installed, the script will ask you to restart your machine and re-run it.
+Works from PowerShell, cmd, Git Bash, or Windows Terminal. If Docker Desktop was just installed, the script will ask you to restart and re-run.
 
 Open [http://localhost:3000](http://localhost:3000).
 
