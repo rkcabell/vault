@@ -21,11 +21,14 @@ COPY packages/db/package.json     packages/db/
 COPY packages/types/package.json  packages/types/
 # Copy the schema so packages/db postinstall (`prisma generate`) can find it.
 COPY packages/db/prisma/schema.prisma packages/db/prisma/schema.prisma
-# Use `npm install` (not `npm ci`) so npm re-evaluates platform-specific optional
-# dependencies (lightningcss, @tailwindcss/oxide, @next/swc) for the Linux container.
-# package-lock.json was generated on Windows and only has the Win32 binaries in its
-# packages section; npm ci would therefore skip the Linux equivalents entirely.
-RUN --mount=type=cache,target=/root/.npm npm install
+RUN --mount=type=cache,target=/root/.npm npm ci
+# package-lock.json was generated on Windows, so the Linux-specific optional
+# binaries are absent from the packages section and npm ci never installs them.
+# Explicitly add the two packages needed for the web build on Linux x64.
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --no-save \
+        "lightningcss-linux-x64-gnu@1.30.2" \
+        "@tailwindcss/oxide-linux-x64-gnu@4.1.18"
 
 # ---------------------------------------------------------------------------
 # builder: compile everything
