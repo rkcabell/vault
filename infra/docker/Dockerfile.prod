@@ -38,10 +38,11 @@ COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/web/ apps/web/
 
-# 1. Build the @vault/db package (TypeScript → dist/)
+# 1. Build shared packages
+RUN npm run build -w packages/types
 RUN npm run build -w packages/db
 
-# 2. Compile the Fastify API + workers (tsc -p . covers src/ incl. src/worker/)
+# 2. Compile the Fastify API + workers (tsc + tsc-alias rewrites @/ paths → dist/)
 #    The build script also copies fileTransport.mjs into dist/.
 RUN npm run build -w apps/api
 
@@ -59,6 +60,11 @@ COPY packages/types/package.json  packages/types/
 # Copy the schema so packages/db postinstall (`prisma generate`) can find it.
 COPY packages/db/prisma/schema.prisma packages/db/prisma/schema.prisma
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+# sharp linux binaries omitted from Windows-generated lock file — install explicitly.
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --no-save \
+        "@img/sharp-linux-x64@0.34.5" \
+        "@img/sharp-libvips-linux-x64@1.2.4"
 
 # ---------------------------------------------------------------------------
 # api: production API image
@@ -79,11 +85,12 @@ COPY --from=builder /app/apps/api/dist ./apps/api/dist
 # client from the builder stage instead.
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
-# @vault/db package — node_modules/@vault/db is a workspace symlink to packages/db,
-# so packages/db/package.json must exist or Node falls back to bare index.js lookup.
-COPY packages/db/package.json             ./packages/db/package.json
-# Compiled @vault/db (needed at runtime for Prisma schema path resolution)
-COPY --from=builder /app/packages/db/dist ./packages/db/dist
+# Workspace packages — the node_modules/@vault/* entries are symlinks into packages/,
+# so each package.json must exist at the symlink target or Node loses the main field.
+COPY packages/db/package.json               ./packages/db/package.json
+COPY --from=builder /app/packages/db/dist   ./packages/db/dist
+COPY packages/types/package.json            ./packages/types/package.json
+COPY --from=builder /app/packages/types/dist ./packages/types/dist
 
 # Prisma schema + migrations (needed by prisma migrate deploy in entrypoint)
 COPY packages/db/prisma ./packages/db/prisma
