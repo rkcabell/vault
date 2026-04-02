@@ -47,7 +47,9 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json    apps/api/
 COPY packages/db/package.json     packages/db/
 COPY packages/types/package.json  packages/types/
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+# --ignore-scripts skips `prisma generate` postinstall — the generated client
+# is copied from the builder stage instead.
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts
 
 # ---------------------------------------------------------------------------
 # api: production API image

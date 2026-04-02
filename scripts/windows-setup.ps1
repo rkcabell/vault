@@ -64,7 +64,7 @@ function Write-AsciiProgressLine {
     }
 
     # Pad to clear remnants from the previous redraw.
-    Write-Host -NoNewline ("`r" + $line.PadRight(140))
+    [Console]::Write("`r" + $line.PadRight(140))
 }
 
 function Wait-DockerReady {
@@ -80,7 +80,7 @@ function Wait-DockerReady {
         if ($LASTEXITCODE -eq 0) {
             $elapsedSuccess = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
             Write-AsciiProgressLine -Percent 100 -Label "Docker readiness" -Suffix "ready in ${elapsedSuccess}s"
-            Write-Host ""
+            [Console]::WriteLine()
             return $true
         }
 
@@ -91,7 +91,7 @@ function Wait-DockerReady {
     }
 
     Write-AsciiProgressLine -Percent 100 -Label "Docker readiness" -Suffix "timeout after ${TimeoutSeconds}s"
-    Write-Host ""
+    [Console]::WriteLine()
     return $false
 }
 
@@ -161,7 +161,7 @@ function Invoke-ComposeUpWithProgress {
         $totalSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
         $resultLabel = if ($exitCode -eq 0) { "completed in ${totalSeconds}s" } else { "failed in ${totalSeconds}s" }
         Write-AsciiProgressLine -Percent 100 -Label "Compose build" -Suffix $resultLabel
-        Write-Host ""
+        [Console]::WriteLine()
 
         if ($exitCode -ne 0) {
             $stderrTail = (Get-Content -Path $stderrFile -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
