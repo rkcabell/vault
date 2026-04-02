@@ -24,21 +24,74 @@ function Ok($msg) { Write-Host "  + $msg" -ForegroundColor Green }
 function Warn($msg) { Write-Host "  ! $msg" -ForegroundColor Yellow }
 function Die($msg) { Write-Host "`nError: $msg" -ForegroundColor Red; exit 1 }
 
+function New-AsciiProgressBar {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Percent,
+        [int]$Width = 44
+    )
+
+    $clamped = [Math]::Max(0, [Math]::Min(100, $Percent))
+    $filled = [int][Math]::Floor(($clamped / 100) * $Width)
+    $segments = @(" ") * $Width
+
+    for ($i = 0; $i -lt $filled; $i++) {
+        $segments[$i] = "="
+    }
+
+    $label = "[$clamped%]"
+    $start = [Math]::Max(0, [int][Math]::Floor(($Width - $label.Length) / 2))
+    for ($i = 0; $i -lt $label.Length -and ($start + $i) -lt $Width; $i++) {
+        $segments[$start + $i] = $label[$i]
+    }
+
+    return "[" + ($segments -join "") + "]"
+}
+
+function Write-AsciiProgressLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Percent,
+        [Parameter(Mandatory = $true)]
+        [string]$Label,
+        [string]$Suffix = ""
+    )
+
+    $bar = New-AsciiProgressBar -Percent $Percent
+    $line = "  $Label $bar"
+    if (-not [string]::IsNullOrWhiteSpace($Suffix)) {
+        $line += " $Suffix"
+    }
+
+    # Pad to clear remnants from the previous redraw.
+    Write-Host -NoNewline ("`r" + $line.PadRight(140))
+}
+
 function Wait-DockerReady {
     param(
         [int]$TimeoutSeconds = 120,
         [int]$IntervalSeconds = 2
     )
 
+    $startedAt = Get-Date
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         & docker info --format "{{.ServerVersion}}" *> $null
         if ($LASTEXITCODE -eq 0) {
+            $elapsedSuccess = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
+            Write-AsciiProgressLine -Percent 100 -Label "Docker readiness" -Suffix "ready in ${elapsedSuccess}s"
+            Write-Host ""
             return $true
         }
+
+        $elapsedSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
+        $percent = [int][Math]::Floor(($elapsedSeconds / $TimeoutSeconds) * 100)
+        Write-AsciiProgressLine -Percent $percent -Label "Docker readiness" -Suffix "${elapsedSeconds}s/${TimeoutSeconds}s"
         Start-Sleep -Seconds $IntervalSeconds
     }
 
+    Write-AsciiProgressLine -Percent 100 -Label "Docker readiness" -Suffix "timeout after ${TimeoutSeconds}s"
+    Write-Host ""
     return $false
 }
 
@@ -76,6 +129,61 @@ function Show-ComposeDiagnostics {
     & docker @(Get-ComposeBaseArgs) logs --tail 80 postgres redis minio minio-init api web jobs-ocr jobs-thumb 2>$null
     if ($LASTEXITCODE -ne 0) {
         Warn "Unable to read compose logs."
+    }
+}
+
+function Invoke-ComposeUpWithProgress {
+    param(
+        [int]$EstimateSeconds = 300,
+        [int]$RefreshIntervalMs = 500
+    )
+
+    $composeArgs = @(Get-ComposeBaseArgs) + @("up", "-d", "--build")
+    $stdoutFile = [System.IO.Path]::GetTempFileName()
+    $stderrFile = [System.IO.Path]::GetTempFileName()
+    $process = $null
+    $exitCode = 1
+
+    try {
+        $process = Start-Process -FilePath "docker" -ArgumentList $composeArgs -NoNewWindow -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+        $startedAt = Get-Date
+
+        while (-not $process.HasExited) {
+            $elapsedSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
+            $percent = [int][Math]::Min(99, [Math]::Floor(($elapsedSeconds / $EstimateSeconds) * 100))
+            Write-AsciiProgressLine -Percent $percent -Label "Compose build" -Suffix "${elapsedSeconds}s elapsed"
+            Start-Sleep -Milliseconds $RefreshIntervalMs
+            $process.Refresh()
+        }
+
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        $totalSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
+        $resultLabel = if ($exitCode -eq 0) { "completed in ${totalSeconds}s" } else { "failed in ${totalSeconds}s" }
+        Write-AsciiProgressLine -Percent 100 -Label "Compose build" -Suffix $resultLabel
+        Write-Host ""
+
+        if ($exitCode -ne 0) {
+            $stderrTail = (Get-Content -Path $stderrFile -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
+            if ($stderrTail) {
+                Warn "docker compose stderr (tail):"
+                Write-Host $stderrTail
+            }
+
+            $stdoutTail = (Get-Content -Path $stdoutFile -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
+            if ($stdoutTail) {
+                Warn "docker compose stdout (tail):"
+                Write-Host $stdoutTail
+            }
+        }
+
+        return ($exitCode -eq 0)
+    } finally {
+        foreach ($path in @($stdoutFile, $stderrFile)) {
+            if ($path -and (Test-Path $path)) {
+                Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 
@@ -243,8 +351,7 @@ Ok "Required .env.docker values are present"
 # ---------------------------------------------------------------------------
 Step "Building and starting Vault (this may take a few minutes on first run)"
 
-& docker @(Get-ComposeBaseArgs) up -d --build
-if ($LASTEXITCODE -ne 0) {
+if (-not (Invoke-ComposeUpWithProgress -EstimateSeconds 300 -RefreshIntervalMs 500)) {
     Show-ComposeDiagnostics
     Die "Failed to build/start Vault services."
 }

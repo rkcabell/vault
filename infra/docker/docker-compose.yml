@@ -66,16 +66,9 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
-    working_dir: /app
-    volumes:
-      - ../..:/app
-      - /app/node_modules
-      - /app/packages/db/dist
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: "8000"
-      CHOKIDAR_USEPOLLING: "true"
-      CHOKIDAR_INTERVAL: "500"
     ports: [ "8000:8000" ]
 
   web:
@@ -85,15 +78,9 @@ services:
       target: web
     depends_on:
       - api
-    working_dir: /app
-    volumes:
-      - ../..:/app
-      - /app/node_modules
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       API_BASE_URL: http://api:8000
-      WATCHPACK_POLLING: "true"
-      WATCHPACK_POLLING_INTERVAL: "500"
     ports: [ "3000:3000" ]
 
   jobs-ocr:
@@ -102,21 +89,14 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile
       target: jobs
-    command: npm run -w apps/api worker:ocr:dev
+    command: npm run -w apps/api worker:ocr
     depends_on:
       api:
         condition: service_started
       minio-init:
         condition: service_completed_successfully
-    working_dir: /app
-    volumes:
-      - ../..:/app
-      - /app/node_modules
-      - /app/packages/db/dist
     environment:
-      NODE_ENV: development
-      CHOKIDAR_USEPOLLING: "true"
-      CHOKIDAR_INTERVAL: "500"
+      NODE_ENV: production
     restart: on-failure
     deploy:
       resources:
@@ -129,21 +109,14 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile
       target: jobs
-    command: npm run -w apps/api worker:thumb:dev
+    command: npm run -w apps/api worker:thumb
     depends_on:
       api:
         condition: service_started
       minio-init:
         condition: service_completed_successfully
-    working_dir: /app
-    volumes:
-      - ../..:/app
-      - /app/node_modules
-      - /app/packages/db/dist
     environment:
-      NODE_ENV: development
-      CHOKIDAR_USEPOLLING: "true"
-      CHOKIDAR_INTERVAL: "500"
+      NODE_ENV: production
     restart: on-failure
     deploy:
       resources:
