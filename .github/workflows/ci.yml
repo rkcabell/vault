@@ -32,7 +32,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packages-dist
-          path: packages/db/dist
+          path: |
+            packages/db/dist
+            packages/types/dist
           retention-days: 1
 
   ci:
@@ -61,7 +63,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: packages-dist
-          path: packages/db/dist
+          path: packages
+
+      - name: Install lightningcss Linux binary
+        run: |
+          VERSION=$(node -p "require('./node_modules/lightningcss/package.json').optionalDependencies['lightningcss-linux-x64-gnu']")
+          npm install --no-save lightningcss-linux-x64-gnu@$VERSION
 
       - name: Lint
         run: npm -w ${{ matrix.workspace }} run lint --if-present

@@ -1,4 +1,3 @@
-
 # Vault
 
 A self-hosted personal document archive. Upload files, extract text via OCR, tag and search everything, set reminders, and organize items into bundles
@@ -53,26 +52,63 @@ vault/
 
 ## Local Setup
 
-Should work right out of the box
+### Linux (Ubuntu/Debian)
 
 ```bash
-1. git clone https://github.com/rkcabell/vault.git
-2. cd vault
-3. bash scripts/linux-setup.sh
-4. npm run start
+# 1. Install git
+sudo apt-get update && sudo apt-get install -y git
+
+# 2. Clone
+git clone https://github.com/rkcabell/vault.git
+cd vault
+
+# 3. Run setup (installs Node.js, Docker, OCR tools, starts infrastructure, runs migrations)
+sudo bash scripts/linux-setup.sh
+
+# 4. Add your user to the docker group so you don't need sudo
+sudo usermod -aG docker $USER
+newgrp docker
+
+# 5. Fix file ownership (setup runs as root, this reclaims the files)
+sudo chown -R $USER:$USER ~/vault
+
+# 6. Start
+npm run start
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-The setup script handles everything automatically on Debian/Ubuntu — Node.js, Docker, OCR tools, `.env` generation, Docker infrastructure, database migrations, and MinIO bucket creation. On other platforms, install prerequisites manually before running it.
+### Windows
 
-**Prerequisites (non-Debian/Ubuntu):**
+```powershell
+git clone https://github.com/rkcabell/vault.git
+cd vault
+powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
+```
 
-- Node.js ≥18.18, npm ≥10.5.0
-- Docker + Docker Compose v2
-- ocrmypdf, Tesseract, Ghostscript, qpdf (optional — required for OCR only)
+Works from PowerShell, cmd, Git Bash, or Windows Terminal. If Docker Desktop was just installed, the script will ask you to restart and re-run.
 
-  macOS: `brew install ocrmypdf tesseract ghostscript qpdf`
+Open [http://localhost](http://localhost).
+
+To stop or restart Vault:
+
+```powershell
+# Stop all services
+docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml down
+
+# Start again (no rebuild)
+docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml up -d
+```
+
+### macOS
+> **Untested**
+```bash
+brew install git node ocrmypdf tesseract ghostscript qpdf
+git clone https://github.com/rkcabell/vault.git
+cd vault
+bash scripts/linux-setup.sh
+npm run start
+```
 
 ---
 

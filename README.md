@@ -247,6 +247,20 @@ npm run docker:build
 
 Configure services using `.env.docker` at the repo root. The Dockerfile supports three build targets: `api`, `web`, and `jobs`.
 
+### Services
+
+| Service | Role | Exposed port |
+| ----------- | ------------------------------------------- | ------------ |
+| `api` | Fastify REST API | 8000 |
+| `web` | Next.js frontend | 3000 |
+| `nginx` | Reverse proxy — routes `/api/*` to API (prod only) | 80 |
+| `jobs-ocr` | OCR text extraction worker | — |
+| `jobs-thumb` | Thumbnail generation worker | — |
+| `postgres` | PostgreSQL database | 5432 |
+| `redis` | Job queue backing store (BullMQ) | 6379 |
+| `minio` | S3-compatible object storage | 9000 / 9001 |
+| `minio-init` | One-time bucket creation (exits after init) | — |
+
 ---
 
 ## API
