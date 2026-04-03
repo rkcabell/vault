@@ -45,7 +45,7 @@ vault/
 │   └── docker/       # Dockerfiles and Compose configs
 ├── docs/             # OpenAPI spec and test coverage plan
 ├── test-results/     # Generated HTML test reports
-└── scripts/          # setup.sh
+└── scripts/          # linux-setup.sh, windows-setup.ps1
 ```
 
 ---
@@ -63,7 +63,7 @@ git clone https://github.com/rkcabell/vault.git
 cd vault
 
 # 3. Run setup (installs Node.js, Docker, OCR tools, starts infrastructure, runs migrations)
-sudo bash scripts/setup.sh
+sudo bash scripts/linux-setup.sh
 
 # 4. Add your user to the docker group so you don't need sudo
 sudo usermod -aG docker $USER
@@ -81,23 +81,24 @@ Open [http://localhost:3000](http://localhost:3000).
 ### Windows
 
 ```powershell
-# 1. Open PowerShell as Administrator and clone
 git clone https://github.com/rkcabell/vault.git
 cd vault
-
-# 2. Allow the script to run and execute it
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\setup.ps1
+powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
 ```
 
-> Docker Desktop must be running before step 2. If it was just installed, restart your machine first.
+Works from PowerShell, cmd, Git Bash, or Windows Terminal. If Docker Desktop was just installed, the script will ask you to restart and re-run.
+
+Open [http://localhost](http://localhost).
+
+To stop or restart Vault:
 
 ```powershell
-# 3. Start
-npm run start
-```
+# Stop all services
+docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml down
 
-Open [http://localhost:3000](http://localhost:3000).
+# Start again (no rebuild)
+docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml up -d
+```
 
 ### macOS
 
@@ -105,7 +106,7 @@ Open [http://localhost:3000](http://localhost:3000).
 brew install git node ocrmypdf tesseract ghostscript qpdf
 git clone https://github.com/rkcabell/vault.git
 cd vault
-bash scripts/setup.sh
+bash scripts/linux-setup.sh
 npm run start
 ```
 
@@ -268,3 +269,4 @@ Key endpoint groups:
 ## License
 
 [PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal and noncommercial use.
+

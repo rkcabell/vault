@@ -53,6 +53,7 @@ const originalSend = s3.send.bind(s3);
 const originalFindUnique = prisma.media.findUnique.bind(prisma.media);
 const originalUpdateMany = prisma.media.updateMany.bind(prisma.media);
 const originalUpsert = prisma.document.upsert.bind(prisma.document);
+const originalExecuteRaw = (prisma as any).$executeRaw.bind(prisma);
 const originalTransaction = (prisma as any).$transaction.bind(prisma);
 
 function mockS3Send (fn: (cmd: any) => any) {
@@ -90,6 +91,7 @@ afterEach(() => {
   (prisma.media as any).findUnique = originalFindUnique;
   (prisma.media as any).updateMany = originalUpdateMany;
   (prisma.document as any).upsert = originalUpsert;
+  (prisma as any).$executeRaw = originalExecuteRaw;
   (prisma as any).$transaction = originalTransaction;
 });
 
@@ -123,6 +125,8 @@ test("processOcrJob writes OCR text for non-PDF media", async () => {
 
   mockMediaFindUnique({ id: "media-1", storageKey: "orig/key", mimeType: "image/png" });
   mockNoopTransaction();
+
+  (prisma as any).$executeRaw = async () => 1;
 
   let upsertArgs: unknown = null;
   mockDocumentUpsert(args => {

@@ -15,6 +15,18 @@ import type { ResultsPanelItem } from './ResultsPanel'
 import { Button } from '@/components/ui/Button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
+// ─── TODO: Known UI bugs in the text extract viewer ──────────────────────────
+// 1. Text overlapping — segments or highlight spans can render on top of each
+//    other in certain layouts, making text unreadable.
+// 2. No resize controls — the viewer has a fixed height with no way to expand
+//    or collapse it; reading long documents is cramped.
+// 3. Insufficient vertical spacing — line-height / paragraph gaps are too tight
+//    for comfortable reading of extracted text.
+// 4. Search highlight styling is off-theme — the active/inactive match colors
+//    don't follow the design system tokens, and hovering a highlight removes
+//    the highlight entirely instead of showing a hover state.
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ─── Toggle ──────────────────────────────────────────────────────────────────
 // Set to false to revert to the page-based TextSegmentList (no react-window).
 const USE_VIRTUAL_SCROLL = true

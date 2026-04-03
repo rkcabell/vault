@@ -112,11 +112,12 @@ model BundleItem {
 }
 
 model Document {
-  mediaId    String @id
-  rawText    String
-  pages      Json?
-  textSource TextSource?
-  media      Media  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  mediaId      String  @id
+  rawText      String
+  searchVector Unsupported("tsvector")?
+  pages        Json?
+  textSource   TextSource?
+  media        Media   @relation(fields: [mediaId], references: [id], onDelete: Cascade)
 }
 
 enum TextSource {

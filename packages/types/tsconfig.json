@@ -5,7 +5,11 @@
     "moduleResolution": "Bundler",
     "lib": ["ESNext"],
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true,
+    "declarationMap": true
   },
   "include": ["src"]
 }

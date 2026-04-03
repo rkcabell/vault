@@ -46,7 +46,7 @@ vault/
 │   └── docker/       # Dockerfiles and Compose configs
 ├── docs/             # OpenAPI spec and test coverage plan
 ├── test-results/     # Generated HTML test reports
-└── scripts/          # setup.sh
+└── scripts/          # linux-setup.sh, windows-setup.ps1
 ```
 
 ---
@@ -58,7 +58,7 @@ Should work right out of the box
 ```bash
 1. git clone https://github.com/rkcabell/vault.git
 2. cd vault
-3. bash scripts/setup.sh
+3. bash scripts/linux-setup.sh
 4. npm run start
 ```
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/setup.sh — Bootstrap Vault for local development from scratch.
+# scripts/linux-setup.sh — Bootstrap Vault for local development from scratch.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -94,6 +94,7 @@ done
 # 2. npm install + build internal packages
 # ---------------------------------------------------------------------------
 step "Installing dependencies"
+rm -f "$ROOT/package-lock.json"
 npm install --prefix "$ROOT" --silent
 ok "node_modules ready"
 
