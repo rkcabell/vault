@@ -19,6 +19,8 @@ async function readErrorMessage(response: Response) {
   return `Failed to load media (${response.status})`;
 }
 
+// Delete all media for this account.
+// For development/testing purposes only, not exposed in production builds.
 export default function DevPurgeButton({ onSuccess, onError }: Props) {
   const [isPurging, setIsPurging] = useState(false);
   const [confirmState, setConfirmState] = useState<{ x: number; y: number } | null>(null);

@@ -49,7 +49,7 @@ export const TextSegmentList = React.forwardRef<HTMLDivElement, TextSegmentListP
             forwardedRef.current = node
           }
         }}
-        className={cn('h-full w-full min-h-0 overflow-y-auto', className)}
+        className={cn('vault-scrollbar h-full w-full min-h-0 overflow-y-auto', className)}
       >
         <div className="p-4 whitespace-pre-wrap break-words">
           {segments.map((segment) => (

@@ -303,8 +303,9 @@ export function MediaCard({
   if (variant === 'list') {
     return (
       <Card
-        className={cn('hover:bg-accent/50 transition-colors', className)}
+        className={cn('hover:bg-accent/50 transition-colors', isSelectMode && 'cursor-pointer select-none', className)}
         style={isSelectMode && isSelected ? { outline: '2px solid #06b6d4', outlineOffset: '0px' } : undefined}
+        onClick={isSelectMode ? handleSelectClick : undefined}
       >
         <CardContent className={cn("p-4", isCompact && "px-2 py-1")}>
           <div className={cn("flex items-center gap-4", isCompact && "gap-2")}>
@@ -503,7 +504,7 @@ export function MediaCard({
 
   return (
     <Card
-      className={cn('group flex flex-col overflow-hidden hover:shadow-lg transition-shadow', className)}
+      className={cn('group flex flex-col overflow-hidden hover:shadow-lg transition-shadow', isSelectMode && 'select-none', className)}
       style={isSelectMode && isSelected ? { outline: '2px solid #06b6d4', outlineOffset: '0px' } : undefined}
     >
       {isSelectMode ? (
@@ -715,10 +716,10 @@ export function MediaCardListHeader({
               <div className="h-6 w-6" />
             </div>
           )}
-          {/* Visible thumbnail placeholder — same width as actual thumbnail */}
+          {/* Thumbnail placeholder — invisible, keeps column alignment */}
           <div
             className={cn(
-              "flex-shrink-0 rounded-md bg-muted/40 self-stretch",
+              "flex-shrink-0 self-stretch",
               isCompact ? LIST_THUMB_W.compact : LIST_THUMB_W.comfortable,
             )}
             aria-hidden

@@ -233,7 +233,6 @@ export function MediaTextPanel (props: {
             segments={segments}
             highlightTerms={highlightTerms}
             containerRef={containerRef}
-            isCopying={isCopying}
             copyMessage={copyMessage}
             copySelected={copySelected}
             copyFull={copyFull}

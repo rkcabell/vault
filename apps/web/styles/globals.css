@@ -880,6 +880,15 @@ html.dark .text-error-panel__detail,
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
+html:not(.dark).theme-garden a.overview-card {
+  transition: background-color 150ms ease-in-out;
+}
+
+html:not(.dark).theme-garden a.overview-card:hover,
+html:not(.dark).theme-garden a.overview-card:focus-visible {
+  background-color: hsl(var(--accent));
+}
+
 .overview-card--muted {
   background-color: hsl(var(--muted));
 }

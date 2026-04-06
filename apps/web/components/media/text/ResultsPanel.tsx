@@ -3,7 +3,7 @@
 import React, { memo, useEffect, useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 
 const RESULTS_PAGE_SIZE = 25
 
@@ -20,6 +20,7 @@ type ResultsPanelProps = {
   results: ResultsPanelItem[]
   activeMatchIndex: number
   onSelectMatch: (index: number) => void
+  onClose?: () => void
   showList?: boolean
 }
 
@@ -50,19 +51,20 @@ const ResultRow = memo(function ResultRow(props: ResultRowProps) {
       type="button"
       onClick={() => onSelectMatch(result.matchIndex)}
       className={cn(
-        'w-full border-b px-3 py-2 text-left transition-colors',
-        'hover:bg-muted/40 focus-visible:bg-muted/50 focus-visible:outline-none',
-        isActive && 'bg-amber-50'
+        'w-full border-b px-3 py-2 text-left transition-colors focus-visible:outline-none',
+        isActive
+          ? 'bg-primary/10 hover:bg-primary/20 focus-visible:bg-primary/20'
+          : 'hover:bg-muted/40 focus-visible:bg-muted/50'
       )}
       aria-current={isActive ? 'true' : undefined}
     >
       <div className="flex items-baseline justify-between text-xs text-muted-foreground">
         <span>{result.matchIndex + 1} of {total}</span>
-        <span>{result.segmentLabel}</span>
+        {result.segmentLabel && <span>{result.segmentLabel}</span>}
       </div>
       <div className="mt-1 text-xs text-foreground/90">
         {prefix}
-        <mark className="rounded bg-amber-200 px-0.5 text-foreground">
+        <mark className="rounded bg-primary/20 px-0.5 text-foreground">
           {matchText}
         </mark>
         {suffix}
@@ -74,7 +76,7 @@ const ResultRow = memo(function ResultRow(props: ResultRowProps) {
 ResultRow.displayName = 'ResultRow'
 
 export function ResultsPanel(props: ResultsPanelProps) {
-  const { results, activeMatchIndex, onSelectMatch, showList = true } = props
+  const { results, activeMatchIndex, onSelectMatch, onClose, showList = true } = props
 
   const totalPages = Math.max(1, Math.ceil(results.length / RESULTS_PAGE_SIZE))
   const [currentPage, setCurrentPage] = useState(0)
@@ -94,8 +96,17 @@ export function ResultsPanel(props: ResultsPanelProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        <span>Results</span>
-        <span>{results.length}</span>
+        <span>{results.length} Results</span>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close results panel"
+            className="rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       {showList && totalPages > 1 && (
         <div className="flex items-center justify-between border-b px-2 py-1.5">
@@ -123,7 +134,7 @@ export function ResultsPanel(props: ResultsPanelProps) {
         </div>
       )}
       {showList && (
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="vault-scrollbar min-h-0 flex-1 overflow-y-auto">
           {results.length === 0 ? (
             <div className="px-3 py-4 text-xs text-muted-foreground">No matches</div>
           ) : (

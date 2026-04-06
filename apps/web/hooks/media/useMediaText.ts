@@ -107,7 +107,7 @@ export function useMediaText (args: {
     return segments.map(segment => segment.text).join('')
   }
 
-  const copySelected = async () => {
+  const copySelected = async (fallbackText?: string) => {
     if (isCopying) return
     if (!navigator.clipboard) {
       setCopyMessage('Copy failed.')
@@ -117,6 +117,18 @@ export function useMediaText (args: {
     const selection = window.getSelection()
     const selectedText = selection?.toString() ?? ''
     if (!selectedText.trim()) {
+      if (fallbackText?.trim()) {
+        setIsCopying(true)
+        try {
+          await navigator.clipboard.writeText(fallbackText.trim())
+          setCopyMessage('Copied!')
+        } catch {
+          setCopyMessage('Copy failed.')
+        } finally {
+          setIsCopying(false)
+        }
+        return
+      }
       setCopyMessage('No text selected')
       return
     }

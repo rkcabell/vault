@@ -16,6 +16,7 @@ const preferencesSchema = z
     hideUnpackedItems: z.boolean().optional(),
     soonWindowDays: z.number().int().min(2).max(14).optional(),
     themePreference: z.enum(["system", "light", "dark"]).optional(),
+    yellowHighlight: z.boolean().optional(),
     lightTheme: z.enum(["default", "latte", "sandstone", "mist", "lavender", "dream", "cotton-candy", "mint", "garden"]).optional(),
     darkTheme: z.enum(["new-moon", "matrix", "charcoal", "solarized"]).optional(),
   })

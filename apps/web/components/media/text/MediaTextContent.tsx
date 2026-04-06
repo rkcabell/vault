@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { usePreferences } from '@/hooks/usePreferences'
 import { useTextHighlighter } from '@/hooks/media/useTextHighlighter'
 import { useSearchWorker } from '@/hooks/media/useSearchWorker'
 import type { SearchMatch, TextSegment } from '@/lib/media/types'
@@ -16,15 +17,8 @@ import { Button } from '@/components/ui/Button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
 // ─── TODO: Known UI bugs in the text extract viewer ──────────────────────────
-// 1. Text overlapping — segments or highlight spans can render on top of each
-//    other in certain layouts, making text unreadable.
-// 2. No resize controls — the viewer has a fixed height with no way to expand
-//    or collapse it; reading long documents is cramped.
-// 3. Insufficient vertical spacing — line-height / paragraph gaps are too tight
+// 1. Insufficient vertical spacing — line-height / paragraph gaps are too tight
 //    for comfortable reading of extracted text.
-// 4. Search highlight styling is off-theme — the active/inactive match colors
-//    don't follow the design system tokens, and hovering a highlight removes
-//    the highlight entirely instead of showing a hover state.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Toggle ──────────────────────────────────────────────────────────────────
@@ -38,9 +32,8 @@ export function MediaTextContent(props: {
   segments: TextSegment[]
   highlightTerms: string[]
   containerRef?: RefObject<HTMLDivElement | null>
-  isCopying: boolean
   copyMessage: string | null
-  copySelected: () => Promise<void>
+  copySelected: (fallbackText?: string) => Promise<void>
   copyFull: () => Promise<void>
   isCopyDisabled: boolean
 }) {
@@ -48,12 +41,17 @@ export function MediaTextContent(props: {
     segments,
     highlightTerms,
     containerRef,
-    isCopying,
     copyMessage,
     copySelected,
     copyFull,
     isCopyDisabled,
   } = props
+
+  const totalChars = useMemo(
+    () => segments.reduce((sum, s) => sum + (s.text?.length ?? 0), 0),
+    [segments],
+  )
+  const defaultViewerHeight = totalChars > 999 ? '40rem' : totalChars > 499 ? '30rem' : '20rem'
 
   const [isMonospace, setIsMonospace] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -66,9 +64,7 @@ export function MediaTextContent(props: {
   // Page state — only used when USE_VIRTUAL_SCROLL = false
   const [currentPage, setCurrentPage] = useState(0)
 
-  const [lastCopyAction, setLastCopyAction] = useState<'selected' | 'full' | null>(null)
-
-  const localScrollContainerRef = useRef<HTMLDivElement | null>(null)
+const localScrollContainerRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = containerRef ?? localScrollContainerRef
 
   // Ref for the virtual list — only used when USE_VIRTUAL_SCROLL = true
@@ -106,7 +102,8 @@ export function MediaTextContent(props: {
     })
   }, [debouncedSearchTerm, segments, search])
 
-  const { renderSegment } = useTextHighlighter({ highlightTerms })
+  const { prefs } = usePreferences()
+  const { renderSegment } = useTextHighlighter({ highlightTerms, yellowHighlight: prefs.yellowHighlight })
 
   const matchesBySegmentId = useMemo(() => {
     const map = new Map<number, SearchMatch[]>()
@@ -126,10 +123,10 @@ export function MediaTextContent(props: {
 
   const segmentLabelById = useMemo(() => {
     const map = new Map<number, string>()
-    segments.forEach((segment, index) => {
+    segments.forEach((segment) => {
       const orderValue = segment.order
       const hasOrder = typeof orderValue === 'number' && !Number.isNaN(orderValue)
-      const label = hasOrder && orderValue > 0 ? `Page ${orderValue}` : `Section ${index + 1}`
+      const label = hasOrder && orderValue > 0 ? `Page ${orderValue}` : ''
       map.set(segment.segmentId, label)
     })
     return map
@@ -137,17 +134,16 @@ export function MediaTextContent(props: {
 
   const results = useMemo<ResultsPanelItem[]>(() => {
     return matches.map((match, matchIndex) => {
-      const fallbackIndex = segmentIndexById.get(match.segmentId) ?? matchIndex
-      return {
+        return {
         matchIndex,
         segmentId: match.segmentId,
-        segmentLabel: segmentLabelById.get(match.segmentId) ?? `Section ${fallbackIndex + 1}`,
+        segmentLabel: segmentLabelById.get(match.segmentId) ?? '',
         previewText: match.previewText,
         previewMatchStart: match.previewStart,
         previewMatchEnd: match.previewEnd,
       }
     })
-  }, [matches, segmentIndexById, segmentLabelById])
+  }, [matches, segmentLabelById])
 
   // Page-based: pagination controls + sliced segments
   const totalPages = segments.length > 0 ? Math.ceil(segments.length / PAGE_SIZE) : 1
@@ -180,12 +176,15 @@ export function MediaTextContent(props: {
 
   const jumpToMatch = (match: SearchMatch) => {
     if (USE_VIRTUAL_SCROLL) {
+      const container = scrollContainerRef.current
+      // If the match element is already rendered (within overscan), fine-scroll only.
+      if (container && scrollToMatchInContainer(container, match.matchId)) return
+      // Segment not in the DOM yet — coarse scroll to bring it into view, then fine-scroll.
       const segIdx = segmentIndexById.get(match.segmentId) ?? 0
       virtualListRef.current?.scrollToSegment(segIdx)
-      // Give react-window a tick to render the newly visible items, then fine-scroll
       window.setTimeout(() => {
-        const container = scrollContainerRef.current
-        if (container) scrollToMatchInContainer(container, match.matchId)
+        const c = scrollContainerRef.current
+        if (c) scrollToMatchInContainer(c, match.matchId)
       }, 50)
     } else {
       const targetPage = Math.floor((segmentIndexById.get(match.segmentId) ?? 0) / PAGE_SIZE)
@@ -207,12 +206,10 @@ export function MediaTextContent(props: {
   }
 
   const handleCopySelectedClick = async () => {
-    setLastCopyAction('selected')
-    await copySelected()
+    await copySelected(searchTerm.trim() || undefined)
   }
 
   const handleCopyFullClick = async () => {
-    setLastCopyAction('full')
     await copyFull()
   }
 
@@ -278,6 +275,7 @@ export function MediaTextContent(props: {
   return (
     <TextViewer
       listContent={listContent}
+      defaultHeight={defaultViewerHeight}
       isMonospace={isMonospace}
       onToggleMonospace={() => setIsMonospace((value) => !value)}
       searchTerm={searchTerm}
@@ -286,8 +284,6 @@ export function MediaTextContent(props: {
       onCopySelected={handleCopySelectedClick}
       onCopyFull={handleCopyFullClick}
       isCopyDisabled={isCopyDisabled}
-      isCopying={isCopying}
-      lastCopyAction={lastCopyAction}
       copyMessage={copyMessage}
       results={results}
       activeMatchIndex={activeMatchIndex}

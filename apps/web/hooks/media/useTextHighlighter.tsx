@@ -7,8 +7,9 @@ import { cn } from '@/lib/utils'
 
 export function useTextHighlighter (args: {
   highlightTerms: string[]
+  yellowHighlight: boolean
 }) {
-  const { highlightTerms } = args
+  const { highlightTerms, yellowHighlight } = args
 
   const uniqueHighlightTerms = useMemo(
     () => Array.from(new Set(highlightTerms.filter(Boolean))),
@@ -87,8 +88,18 @@ export function useTextHighlighter (args: {
             data-match-id={searchMatchId}
             data-active-match={activeMatchAttr}
             className={cn(
-              'rounded px-0.5',
-              isSearch ? 'bg-amber-200 text-foreground' : 'bg-yellow-200/80 text-foreground'
+              'rounded px-0.5 transition-colors',
+              isSearch
+                ? isActive
+                  ? yellowHighlight
+                    ? 'bg-amber-500 text-foreground hover:bg-amber-600'
+                    : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : yellowHighlight
+                    ? 'bg-amber-100 text-foreground hover:bg-amber-200'
+                    : 'bg-primary/20 text-foreground hover:bg-primary/30'
+                : yellowHighlight
+                  ? 'bg-yellow-200/80 text-foreground hover:bg-yellow-300/80'
+                  : 'bg-primary/10 text-foreground hover:bg-primary/20'
             )}
           >
             {segmentText.slice(match.start, match.end)}
@@ -103,7 +114,7 @@ export function useTextHighlighter (args: {
 
       return segmentNodes
     },
-    [uniqueHighlightTerms]
+    [uniqueHighlightTerms, yellowHighlight]
   )
 
   return { renderSegment }

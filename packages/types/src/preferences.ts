@@ -13,6 +13,7 @@ export type Preferences = {
   hideUnpackedItems: boolean;
   soonWindowDays: number;
   themePreference: "system" | "light" | "dark";
+  yellowHighlight: boolean;
   lightTheme: LightTheme;
   darkTheme: DarkTheme;
 };
@@ -29,6 +30,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   hideUnpackedItems: false,
   soonWindowDays: 7,
   themePreference: "system",
+  yellowHighlight: false,
   lightTheme: "default",
   darkTheme: "new-moon",
 };

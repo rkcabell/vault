@@ -9,20 +9,27 @@ function debugLog(message: string, data?: Record<string, unknown>) {
   app.log.debug(message)
 }
 
+function scrollToCenter(container: HTMLElement, target: HTMLElement) {
+  const containerRect = container.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  const relativeTop = targetRect.top - containerRect.top + container.scrollTop
+  container.scrollTop = relativeTop - container.clientHeight / 2 + targetRect.height / 2
+}
+
 export function scrollToMatchInContainer(container: HTMLElement, matchId: string): boolean {
   const primaryTarget = Array.from(
     container.querySelectorAll<HTMLElement>('[data-match-id]'),
   ).find((el) => el.dataset.matchId === matchId)
 
   if (primaryTarget) {
-    primaryTarget.scrollIntoView({ block: 'center' })
+    scrollToCenter(container, primaryTarget)
     return true
   }
 
   const fallbackTarget = container.querySelector<HTMLElement>('[data-active-match="true"]')
   if (fallbackTarget) {
     debugLog('scroll:match fallback used', { matchId, reason: 'match-id target missing' })
-    fallbackTarget.scrollIntoView({ block: 'center' })
+    scrollToCenter(container, fallbackTarget)
     return true
   }
 

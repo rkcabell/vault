@@ -168,6 +168,7 @@ const GENERAL_PREF_KEYS = [
   "detectDuplicates",
   "lowMemoryMode",
   "autoUnpackArchives",
+  "yellowHighlight",
   "soonWindowDays",
 ] as const;
 
@@ -232,6 +233,14 @@ function GeneralSettingsCard() {
           checked={prefs.autoUnpackArchives}
           disabled={!isLoaded}
           onChange={v => updatePreferences({ autoUnpackArchives: v })}
+        />
+        <SettingRow
+          id="yellow-highlight"
+          label="Yellow search highlights"
+          description="Use classic yellow highlights instead of the theme color."
+          checked={prefs.yellowHighlight}
+          disabled={!isLoaded}
+          onChange={v => updatePreferences({ yellowHighlight: v })}
         />
         <div className="flex items-start justify-between gap-6 py-3">
           <div className="space-y-0.5">

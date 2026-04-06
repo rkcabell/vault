@@ -18,6 +18,7 @@ const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
   hideUnpackedItems: "prefs:hideUnpackedItems",
   soonWindowDays: "prefs:soonWindowDays",
   themePreference: "prefs:themePreference",
+  yellowHighlight: "prefs:yellowHighlight",
   lightTheme: "prefs:lightTheme",
   darkTheme: "prefs:darkTheme",
 };

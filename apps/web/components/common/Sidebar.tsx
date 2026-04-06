@@ -1,11 +1,11 @@
 //File: apps/web/components/common/Sidebar.tsx
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSplitDrag } from '@/hooks/useSplitDrag';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ChevronDown, ChevronRight, Tag, Folder, Loader2, Plus, MoreVertical, Pencil, Trash, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ScrollArea } from '@/ui/ScrollArea';
 import { Badge } from '@/ui/Badge';
 import type { Route } from "next";
 import { emitTagsUpdated } from '@/lib/tags';
@@ -44,13 +44,22 @@ interface SidebarSectionProps {
   icon: React.ReactNode;
   children: React.ReactNode;
   defaultOpen?: boolean;
+  className?: string;
+  contentClassName?: string;
 }
 
-function SidebarSection({ title, icon, children, defaultOpen = true }: SidebarSectionProps) {
+function SidebarSection({
+  title,
+  icon,
+  children,
+  defaultOpen = true,
+  className,
+  contentClassName,
+}: SidebarSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className="mb-4">
+    <div className={cn('mb-4', className)}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         className={cn(
@@ -70,7 +79,7 @@ function SidebarSection({ title, icon, children, defaultOpen = true }: SidebarSe
           <ChevronRight className="h-4 w-4" />
         )}
       </button>
-      {isOpen && <div className="mt-1">{children}</div>}
+      {isOpen && <div className={cn('mt-1', contentClassName)}>{children}</div>}
     </div>
   );
 }
@@ -102,6 +111,12 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
   const [displayedBundles, setDisplayedBundles] = useState<BundleNavItem[]>([]);
   const bundlesAbortRef = useRef<AbortController | null>(null);
   const [isFetchingBundles, setIsFetchingBundles] = useState(false);
+  const { ratio: tagsSplitRatio, isDragging: isDraggingSplit, containerRef: splitContainerRef, onPointerDown: startSplitDrag, onKeyDown: splitKeyDown } = useSplitDrag({
+    storageKey: 'vault.sidebar.tagsSplitRatio.v1',
+    defaultRatio: 0.58,
+    min: 0.25,
+    max: 0.8,
+  });
 
   const includedTags = useMemo(() => {
     const tagsParam = searchParams.get('tags') ?? '';
@@ -291,13 +306,17 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
         onConfirm={() => { const tag = confirmState!.tag; setConfirmState(null); void handleDeleteTag(tag); }}
         onCancel={() => setConfirmState(null)}
       />
-      <ScrollArea className="h-full py-4">
-        <nav className="px-3 space-y-1">
-          <SidebarSection
-            title="Tags"
-            icon={<Tag className="h-4 w-4" suppressHydrationWarning />}
-          >
-            <div className="space-y-2">
+      <div className="h-full px-3 py-4">
+        <nav className="h-full min-h-0">
+          <div ref={splitContainerRef} className="flex h-full min-h-0 flex-col">
+            <div className="min-h-0 overflow-hidden" style={{ flexBasis: `${tagsSplitRatio * 100}%` }}>
+              <SidebarSection
+                title="Tags"
+                icon={<Tag className="h-4 w-4" suppressHydrationWarning />}
+                className="mb-0 flex h-full min-h-0 flex-col"
+                contentClassName="mt-1 flex min-h-0 flex-1 flex-col"
+              >
+                <div className="flex min-h-0 flex-1 flex-col space-y-2">
               <button
                 type="button"
                 disabled
@@ -328,7 +347,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
               ) : (
                 <div
                   ref={tagsScrollRef}
-                  className="max-h-64 overflow-y-auto space-y-1 pr-0.5"
+                  className="vault-scrollbar min-h-0 flex-1 overflow-y-auto space-y-1 pr-0.5"
                 >
                   {displayedTags.filter(t => !optimisticallyDeletedTags.has(t.name)).map((tag) => {
                     const isRenaming = renamingTag === tag.name;
@@ -414,14 +433,37 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                   )}
                 </div>
               )}
+                </div>
+              </SidebarSection>
             </div>
-          </SidebarSection>
 
-          <SidebarSection
-            title="Bundles"
-            icon={<Folder className="h-4 w-4" />}
+          <div
+            role="separator"
+            aria-label="Resize tags and bundles"
+            aria-orientation="horizontal"
+            tabIndex={0}
+            onPointerDown={startSplitDrag}
+            onKeyDown={splitKeyDown}
+            className={cn(
+              'group relative my-1 flex shrink-0 cursor-row-resize items-center py-2',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm'
+            )}
           >
-            <div className="space-y-2">
+            <div className={cn(
+              'h-px w-full rounded-full bg-border/50 transition-colors',
+              'group-hover:bg-border',
+              isDraggingSplit && 'bg-primary/40'
+            )} />
+          </div>
+
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <SidebarSection
+                title="Bundles"
+                icon={<Folder className="h-4 w-4" />}
+                className="mb-0 flex h-full min-h-0 flex-col"
+                contentClassName="mt-1 flex min-h-0 flex-1 flex-col"
+              >
+                <div className="flex min-h-0 flex-1 flex-col space-y-2">
               <Link
                 href={'/bundles/new' as Route}
                 className={cn(
@@ -444,7 +486,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                   No bundles yet
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="vault-scrollbar min-h-0 flex-1 overflow-y-auto space-y-1 pr-0.5">
                   {displayedBundles.map((view) => {
                     const href = `/bundles/${view.id}`;
                     const isActive = pathname === href;
@@ -478,10 +520,12 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                   })}
                 </div>
               )}
+                </div>
+              </SidebarSection>
             </div>
-          </SidebarSection>
+          </div>
         </nav>
-      </ScrollArea>
+      </div>
     </aside>
   );
 }

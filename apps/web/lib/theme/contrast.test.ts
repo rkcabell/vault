@@ -233,7 +233,7 @@ const themes: Theme[] = [
     mutedForeground: LIGHT_MUTED_FG,
     // Medium-value green background (~72 % L). Inherited neutral grey reaches
     // only ~4.0 : 1 here — below AA (4.5) but above large-text threshold (3.0).
-    // TODO: consider a darker muted-foreground override in theme-garden.
+    // TODO: consider a darker muted-foreground override color in garden theme
     mutedFgThreshold: AA_LARGE,
     // Default red (0 84.2% 60.2%) only reaches ~2.1:1 on this background.
     // Overridden to red-800 (≈ #991b1b) — ~4.75:1 on bg, ~8:1 white-on-red.

@@ -13,16 +13,15 @@
     "noEmit": true,
     "strict": true,
     "forceConsistentCasingInFileNames": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": [
         "./*"
       ],
       "@/components/*": [
-        "components/*"
+        "./components/*"
       ],
       "@/ui/*": [
-        "components/ui/*"
+        "./components/ui/*"
       ]
     },
     "incremental": true,

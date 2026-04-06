@@ -1,6 +1,6 @@
 "use client";
 
-import React, { use, useEffect, useMemo, useState } from "react";
+import React, { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -21,6 +21,7 @@ import { TagEditor } from "@/components/media/TagEditor";
 import { MediaMetadataCard } from "@/components/media/MediaMetadataCard";
 import { MediaBundlesPanel } from "@/components/media/MediaBundlesPanel";
 import MediaDetailSplit from "@/components/media/MediaDetailSplit";
+import { useGroupRef } from "react-resizable-panels";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 
 function MessageCard(props: {
@@ -78,6 +79,98 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
   const [prevId, setPrevId] = useState<string | null>(null);
   const [nextId, setNextId] = useState<string | null>(null);
   const [navQuery, setNavQuery] = useState("");
+
+  const [thumbHeight, setThumbHeight] = useState<number | null>(null);
+  const thumbHeightRef = useRef<number | null>(null);
+  thumbHeightRef.current = thumbHeight;
+  const thumbContainerRef = useRef<HTMLDivElement>(null);
+  const snapHeightRef = useRef<number | null>(null);
+  // Set when the image loads: min(naturalCardHeight, 75% viewport).
+  // Prevents the drag bar from going below a height the image can't actually display at.
+  const maxHeightRef = useRef<number>(0);
+  // Imperative handle for the left/right panel group — used to link horizontal panel
+  // width to vertical thumb height so both expand together.
+  const panelGroupRef = useGroupRef();
+
+  // Called by MediaPreviewCard when the image's natural dimensions are known.
+  // Reads the actual rendered card height (after CSS) and uses it as the drag ceiling.
+  // For tall images whose natural height exceeds the viewport limit, immediately enters
+  // fill mode at the max so the user is never stuck below their starting position.
+  const handleNaturalDims = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (thumbHeightRef.current !== null) return; // already in fill mode
+      const naturalCardHeight = thumbContainerRef.current?.offsetHeight ?? 0;
+      const viewportMax = Math.round(window.innerHeight * 0.75);
+      const max = Math.min(naturalCardHeight, viewportMax);
+      maxHeightRef.current = max;
+      if (naturalCardHeight > viewportMax) {
+        setThumbHeight(viewportMax);
+        snapHeightRef.current = viewportMax;
+      }
+    });
+  }, []);
+
+  const handleThumbSeparatorMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const naturalHeight = thumbContainerRef.current?.offsetHeight ?? 300;
+    const startHeight = thumbHeightRef.current ?? naturalHeight;
+
+    // Record the natural height once so we can snap back to it
+    if (snapHeightRef.current === null) {
+      snapHeightRef.current = naturalHeight;
+    }
+
+    setThumbHeight(startHeight);
+
+    const SNAP_ZONE = 18;
+    const MIN_HEIGHT = 120;
+    const MAX_HEIGHT = Math.round(window.innerHeight * 0.75);
+    // Left panel percentages: MIN when thumb is shortest, DEFAULT at natural/snap height,
+    // MAX when thumb is at its tallest. All three are sampled by the continuous mapping below.
+    const MIN_LEFT_PCT = 50;
+    const DEFAULT_LEFT_PCT = 62;
+    const MAX_LEFT_PCT = 78;
+    const snap = snapHeightRef.current;
+    const compute = (clientY: number) => {
+      const raw = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + clientY - startY));
+      return snap !== null && Math.abs(raw - snap) <= SNAP_ZONE ? snap : raw;
+    };
+
+    // Returns the left panel percentage that corresponds to a given thumb height.
+    // Piecewise-linear, continuous at snap: below snap contracts, above snap expands.
+    const leftPctFor = (h: number) => {
+      if (snap === null || snap <= MIN_HEIGHT) return DEFAULT_LEFT_PCT;
+      if (h <= snap) {
+        const t = Math.max(0, (h - MIN_HEIGHT) / (snap - MIN_HEIGHT));
+        return MIN_LEFT_PCT + (DEFAULT_LEFT_PCT - MIN_LEFT_PCT) * t;
+      }
+      const t = Math.min(1, (h - snap) / (MAX_HEIGHT - snap));
+      return DEFAULT_LEFT_PCT + (MAX_LEFT_PCT - DEFAULT_LEFT_PCT) * t;
+    };
+
+    // Capture the panel's actual current position so the first mousemove never teleports.
+    // The offset is the gap between where the panel actually is vs. where the formula
+    // would put it for the current thumb height, and it stays constant for the whole drag.
+    const initialLeft = panelGroupRef.current?.getLayout()?.left ?? DEFAULT_LEFT_PCT;
+    const panelOffset = initialLeft - leftPctFor(startHeight);
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const h = compute(ev.clientY);
+      setThumbHeight(h);
+      if (panelGroupRef.current) {
+        const leftPct = Math.max(0, Math.min(100, leftPctFor(h) + panelOffset));
+        panelGroupRef.current.setLayout({ left: leftPct, right: 100 - leftPct });
+      }
+    };
+    const onMouseUp = () => {
+      window.document.removeEventListener("mousemove", onMouseMove);
+      window.document.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.document.addEventListener("mousemove", onMouseMove);
+    window.document.addEventListener("mouseup", onMouseUp);
+  }, [panelGroupRef]);
 
   const title = media?.title || media?.filename || "Media details";
   const busy = isDeleting || isDownloading || isUnpacking;
@@ -142,6 +235,17 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
       // ignore
     }
   }, [id]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+      if (e.key === 'ArrowLeft' && prevId) router.push((navQuery ? `/media/${prevId}?q=${encodeURIComponent(navQuery)}` : `/media/${prevId}`) as Route);
+      if (e.key === 'ArrowRight' && nextId) router.push((navQuery ? `/media/${nextId}?q=${encodeURIComponent(navQuery)}` : `/media/${nextId}`) as Route);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [prevId, nextId, navQuery, router]);
 
   const handleDownload = async () => {
     if (busy) return;
@@ -269,8 +373,8 @@ const handleDelete = (e: React.MouseEvent) => {
           <ChevronRight className="h-10 w-10" />
         </Link>
       )}
-      <Container className="py-6">
-      <div className="mb-8 flex min-w-0 items-center gap-1.5 text-sm">
+      <Container className="pt-6 pb-64">
+      <div className="mb-8 flex min-w-0 items-center gap-1.5 text-base">
         <Link
           href={searchQuery ? `/library?q=${encodeURIComponent(searchQuery)}` : "/library"}
           className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
@@ -319,15 +423,30 @@ const handleDelete = (e: React.MouseEvent) => {
 
       {loadState === "ready" && media && (
         <MediaDetailSplit
+          groupRef={panelGroupRef}
           left={
-            <div className="flex flex-col gap-6">
-              <MediaPreviewCard
-                thumbnailUrl={thumbnailUrl}
-                downloadUrl={downloadUrl}
-                mimeType={media.mimeType}
-                title={title}
-                thumbState={media.thumbState}
-              />
+            <div className="flex flex-col">
+              <div ref={thumbContainerRef} className="shrink-0 mb-2">
+                <MediaPreviewCard
+                  thumbnailUrl={thumbnailUrl}
+                  downloadUrl={downloadUrl}
+                  mimeType={media.mimeType}
+                  title={title}
+                  thumbState={media.thumbState}
+                  thumbHeight={thumbHeight}
+                  onNaturalDims={handleNaturalDims}
+                />
+              </div>
+
+              <div
+                role="separator"
+                aria-orientation="horizontal"
+                className="relative flex h-2 cursor-row-resize flex-col items-center justify-center bg-transparent transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 shrink-0"
+                onMouseDown={handleThumbSeparatorMouseDown}
+              >
+                <div className="h-px w-full bg-border" />
+              </div>
+
               <div className="pt-4">
                 <MediaTextPanel
                   id={id}

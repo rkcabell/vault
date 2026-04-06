@@ -7,7 +7,9 @@ const MAX_PDF_PAGES = 2000;
 export async function extractPdfMetadata(buffer: Buffer): Promise<PdfMetadata | null> {
   try {
     const pdfjs = await loadPdfJs();
-    const data = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    // Copy into a fresh ArrayBuffer — pdfjs transfers (detaches) the buffer it
+    // receives, which would corrupt any other view over the same ArrayBuffer.
+    const data = new Uint8Array(buffer);
 
     const init: DocumentInitParameters & { disableWorker?: boolean } = {
       data,

@@ -820,21 +820,13 @@ export default function LibraryPageInner() {
         description={totalCount !== null ? `Browse and manage your media files · ${totalCount} item${totalCount === 1 ? "" : "s"}` : "Browse and manage your media files"}
         actions={
           <>
-            <Button
-              variant={isSelectMode ? "default" : "outline"}
-              size="sm"
-              onClick={toggleSelectMode}
-            >
-              {isSelectMode ? "Cancel" : "Select"}
-            </Button>
-
-            {isSelectMode && (
+            {!isSelectMode && (
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                onClick={() => setSelectedIds(new Set(mediaItems.map(m => m.id)))}
+                onClick={toggleSelectMode}
               >
-                Select All
+                Select
               </Button>
             )}
 
@@ -1063,7 +1055,7 @@ export default function LibraryPageInner() {
 
       {/* Unified drag-drop wrapper + overlay (single overlay, no custom globals needed) */}
       <div
-        className={isSelectMode && selectedIds.size > 0 ? "relative pb-20" : "relative"}
+        className={isSelectMode ? "relative pb-20" : "relative"}
         onDragEnter={onDragEnter}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
@@ -1137,7 +1129,7 @@ export default function LibraryPageInner() {
         )}
       </div>
       {/* Bulk action bar */}
-      {isSelectMode && (selectedIds.size > 0 || isSelectAllLibrary) && (
+      {isSelectMode && (
         <BulkActionBar
           count={isSelectAllLibrary ? (totalCount ?? selectedIds.size) : selectedIds.size}
           onDelete={(info) => handleBulkDelete(info)}
@@ -1145,6 +1137,8 @@ export default function LibraryPageInner() {
           onAddToBundle={() => setIsBundleDialogOpen(true)}
           onClear={() => { setSelectedIds(new Set()); setIsSelectAllLibrary(false); lastSelectedIdRef.current = null; }}
           onDownload={handleBulkDownload}
+          onCancel={toggleSelectMode}
+          onSelectAll={() => setSelectedIds(new Set(mediaItems.map(m => m.id)))}
           isDownloading={isDownloading}
         />
       )}
