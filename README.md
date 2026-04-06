@@ -4,6 +4,43 @@ A self-hosted personal document archive. Upload files, extract text via OCR, tag
 
 ---
 
+## Core Principles
+
+- **Source-available** — Free for personal and noncommercial use under the PolyForm Noncommercial License. No telemetry, no cloud lock-in, no required accounts.
+- **Dependency resilience** — Prefer stable, well-maintained libraries. Every dependency is a future maintenance obligation; the goal is a lean, auditable graph that doesn't break on routine upgrades.
+- **Speed** — Uploads bypass the server entirely via presigned S3 URLs. Search is GIN-indexed at the database layer. Thumbnails are generated asynchronously and cached at the edge.
+- **Lightweight** — A single `docker compose up` starts a fully functional instance. No SaaS dependencies, no external services required, minimal attack surface.
+
+---
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for the full strategic breakdown with a forking tree of possible directions.
+
+**Phase 0 — Foundation (current focus):**
+- Email delivery for password reset and reminder notifications
+- Share token expiry and access controls
+- File deduplication on upload (SHA-256 hash check)
+- Bulk operations — multi-select to tag, bundle, or delete
+- Text viewer UI fixes (overlap, highlight, resize)
+
+**Coming up:**
+- 3D knowledge graph — interactive force-directed node graph of documents and their relationships
+- Calendar sync — read-only iCal feed for reminders
+- Watch folder ingestion — drop files into a directory and Vault picks them up automatically (NAS-friendly)
+- Shared bundles — collaborate on collections without requiring a full multi-user model
+- API / web decoupling — cleaner separation to enable headless use and alternative frontends
+
+---
+
+## Pending Changes
+
+| Change | Status | Notes |
+| --- | --- | --- |
+| Migrate `npm` → `pnpm` | In progress | Faster installs, strict dependency isolation, better monorepo workspace support |
+
+---
+
 ## Features
 
 - **File management** — Upload PDFs, images, scans, and receipts with direct-to-storage presigned URLs
@@ -73,7 +110,7 @@ newgrp docker
 sudo chown -R $USER:$USER ~/vault
 
 # 6. Start
-npm run start
+pnpm run start
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
@@ -107,7 +144,7 @@ brew install git node ocrmypdf tesseract ghostscript qpdf
 git clone https://github.com/rkcabell/vault.git
 cd vault
 bash scripts/linux-setup.sh
-npm run start
+pnpm run start
 ```
 
 ---
@@ -117,13 +154,13 @@ npm run start
 #### 1. Install dependencies
 
 ```bash
-npm install
+pnpm install
 ```
 
 #### 2. Start infrastructure
 
 ```bash
-npm run localdocker
+pnpm run localdocker
 # or: docker compose -f infra/docker/docker-minimal.yml up -d
 ```
 
@@ -165,22 +202,22 @@ REDIS_URL=redis://localhost:6379
 #### 4. Set up the database
 
 ```bash
-npm run prismagen      # Generate Prisma client
-npm run prismigrate    # Apply migrations
+pnpm run prismagen      # Generate Prisma client
+pnpm run prismigrate    # Apply migrations
 ```
 
 #### 5. Start development servers
 
 ```bash
-npm run boot
+pnpm run boot
 ```
 
 Alternatively, run each process in a separate terminal:
 
 ```bash
-npm run api:dev              # API server   → http://localhost:8000
-npm run web:dev              # Web app      → http://localhost:3000
-npm -w api run worker:dev    # OCR + thumbnail workers
+pnpm run api:dev              # API server   → http://localhost:8000
+pnpm run web:dev              # Web app      → http://localhost:3000
+pnpm -F api run worker:dev    # OCR + thumbnail workers
 ```
 
 ---
@@ -189,50 +226,50 @@ npm -w api run worker:dev    # OCR + thumbnail workers
 
 ### Development
 
-| Command                     | Description                                                      |
-| --------------------------- | ---------------------------------------------------------------- |
-| `npm run boot`              | Start API + web + worker in dev mode (hot reload)                |
-| `npm run start`             | Build, start infrastructure, and run API + web + worker           |
-| `npm run api:dev`           | Start API server only (hot reload)                               |
-| `npm run web:dev`           | Start web app only (hot reload)                                  |
-| `npm -w api run worker:dev` | Start background workers only (hot reload)                       |
+| Command                      | Description                                                      |
+| ---------------------------- | ---------------------------------------------------------------- |
+| `pnpm run boot`              | Start API + web + worker in dev mode (hot reload)                |
+| `pnpm run start`             | Build, start infrastructure, and run API + web + worker          |
+| `pnpm run api:dev`           | Start API server only (hot reload)                               |
+| `pnpm run web:dev`           | Start web app only (hot reload)                                  |
+| `pnpm -F api run worker:dev` | Start background workers only (hot reload)                       |
 
 ### Build & quality
 
-| Command          | Description                                     |
-| ---------------- | ----------------------------------------------- |
-| `npm run build`  | Build all packages                              |
-| `npm run lint`   | Run ESLint across API and web                   |
-| `npm run sweep`  | Clean, lint, and build all packages             |
-| `npm run clean`  | Remove Next.js build output                     |
+| Command           | Description                                     |
+| ----------------- | ----------------------------------------------- |
+| `pnpm run build`  | Build all packages                              |
+| `pnpm run lint`   | Run ESLint across API and web                   |
+| `pnpm run sweep`  | Clean, lint, and build all packages             |
+| `pnpm run clean`  | Remove Next.js build output                     |
 
 ### Testing
 
-| Command             | Description                                  |
-| ------------------- | -------------------------------------------- |
-| `npm run test`      | Run full test suite (API + web)              |
-| `npm run test:api`  | Run API tests and generate HTML report       |
-| `npm run test:web`  | Run web tests                                |
-| `npm run coverage`  | Run tests with coverage report               |
+| Command              | Description                                  |
+| -------------------- | -------------------------------------------- |
+| `pnpm run test`      | Run full test suite (API + web)              |
+| `pnpm run test:api`  | Run API tests and generate HTML report       |
+| `pnpm run test:web`  | Run web tests                                |
+| `pnpm run coverage`  | Run tests with coverage report               |
 
 ### Database
 
-| Command               | Description                              |
-| --------------------- | ---------------------------------------- |
-| `npm run prismagen`   | Regenerate Prisma client                 |
-| `npm run prismigrate` | Apply database migrations                |
-| `npm run prismareset` | Reset database — **destructive**         |
+| Command                | Description                              |
+| ---------------------- | ---------------------------------------- |
+| `pnpm run prismagen`   | Regenerate Prisma client                 |
+| `pnpm run prismigrate` | Apply database migrations                |
+| `pnpm run prismareset` | Reset database — **destructive**         |
 
 ### Infrastructure
 
-| Command                      | Description                                      |
-| ---------------------------- | ------------------------------------------------ |
-| `npm run localdocker`        | Start local infrastructure (Postgres, Redis, MinIO) |
-| `npm run docker:build`       | Build images and start full Docker stack         |
-| `npm run docker:rebuild-clean` | Rebuild images without cache and start stack   |
-| `npm run dockerup`           | Start full Docker stack (no build)               |
-| `npm run dockerdown`         | Stop full Docker stack                           |
-| `npm run docker:logs`        | Tail Docker compose logs                         |
+| Command                       | Description                                         |
+| ----------------------------- | --------------------------------------------------- |
+| `pnpm run localdocker`        | Start local infrastructure (Postgres, Redis, MinIO) |
+| `pnpm run docker:build`       | Build images and start full Docker stack            |
+| `pnpm run docker:rebuild-clean` | Rebuild images without cache and start stack      |
+| `pnpm run dockerup`           | Start full Docker stack (no build)                  |
+| `pnpm run dockerdown`         | Stop full Docker stack                              |
+| `pnpm run docker:logs`        | Tail Docker compose logs                            |
 
 ---
 
@@ -241,7 +278,7 @@ npm -w api run worker:dev    # OCR + thumbnail workers
 To run the entire application in Docker (API, web, workers, and all infrastructure):
 
 ```bash
-npm run docker:build
+pnpm run docker:build
 # or: docker compose -f infra/docker/docker-compose.yml up -d --build
 ```
 

@@ -8,27 +8,21 @@ FROM node:20-bookworm-slim AS base
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 
 # ---------------------------------------------------------------------------
 # deps: install all workspace dependencies (including devDeps needed for build)
 # packages/db postinstall runs `prisma generate` automatically
 # ---------------------------------------------------------------------------
 FROM base AS deps
-COPY package.json package-lock.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json    apps/api/
 COPY apps/web/package.json    apps/web/
 COPY packages/db/package.json     packages/db/
 COPY packages/types/package.json  packages/types/
 # Copy the schema so packages/db postinstall (`prisma generate`) can find it.
 COPY packages/db/prisma/schema.prisma packages/db/prisma/schema.prisma
-RUN --mount=type=cache,target=/root/.npm npm ci
-# package-lock.json was generated on Windows, so the Linux-specific optional
-# binaries are absent from the packages section and npm ci never installs them.
-# Explicitly add the two packages needed for the web build on Linux x64.
-RUN --mount=type=cache,target=/root/.npm \
-    npm install --no-save \
-        "lightningcss-linux-x64-gnu@1.30.2" \
-        "@tailwindcss/oxide-linux-x64-gnu@4.1.18"
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
 
 # ---------------------------------------------------------------------------
 # builder: compile everything
@@ -39,34 +33,34 @@ COPY apps/api/ apps/api/
 COPY apps/web/ apps/web/
 
 # 1. Build shared packages
-RUN npm run build -w packages/types
-RUN npm run build -w packages/db
+RUN pnpm -F @vault/types run build
+RUN pnpm -F @vault/db run build
 
 # 2. Compile the Fastify API + workers (tsc + tsc-alias rewrites @/ paths → dist/)
 #    The build script also copies fileTransport.mjs into dist/.
-RUN npm run build -w apps/api
+RUN pnpm -F api run build
 
 # 3. Build Next.js (emits .next/standalone because output:'standalone' is set)
 # API_BASE_URL is baked into routes-manifest.json at build time by next.config.mjs rewrites().
 # The default points at the `api` service name used in docker-compose.prod.yml.
 ARG API_BASE_URL=http://api:8000
 ENV API_BASE_URL=$API_BASE_URL
-RUN npm run build -w apps/web
+RUN pnpm -F web run build
 
 # ---------------------------------------------------------------------------
-# api-prod-deps: lean production node_modules (no devDependencies)
+# api-prod-deps: lean production node_modules via pnpm deploy
+# pnpm deploy creates a self-contained directory — real files, no symlinks,
+# safe to COPY into the final image without breaking workspace resolution.
 # ---------------------------------------------------------------------------
-FROM base AS api-prod-deps
-COPY package.json package-lock.json ./
-COPY apps/api/package.json    apps/api/
-COPY packages/db/package.json     packages/db/
-COPY packages/types/package.json  packages/types/
-# Copy the schema so packages/db postinstall (`prisma generate`) can find it.
-COPY packages/db/prisma/schema.prisma packages/db/prisma/schema.prisma
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
-# sharp linux binaries omitted from Windows-generated lock file — install explicitly.
-RUN --mount=type=cache,target=/root/.npm \
-    npm install --no-save \
+FROM deps AS api-prod-deps
+COPY packages/ packages/
+COPY apps/api/ apps/api/
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm --filter api deploy --prod /deploy/api
+# sharp and @napi-rs/canvas linux binaries may be absent from a Windows-generated
+# lock file — install them explicitly if needed.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    cd /deploy/api && pnpm add --no-save \
         "@img/sharp-linux-x64@0.34.5" \
         "@img/sharp-libvips-linux-x64@1.2.4" \
         "@napi-rs/canvas-linux-x64-gnu@0.1.89"
@@ -77,21 +71,16 @@ RUN --mount=type=cache,target=/root/.npm \
 FROM base AS api
 WORKDIR /app
 
-# Production node_modules
-COPY --from=api-prod-deps /app/node_modules          ./node_modules
-COPY --from=api-prod-deps /app/apps/api/node_modules ./apps/api/node_modules
-COPY --from=api-prod-deps /app/packages/db/node_modules ./packages/db/node_modules
+# Production node_modules from pnpm deploy (flat, no symlinks)
+COPY --from=api-prod-deps /deploy/api/node_modules ./node_modules
 
 # Compiled API output
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 
-# Prisma-generated client — api-prod-deps skips `prisma` (devDep) so the
-# postinstall `prisma generate` never runs there; copy the already-generated
-# client from the builder stage instead.
+# Prisma-generated client — copy from builder where prisma generate ran
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
-# Workspace packages — the node_modules/@vault/* entries are symlinks into packages/,
-# so each package.json must exist at the symlink target or Node loses the main field.
+# Workspace packages — package.json needed so Node resolves the main field
 COPY packages/db/package.json               ./packages/db/package.json
 COPY --from=builder /app/packages/db/dist   ./packages/db/dist
 COPY packages/types/package.json            ./packages/types/package.json

@@ -18,15 +18,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build shared packages
-        run: npm run build --workspace=packages/db --workspace=packages/types
+        run: pnpm -F @vault/db -F @vault/types run build
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
@@ -52,12 +57,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       - name: Restore shared package builds
         uses: actions/download-artifact@v4
@@ -65,19 +75,14 @@ jobs:
           name: packages-dist
           path: packages
 
-      - name: Install lightningcss Linux binary
-        run: |
-          VERSION=$(node -p "require('./node_modules/lightningcss/package.json').optionalDependencies['lightningcss-linux-x64-gnu']")
-          npm install --no-save lightningcss-linux-x64-gnu@$VERSION
-
       - name: Lint
-        run: npm -w ${{ matrix.workspace }} run lint --if-present
+        run: pnpm -F ${{ matrix.workspace }} run lint --if-present
 
       - name: Typecheck
-        run: npm -w ${{ matrix.workspace }} run typecheck --if-present
+        run: pnpm -F ${{ matrix.workspace }} run typecheck --if-present
 
       - name: Build
-        run: npm -w ${{ matrix.workspace }} run build --if-present
+        run: pnpm -F ${{ matrix.workspace }} run build --if-present
 
       - name: Test
-        run: npm -w ${{ matrix.workspace }} run test --if-present
+        run: pnpm -F ${{ matrix.workspace }} run test --if-present

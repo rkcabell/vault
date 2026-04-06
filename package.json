@@ -1,30 +1,26 @@
 {
   "name": "vault",
   "private": true,
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
   "scripts": {
-    "clean": "npm run -w web clean",
-    "sweep": "npm run clean && npm run lint && npm run build",
-    "build": "npm run -ws build",
-    "lint": "npm run lint --workspace=api --workspace=web",
+    "clean": "pnpm -F web run clean",
+    "sweep": "pnpm run clean && pnpm run lint && pnpm run build",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -F api -F web run lint",
     "test": "node scripts/test-all.mjs",
-    "test:api": "npm -w @vault/db run build && npm -w api run test:api && npm -w api run test:html:api",
-    "test:web": "npm -w web run test",
-    "coverage": "npm run coverage --workspace=api --workspace=web",
-    "coverage:api": "npm -w api run coverage",
-    "coverage:web": "npm -w web run coverage",
-    "web:dev": "npm run --workspace web dev",
-    "web:build": "npm run --workspace web build",
-    "api:dev": "npm run --workspace api dev",
-    "api:build": "npm run --workspace api build",
-    "prismagen": "npx prisma generate --schema packages/db/prisma/schema.prisma",
-    "prismigrate": "npx prisma migrate dev --schema packages/db/prisma/schema.prisma",
-    "prismareset": "npx prisma migrate reset --schema packages/db/prisma/schema.prisma",
-    "boot": "concurrently -n API,WEB,WORKER -c auto \"npm -w api run dev\" \"npm -w web run dev\" \"npm -w api run worker:dev\"",
-    "start": "npm run localdocker && npm run build && concurrently -n API,WEB,WORKER -c auto \"npm -w api run start\" \"npm -w web run start\" \"npm -w api run worker\"",
+    "test:api": "pnpm -F @vault/db run build && pnpm -F api run test:api && pnpm -F api run test:html:api",
+    "test:web": "pnpm -F web run test",
+    "coverage": "pnpm -F api -F web run coverage",
+    "coverage:api": "pnpm -F api run coverage",
+    "coverage:web": "pnpm -F web run coverage",
+    "web:dev": "pnpm -F web run dev",
+    "web:build": "pnpm -F web run build",
+    "api:dev": "pnpm -F api run dev",
+    "api:build": "pnpm -F api run build",
+    "prismagen": "pnpm exec prisma generate --schema packages/db/prisma/schema.prisma",
+    "prismigrate": "pnpm exec prisma migrate dev --schema packages/db/prisma/schema.prisma",
+    "prismareset": "pnpm exec prisma migrate reset --schema packages/db/prisma/schema.prisma",
+    "boot": "concurrently -n API,WEB,WORKER -c auto \"pnpm -F api run dev\" \"pnpm -F web run dev\" \"pnpm -F api run worker:dev\"",
+    "start": "pnpm run localdocker && pnpm run build && concurrently -n API,WEB,WORKER -c auto \"pnpm -F api run start\" \"pnpm -F web run start\" \"pnpm -F api run worker\"",
     "localdocker": "docker compose -f infra/docker/docker-minimal.yml up -d",
     "docker:build": "docker compose -f infra/docker/docker-compose.yml up -d --build",
     "docker:rebuild-clean": "docker compose -f infra/docker/docker-compose.yml build --no-cache && docker compose -f infra/docker/docker-compose.yml up -d",
@@ -35,23 +31,15 @@
   "engines": {
     "node": ">=18.18"
   },
-  "packageManager": "npm@10.5.0",
+  "packageManager": "pnpm@10.33.0",
   "devDependencies": {
-    "baseline-browser-mapping": "^2.9.11",
     "c8": "^10.1.3",
-    "concurrently": "^9.2.1",
-    "tailwindcss-animate": "^1.0.7"
-  },
-  "dependencies": {
-    "@napi-rs/canvas": "^0.1.88",
-    "@tailwindcss/aspect-ratio": "^0.4.2",
-    "franc": "^6.2.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-resizable-panels": "^4.4.1"
+    "concurrently": "^9.2.1"
   },
   "overrides": {
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0"
   }
 }

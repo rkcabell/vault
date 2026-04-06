@@ -6,29 +6,31 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+
 # --- deps stage: install all workspace deps once ---
 FROM base AS deps
-COPY package.json package-lock.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps ./apps
 COPY packages ./packages
 
-# Cache npm downloads between builds (BuildKit)
-RUN --mount=type=cache,target=/root/.npm npm ci
+# Cache pnpm store between builds (BuildKit)
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
 
 # Build the shared db package so @vault/db/dist/index.js exists
-RUN npm run -w packages/db build
+RUN pnpm -F @vault/db run build
 
 # --- api target ---
 FROM deps AS api
 EXPOSE 8000
-CMD ["npm","run","-w","apps/api","start"]
+CMD ["pnpm", "-F", "api", "run", "start"]
 
 # --- web target ---
 FROM deps AS web
 ENV NODE_ENV=production
-RUN npm run -w apps/web build
+RUN pnpm -F web run build
 EXPOSE 3000
-CMD ["npm","run","-w","apps/web","start"]
+CMD ["pnpm", "-F", "web", "run", "start"]
 
 # --- jobs target (OCR deps) ---
 FROM deps AS jobs

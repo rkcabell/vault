@@ -55,6 +55,15 @@ else
   ok "node"
 fi
 
+# pnpm
+if ! command -v pnpm &>/dev/null; then
+  echo "  Installing pnpm..."
+  corepack enable && corepack prepare pnpm@10.33.0 --activate
+  ok "pnpm installed"
+else
+  ok "pnpm"
+fi
+
 # Docker + Docker Compose v2
 if ! command -v docker &>/dev/null; then
   if command -v apt-get &>/dev/null; then
@@ -91,15 +100,14 @@ for entry in "ocrmypdf:ocrmypdf" "tesseract-ocr:tesseract" "ghostscript:gs" "qpd
 done
 
 # ---------------------------------------------------------------------------
-# 2. npm install + build internal packages
+# 2. pnpm install + build internal packages
 # ---------------------------------------------------------------------------
 step "Installing dependencies"
-rm -f "$ROOT/package-lock.json"
-npm install --prefix "$ROOT" --silent
+pnpm install --dir "$ROOT"
 ok "node_modules ready"
 
 step "Building internal packages"
-npm run build --prefix "$ROOT" --workspace=packages/db
+pnpm -F @vault/db run build
 ok "@vault/db built"
 
 # ---------------------------------------------------------------------------
@@ -217,10 +225,10 @@ ok "MinIO bucket ready"
 step "Setting up database"
 
 SCHEMA="$ROOT/packages/db/prisma/schema.prisma"
-(cd "$ROOT" && npx prisma generate --schema "$SCHEMA")
+(cd "$ROOT" && pnpm exec prisma generate --schema "$SCHEMA")
 ok "Prisma client generated"
 
-(cd "$ROOT" && npx prisma migrate deploy --schema "$SCHEMA")
+(cd "$ROOT" && pnpm exec prisma migrate deploy --schema "$SCHEMA")
 ok "Migrations applied"
 
 # ---------------------------------------------------------------------------
@@ -229,7 +237,7 @@ ok "Migrations applied"
 echo ""
 echo -e "${GREEN}${BOLD}Setup complete.${NC}"
 echo ""
-echo -e "  Start everything:  ${BOLD}npm run start${NC}"
+echo -e "  Start everything:  ${BOLD}pnpm run start${NC}"
 echo -e "    API              →  http://localhost:8000"
 echo -e "    Web              →  http://localhost:3000"
 echo -e "    MinIO console    →  http://localhost:9001"

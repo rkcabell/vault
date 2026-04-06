@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 function run(args) {
-  const r = spawnSync("npm", args, { stdio: "inherit", shell: true });
+  const r = spawnSync("pnpm", args, { stdio: "inherit", shell: true });
   return r.status ?? 1;
 }
 
@@ -81,8 +81,8 @@ function injectCoverageIntoReport(reportPath, coverageRows) {
   writeFileSync(reportPath, html, "utf8");
 }
 
-const apiCode = run(["-w", "api", "run", "coverage"]);
-const webCode = run(["-w", "web", "run", "coverage"]);
+const apiCode = run(["-F", "api", "run", "coverage"]);
+const webCode = run(["-F", "web", "run", "coverage"]);
 
 // Generate combined HTML report covering all tests, output to repo root
 const htmlScript = fileURLToPath(new URL("../apps/api/scripts/run-tests-html.mjs", import.meta.url));

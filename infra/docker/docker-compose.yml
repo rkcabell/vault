@@ -89,7 +89,7 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile
       target: jobs
-    command: npm run -w apps/api worker:ocr
+    command: pnpm -F api run worker:ocr
     depends_on:
       api:
         condition: service_started
@@ -111,7 +111,7 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile
       target: jobs
-    command: npm run -w apps/api worker:thumb
+    command: pnpm -F api run worker:thumb
     depends_on:
       api:
         condition: service_started
