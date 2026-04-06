@@ -15,7 +15,7 @@ RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 # packages/db postinstall runs `prisma generate` automatically
 # ---------------------------------------------------------------------------
 FROM base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/api/package.json    apps/api/
 COPY apps/web/package.json    apps/web/
 COPY packages/db/package.json     packages/db/
@@ -31,6 +31,10 @@ FROM deps AS builder
 COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/web/ apps/web/
+
+# 0. Regenerate Prisma client with full source present
+#    (postinstall in deps runs too early / pnpm v10 may generate into the wrong location)
+RUN pnpm --filter @vault/db run generate
 
 # 1. Build shared packages
 RUN pnpm -F @vault/types run build
@@ -56,14 +60,7 @@ FROM deps AS api-prod-deps
 COPY packages/ packages/
 COPY apps/api/ apps/api/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm --filter api deploy --prod /deploy/api
-# sharp and @napi-rs/canvas linux binaries may be absent from a Windows-generated
-# lock file — install them explicitly if needed.
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    cd /deploy/api && pnpm add --no-save \
-        "@img/sharp-linux-x64@0.34.5" \
-        "@img/sharp-libvips-linux-x64@1.2.4" \
-        "@napi-rs/canvas-linux-x64-gnu@0.1.89"
+    pnpm --filter api deploy --prod --legacy --ignore-scripts /deploy/api
 
 # ---------------------------------------------------------------------------
 # api: production API image

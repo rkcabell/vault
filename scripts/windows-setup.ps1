@@ -141,50 +141,90 @@ function Show-ComposeDiagnostics {
 
 function Invoke-ComposeUpWithProgress {
     param(
-        [int]$EstimateSeconds = 300,
         [int]$RefreshIntervalMs = 500
     )
 
-    $composeArgs = @(Get-ComposeBaseArgs) + @("up", "-d", "--build")
     $stdoutFile = [System.IO.Path]::GetTempFileName()
     $stderrFile = [System.IO.Path]::GetTempFileName()
-    $process = $null
-    $exitCode = 1
 
     try {
-        $process = Start-Process -FilePath "docker" -ArgumentList $composeArgs -NoNewWindow -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+        # --- Phase 1: build images (--progress is a global compose flag) ---
+        $buildArgs = @(Get-ComposeBaseArgs) + @("--progress", "plain", "build")
+        $process = Start-Process -FilePath "docker" -ArgumentList $buildArgs -NoNewWindow -PassThru `
+            -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
         $startedAt = Get-Date
 
         while (-not $process.HasExited) {
             $elapsedSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
-            $percent = [int][Math]::Min(99, [Math]::Floor(($elapsedSeconds / $EstimateSeconds) * 100))
-            Write-AsciiProgressLine -Percent $percent -Label "Compose build" -Suffix "${elapsedSeconds}s elapsed"
+
+            $seenSteps = [System.Collections.Generic.HashSet[string]]::new()
+            $doneSteps = [System.Collections.Generic.HashSet[string]]::new()
+            try {
+                $raw = [System.IO.File]::ReadAllText($stderrFile)
+                foreach ($line in ($raw -split "`n")) {
+                    if ($line -match '^#(\d+) ') { [void]$seenSteps.Add($Matches[1]) }
+                    if ($line -match '^#(\d+) (DONE|CACHED) ') { [void]$doneSteps.Add($Matches[1]) }
+                }
+            } catch { }
+
+            $total = $seenSteps.Count
+            $done  = $doneSteps.Count
+            if ($total -gt 0) {
+                $percent = [int][Math]::Min(99, [int][Math]::Floor(($done / $total) * 100))
+                $suffix  = "${done}/${total} steps · ${elapsedSeconds}s"
+            } else {
+                $percent = 0
+                $suffix  = "starting · ${elapsedSeconds}s"
+            }
+            Write-AsciiProgressLine -Percent $percent -Label "Compose build" -Suffix $suffix
             Start-Sleep -Milliseconds $RefreshIntervalMs
             $process.Refresh()
         }
 
         $process.WaitForExit()
-        $exitCode = $process.ExitCode
+        $buildExitCode = $process.ExitCode
         $totalSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
-        $resultLabel = if ($exitCode -eq 0) { "completed in ${totalSeconds}s" } else { "failed in ${totalSeconds}s" }
+        $resultLabel = if ($buildExitCode -eq 0) { "completed in ${totalSeconds}s" } else { "failed in ${totalSeconds}s" }
         Write-AsciiProgressLine -Percent 100 -Label "Compose build" -Suffix $resultLabel
         [Console]::WriteLine()
 
-        if ($exitCode -ne 0) {
-            $stderrTail = (Get-Content -Path $stderrFile -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
-            if ($stderrTail) {
-                Warn "docker compose stderr (tail):"
-                Write-Host $stderrTail
-            }
-
-            $stdoutTail = (Get-Content -Path $stdoutFile -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
+        if ($buildExitCode -ne 0) {
+            $stdoutTail = (Get-Content -Path $stdoutFile -Tail 80 -ErrorAction SilentlyContinue | Out-String).Trim()
             if ($stdoutTail) {
-                Warn "docker compose stdout (tail):"
+                Warn "docker compose build output (tail):"
                 Write-Host $stdoutTail
             }
+            $stderrTail = (Get-Content -Path $stderrFile -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
+            if ($stderrTail) {
+                Warn "docker compose build stderr (tail):"
+                Write-Host $stderrTail
+            }
+            return $false
         }
 
-        return ($exitCode -eq 0)
+        # --- Phase 2: start services ---
+        [System.IO.File]::WriteAllText($stdoutFile, "")
+        [System.IO.File]::WriteAllText($stderrFile, "")
+
+        $upArgs = @(Get-ComposeBaseArgs) + @("up", "-d")
+        $process = Start-Process -FilePath "docker" -ArgumentList $upArgs -NoNewWindow -PassThru `
+            -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+
+        [Console]::Write("  Starting services...")
+        $process.WaitForExit()
+        $upExitCode = $process.ExitCode
+        [Console]::WriteLine($(if ($upExitCode -eq 0) { " done" } else { " failed" }))
+
+        if ($upExitCode -ne 0) {
+            $stderrTail = (Get-Content -Path $stderrFile -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
+            if ($stderrTail) {
+                Warn "docker compose up stderr (tail):"
+                Write-Host $stderrTail
+            }
+            return $false
+        }
+
+        return $true
     } finally {
         foreach ($path in @($stdoutFile, $stderrFile)) {
             if ($path -and (Test-Path $path)) {
@@ -348,7 +388,7 @@ Ok "Required .env.prod values are present"
 # ---------------------------------------------------------------------------
 Step "Building and starting Vault (this may take a few minutes on first run)"
 
-Invoke-ComposeUpWithProgress -EstimateSeconds 480 -RefreshIntervalMs 1000 | Out-Null
+Invoke-ComposeUpWithProgress -RefreshIntervalMs 1000 | Out-Null
 
 Step "Verifying service health"
 Assert-ServicesHealthy
