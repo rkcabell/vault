@@ -51,7 +51,7 @@ export default function MediaDetailSplit({
 
   return (
     <Group orientation="horizontal" className="w-full" groupRef={groupRef}>
-      <Panel id="left" defaultSize={62} minSize={300} className="pr-4">
+      <Panel id="left" defaultSize="75%" minSize={300} className="pr-4">
         {left}
       </Panel>
 
@@ -64,7 +64,7 @@ export default function MediaDetailSplit({
         <div className="h-full w-px bg-border" />
       </Separator>
 
-      <Panel id="right" defaultSize={38} minSize={215} className="pl-4">
+      <Panel id="right" defaultSize="25%" minSize={215} className="pl-4">
         {right}
       </Panel>
     </Group>

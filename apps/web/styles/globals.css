@@ -849,6 +849,16 @@ html.dark .preview-mat,
   background-color: #d4d4d4;
 }
 
+.preview-mat img {
+  background: repeating-conic-gradient(#d0d0d0 0% 25%, #ffffff 0% 50%) 0 0 / 16px 16px;
+}
+
+html.dark .preview-mat img,
+:root[data-theme="dark"] .preview-mat img,
+[data-theme="dark"] .preview-mat img {
+  background: repeating-conic-gradient(#3a3a3a 0% 25%, #2a2a2a 0% 50%) 0 0 / 16px 16px;
+}
+
 /* Text extraction error panel dark mode overrides */
 html.dark .text-error-panel,
 :root[data-theme="dark"] .text-error-panel,

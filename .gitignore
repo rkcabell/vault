@@ -55,10 +55,6 @@ desktop.ini
 *.swp
 *.swo
 
-# Claude Code
-.claude/settings.local.json
-.claude/settings.json
-
 # Docker / local volumes
 docker-compose.override.yml
 compose.override.yml
@@ -100,10 +96,3 @@ screenshots/
 # Misc
 *.pid
 *.seed
-
-# Local dev docs
-docs/test-coverage-plan.md
-VaultTokenLogin.txt
-OVERVIEW.md
-
-.claude/
