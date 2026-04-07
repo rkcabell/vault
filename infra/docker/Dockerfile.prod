@@ -32,9 +32,9 @@ COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/web/ apps/web/
 
-# 0. Regenerate Prisma client with full source present
-#    (postinstall in deps runs too early / pnpm v10 may generate into the wrong location)
-RUN pnpm --filter @vault/db run generate
+# 0. Generate Prisma client from workspace root so the output lands in /app/node_modules/.prisma
+#    Running via --filter runs from packages/db/ and generates into that package's node_modules instead.
+RUN node_modules/.bin/prisma generate --schema=packages/db/prisma/schema.prisma
 
 # 1. Build shared packages
 RUN pnpm -F @vault/types run build
