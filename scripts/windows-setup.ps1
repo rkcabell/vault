@@ -84,9 +84,14 @@ function Show-ComposeDiagnostics {
 
 function Invoke-ComposeUp {
     # Phase 1: build images
+    # Temporarily lower ErrorActionPreference so docker's stderr output (e.g. build status
+    # messages) doesn't throw NativeCommandError under the global "Stop" policy.
     Write-Host "  Building images (this may take a few minutes on first run)..."
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     & docker @(Get-ComposeBaseArgs) --progress plain build 2>&1 | Tee-Object -Variable buildLines
     $buildExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
 
     # On Windows, docker compose build can exit non-zero even when all images built
     # successfully (redirected stdout/stderr changes BuildKit's exit behaviour).

@@ -41,7 +41,8 @@ RUN pnpm -F @vault/types run build
 RUN pnpm -F @vault/db run build
 
 # 2. Compile the Fastify API + workers (tsc + tsc-alias rewrites @/ paths → dist/)
-#    The build script also copies fileTransport.mjs into dist/.
+#    The build script also copies fileTransport.mjs into dist/lib/ (pino worker threads
+#    require plain ESM; tsc does not process .mjs files).
 RUN pnpm -F api run build
 
 # 3. Build Next.js (emits .next/standalone because output:'standalone' is set)
