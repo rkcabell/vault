@@ -89,7 +89,7 @@ function Invoke-ComposeUp {
     Write-Host "  Building images (this may take a few minutes on first run)..."
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    & docker @(Get-ComposeBaseArgs) --progress plain build 2>&1 | Tee-Object -Variable buildLines
+    & docker @(Get-ComposeBaseArgs) --progress plain build 2>&1 | Tee-Object -Variable buildLines | Out-Host
     $buildExitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
 
@@ -236,7 +236,9 @@ Ok "Required .env.prod values are present"
 # ---------------------------------------------------------------------------
 Step "Building and starting Vault (this may take a few minutes on first run)"
 
-Invoke-ComposeUp | Out-Null
+if (-not (Invoke-ComposeUp)) {
+    Die "Build or startup failed. See output above."
+}
 
 Step "Verifying service health"
 Assert-ServicesHealthy
