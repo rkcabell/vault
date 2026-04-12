@@ -1,18 +1,30 @@
 # Vault
 
-A self-hosted personal document archive. Upload files, extract text via OCR, tag and search everything, set reminders, and organize items into bundles
+A self-hosted personal document management system. Upload files, tag, and search by text, set reminders, and export bundled items in a zip. 
+
+---
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/library-new-moon.jpg" alt="Media Library — New Moon theme" /></td>
+    <td><img src="docs/screenshots/library-solarized.jpg" alt="Media Library — Solarized theme" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/media-detail.jpg" alt="Media detail — metadata, tags, and actions" /></td>
+  </tr>
+</table>
 
 ---
 
 ## Features
 
-- **File management** — Upload PDFs, images, scans, and receipts with direct-to-storage presigned URLs
+- **File management** — Upload PDFs, images, scans, and receipts. Files are automatically tagged on upload with their filetype.
 - **OCR & text extraction** — Automatic text extraction from images and PDFs via `ocrmypdf` + Tesseract
 - **Full-text search** — PostgreSQL native full-text search with GIN-indexed tag filtering
-- **Thumbnails** — Auto-generated previews for PDFs, images, and HEIC files
-- **Bundles** — Group related media into named, orderable collections
-- **Reminders** — Time-based reminders linked to any media item
-- **Self-hosted** — No cloud accounts, no subscriptions, no telemetry
+- **Thumbnails** — Spawns async workers
+- **Bundles** — Bundle your files
+- **Reminders** — 
+- **Self-hosted** — No subscriptions
 
 ---
 
@@ -43,7 +55,7 @@ vault/
 │   └── types/        # Shared TypeScript types
 ├── infra/
 │   └── docker/       # Dockerfiles and Compose configs
-├── docs/             # OpenAPI spec and test coverage plan
+├── docs/             # OpenAPI spec
 ├── test-results/     # Generated HTML test reports
 └── scripts/          # linux-setup.sh, windows-setup.ps1
 ```
@@ -55,8 +67,8 @@ vault/
 ### Linux (Ubuntu/Debian)
 
 ```bash
-# 1. Install git
-sudo apt-get update && sudo apt-get install -y git
+# 1. Install git and clipboard support (VMware guests)
+sudo apt-get update && sudo apt-get install -y git open-vm-tools-desktop
 
 # 2. Clone
 git clone https://github.com/rkcabell/vault.git
@@ -73,7 +85,7 @@ newgrp docker
 sudo chown -R $USER:$USER ~/vault
 
 # 6. Start
-npm run start
+pnpm run start
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
@@ -96,18 +108,18 @@ To stop or restart Vault:
 # Stop all services
 docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml down
 
-# Start again (no rebuild)
+# Start again 
 docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml up -d
 ```
 
 ### macOS
-> **Untested**
+
 ```bash
 brew install git node ocrmypdf tesseract ghostscript qpdf
 git clone https://github.com/rkcabell/vault.git
 cd vault
 bash scripts/linux-setup.sh
-npm run start
+pnpm run start
 ```
 
 ---
@@ -117,13 +129,13 @@ npm run start
 #### 1. Install dependencies
 
 ```bash
-npm install
+pnpm install
 ```
 
 #### 2. Start infrastructure
 
 ```bash
-npm run localdocker
+pnpm run localdocker
 # or: docker compose -f infra/docker/docker-minimal.yml up -d
 ```
 
@@ -165,22 +177,22 @@ REDIS_URL=redis://localhost:6379
 #### 4. Set up the database
 
 ```bash
-npm run prismagen      # Generate Prisma client
-npm run prismigrate    # Apply migrations
+pnpm run prismagen      # Generate Prisma client
+pnpm run prismigrate    # Apply migrations
 ```
 
 #### 5. Start development servers
 
 ```bash
-npm run boot
+pnpm run boot
 ```
 
 Alternatively, run each process in a separate terminal:
 
 ```bash
-npm run api:dev              # API server   → http://localhost:8000
-npm run web:dev              # Web app      → http://localhost:3000
-npm -w api run worker:dev    # OCR + thumbnail workers
+pnpm run api:dev              # API server   → http://localhost:8000
+pnpm run web:dev              # Web app      → http://localhost:3000
+pnpm -F api run worker:dev    # OCR + thumbnail workers
 ```
 
 ---
@@ -189,50 +201,50 @@ npm -w api run worker:dev    # OCR + thumbnail workers
 
 ### Development
 
-| Command                     | Description                                                      |
-| --------------------------- | ---------------------------------------------------------------- |
-| `npm run boot`              | Start API + web + worker in dev mode (hot reload)                |
-| `npm run start`             | Build, start infrastructure, and run API + web + worker           |
-| `npm run api:dev`           | Start API server only (hot reload)                               |
-| `npm run web:dev`           | Start web app only (hot reload)                                  |
-| `npm -w api run worker:dev` | Start background workers only (hot reload)                       |
+| Command                      | Description                                                      |
+| ---------------------------- | ---------------------------------------------------------------- |
+| `pnpm run boot`              | Start API + web + worker in dev mode (hot reload)                |
+| `pnpm run start`             | Build, start infrastructure, and run API + web + worker          |
+| `pnpm run api:dev`           | Start API server only (hot reload)                               |
+| `pnpm run web:dev`           | Start web app only (hot reload)                                  |
+| `pnpm -F api run worker:dev` | Start background workers only (hot reload)                       |
 
 ### Build & quality
 
-| Command          | Description                                     |
-| ---------------- | ----------------------------------------------- |
-| `npm run build`  | Build all packages                              |
-| `npm run lint`   | Run ESLint across API and web                   |
-| `npm run sweep`  | Clean, lint, and build all packages             |
-| `npm run clean`  | Remove Next.js build output                     |
+| Command           | Description                                     |
+| ----------------- | ----------------------------------------------- |
+| `pnpm run build`  | Build all packages                              |
+| `pnpm run lint`   | Run ESLint across API and web                   |
+| `pnpm run sweep`  | Clean, lint, and build all packages             |
+| `pnpm run clean`  | Remove Next.js build output                     |
 
 ### Testing
 
-| Command             | Description                                  |
-| ------------------- | -------------------------------------------- |
-| `npm run test`      | Run full test suite (API + web)              |
-| `npm run test:api`  | Run API tests and generate HTML report       |
-| `npm run test:web`  | Run web tests                                |
-| `npm run coverage`  | Run tests with coverage report               |
+| Command              | Description                                  |
+| -------------------- | -------------------------------------------- |
+| `pnpm run test`      | Run full test suite (API + web)              |
+| `pnpm run test:api`  | Run API tests and generate HTML report       |
+| `pnpm run test:web`  | Run web tests                                |
+| `pnpm run coverage`  | Run tests with coverage report               |
 
 ### Database
 
-| Command               | Description                              |
-| --------------------- | ---------------------------------------- |
-| `npm run prismagen`   | Regenerate Prisma client                 |
-| `npm run prismigrate` | Apply database migrations                |
-| `npm run prismareset` | Reset database — **destructive**         |
+| Command                | Description                              |
+| ---------------------- | ---------------------------------------- |
+| `pnpm run prismagen`   | Regenerate Prisma client                 |
+| `pnpm run prismigrate` | Apply database migrations                |
+| `pnpm run prismareset` | Reset database — **destructive**         |
 
 ### Infrastructure
 
-| Command                      | Description                                      |
-| ---------------------------- | ------------------------------------------------ |
-| `npm run localdocker`        | Start local infrastructure (Postgres, Redis, MinIO) |
-| `npm run docker:build`       | Build images and start full Docker stack         |
-| `npm run docker:rebuild-clean` | Rebuild images without cache and start stack   |
-| `npm run dockerup`           | Start full Docker stack (no build)               |
-| `npm run dockerdown`         | Stop full Docker stack                           |
-| `npm run docker:logs`        | Tail Docker compose logs                         |
+| Command                       | Description                                         |
+| ----------------------------- | --------------------------------------------------- |
+| `pnpm run localdocker`        | Start local infrastructure (Postgres, Redis, MinIO) |
+| `pnpm run docker:build`       | Build images and start full Docker stack            |
+| `pnpm run docker:rebuild-clean` | Rebuild images without cache and start stack      |
+| `pnpm run dockerup`           | Start full Docker stack (no build)                  |
+| `pnpm run dockerdown`         | Stop full Docker stack                              |
+| `pnpm run docker:logs`        | Tail Docker compose logs                            |
 
 ---
 
@@ -241,11 +253,25 @@ npm -w api run worker:dev    # OCR + thumbnail workers
 To run the entire application in Docker (API, web, workers, and all infrastructure):
 
 ```bash
-npm run docker:build
+pnpm run docker:build
 # or: docker compose -f infra/docker/docker-compose.yml up -d --build
 ```
 
 Configure services using `.env.docker` at the repo root. The Dockerfile supports three build targets: `api`, `web`, and `jobs`.
+
+### Services
+
+| Service | Role | Exposed port |
+| ----------- | ------------------------------------------- | ------------ |
+| `api` | Fastify REST API | 8000 |
+| `web` | Next.js frontend | 3000 |
+| `nginx` | Reverse proxy — routes `/api/*` to API (prod only) | 80 |
+| `jobs-ocr` | OCR text extraction worker | — |
+| `jobs-thumb` | Thumbnail generation worker | — |
+| `postgres` | PostgreSQL database | 5432 |
+| `redis` | Job queue backing store (BullMQ) | 6379 |
+| `minio` | S3-compatible object storage | 9000 / 9001 |
+| `minio-init` | One-time bucket creation (exits after init) | — |
 
 ---
 
