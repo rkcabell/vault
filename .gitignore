@@ -87,11 +87,9 @@ prisma/.cache/
 playwright-report/
 test-results/
 test-results.html
-screenshots/
 **/playwright-report/
 **/test-results/
 **/test-results.html
-**/screenshots/
 
 # Misc
 *.pid
