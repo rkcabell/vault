@@ -160,7 +160,7 @@ function Invoke-ComposeUpWithProgress {
             $seenSteps = [System.Collections.Generic.HashSet[string]]::new()
             $doneSteps = [System.Collections.Generic.HashSet[string]]::new()
             try {
-                $raw = [System.IO.File]::ReadAllText($stderrFile)
+                $raw = [System.IO.File]::ReadAllText($stdoutFile)
                 foreach ($line in ($raw -split "`n")) {
                     if ($line -match '^#(\d+) ') { [void]$seenSteps.Add($Matches[1]) }
                     if ($line -match '^#(\d+) (DONE|CACHED) ') { [void]$doneSteps.Add($Matches[1]) }
@@ -184,11 +184,18 @@ function Invoke-ComposeUpWithProgress {
         $process.WaitForExit()
         $buildExitCode = $process.ExitCode
         $totalSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
-        $resultLabel = if ($buildExitCode -eq 0) { "completed in ${totalSeconds}s" } else { "failed in ${totalSeconds}s" }
+
+        # On Windows, docker compose build can exit non-zero even when all images built
+        # successfully (redirected stdout/stderr changes BuildKit's exit behaviour).
+        # Treat it as a real failure only when the output also contains an ERROR line.
+        $buildOutput = try { [System.IO.File]::ReadAllText($stdoutFile) } catch { "" }
+        $buildActuallyFailed = ($buildExitCode -ne 0) -and ($buildOutput -match '(?m)ERROR')
+
+        $resultLabel = if (-not $buildActuallyFailed) { "completed in ${totalSeconds}s" } else { "failed in ${totalSeconds}s" }
         Write-AsciiProgressLine -Percent 100 -Label "Compose build" -Suffix $resultLabel
         [Console]::WriteLine()
 
-        if ($buildExitCode -ne 0) {
+        if ($buildActuallyFailed) {
             $stdoutTail = (Get-Content -Path $stdoutFile -Tail 80 -ErrorAction SilentlyContinue | Out-String).Trim()
             if ($stdoutTail) {
                 Warn "docker compose build output (tail):"

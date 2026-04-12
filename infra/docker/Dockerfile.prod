@@ -67,6 +67,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 # ---------------------------------------------------------------------------
 FROM base AS api
 WORKDIR /app
+ENV NODE_ENV=production
 
 # Production node_modules from pnpm deploy (flat, no symlinks)
 COPY --from=api-prod-deps /deploy/api/node_modules ./node_modules
@@ -77,11 +78,10 @@ COPY --from=builder /app/apps/api/dist ./apps/api/dist
 # Prisma-generated client — copy from builder where prisma generate ran
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
-# Workspace packages — package.json needed so Node resolves the main field
-COPY packages/db/package.json               ./packages/db/package.json
-COPY --from=builder /app/packages/db/dist   ./packages/db/dist
-COPY packages/types/package.json            ./packages/types/package.json
-COPY --from=builder /app/packages/types/dist ./packages/types/dist
+# pnpm deploy copies workspace packages without their dist/ (not built at that point).
+# Patch the compiled output into node_modules where Node actually resolves them.
+COPY --from=builder /app/packages/db/dist    ./node_modules/@vault/db/dist
+COPY --from=builder /app/packages/types/dist ./node_modules/@vault/types/dist
 
 # Prisma schema + migrations (needed by prisma migrate deploy in entrypoint)
 COPY packages/db/prisma ./packages/db/prisma

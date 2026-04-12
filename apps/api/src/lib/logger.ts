@@ -16,10 +16,13 @@ const FILE_TRANSPORT_URL = new URL("./fileTransport.mjs", import.meta.url).href;
 /** Returns the pino transport targets. The file transport reads .current dynamically,
  *  so the worker automatically follows when the API server restarts. */
 export function buildTransportTargets (level = "info") {
-  return [
-    { target: "pino-pretty", options: { ...PRETTY_OPTS, colorize: true }, level },
+  const targets: { target: string; options: object; level: string }[] = [
     { target: FILE_TRANSPORT_URL, options: { currentPtr: CURRENT_PTR }, level },
   ];
+  if (!isProd) {
+    targets.unshift({ target: "pino-pretty", options: { ...PRETTY_OPTS, colorize: true }, level });
+  }
+  return targets;
 }
 
 // Fields stripped before any transport sees the log line.
@@ -54,6 +57,7 @@ export const LOG_FORMATTERS: LoggerOptions["formatters"] = {
 
 const level = process.env.LOG_LEVEL ?? "info";
 const isTest = process.env.NODE_ENV === "test";
+const isProd = process.env.NODE_ENV === "production";
 
 export function createLogger (name?: string): Logger {
   const options: LoggerOptions = {
