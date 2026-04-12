@@ -1,55 +1,30 @@
 # Vault
 
-A self-hosted personal document archive. Upload files, extract text via OCR, tag and search everything, set reminders, and organize items into bundles
+A self-hosted personal document management system. Upload files, tag, and search by text, set reminders, and export bundled items in a zip. 
 
 ---
 
-## Core Principles
-
-- **Source-available** — Free for personal and noncommercial use under the PolyForm Noncommercial License. No telemetry, no cloud lock-in, no required accounts.
-- **Dependency resilience** — Prefer stable, well-maintained libraries. Every dependency is a future maintenance obligation; the goal is a lean, auditable graph that doesn't break on routine upgrades.
-- **Speed** — Uploads bypass the server entirely via presigned S3 URLs. Search is GIN-indexed at the database layer. Thumbnails are generated asynchronously and cached at the edge.
-- **Lightweight** — A single `docker compose up` starts a fully functional instance. No SaaS dependencies, no external services required, minimal attack surface.
-
----
-
-## Roadmap
-
-See [ROADMAP.md](ROADMAP.md) for the full strategic breakdown with a forking tree of possible directions.
-
-**Phase 0 — Foundation (current focus):**
-- Email delivery for password reset and reminder notifications
-- Share token expiry and access controls
-- File deduplication on upload (SHA-256 hash check)
-- Bulk operations — multi-select to tag, bundle, or delete
-- Text viewer UI fixes (overlap, highlight, resize)
-
-**Coming up:**
-- 3D knowledge graph — interactive force-directed node graph of documents and their relationships
-- Calendar sync — read-only iCal feed for reminders
-- Watch folder ingestion — drop files into a directory and Vault picks them up automatically (NAS-friendly)
-- Shared bundles — collaborate on collections without requiring a full multi-user model
-- API / web decoupling — cleaner separation to enable headless use and alternative frontends
-
----
-
-## Pending Changes
-
-| Change | Status | Notes |
-| --- | --- | --- |
-| Migrate `npm` → `pnpm` | In progress | Faster installs, strict dependency isolation, better monorepo workspace support |
+<table>
+  <tr>
+    <td><img src="docs/screenshots/library-new-moon.jpg" alt="Media Library — New Moon theme" /></td>
+    <td><img src="docs/screenshots/library-solarized.jpg" alt="Media Library — Solarized theme" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/media-detail.jpg" alt="Media detail — metadata, tags, and actions" /></td>
+  </tr>
+</table>
 
 ---
 
 ## Features
 
-- **File management** — Upload PDFs, images, scans, and receipts with direct-to-storage presigned URLs
+- **File management** — Upload PDFs, images, scans, and receipts. Files are automatically tagged on upload with their filetype.
 - **OCR & text extraction** — Automatic text extraction from images and PDFs via `ocrmypdf` + Tesseract
 - **Full-text search** — PostgreSQL native full-text search with GIN-indexed tag filtering
-- **Thumbnails** — Auto-generated previews for PDFs, images, and HEIC files
-- **Bundles** — Group related media into named, orderable collections
-- **Reminders** — Time-based reminders linked to any media item
-- **Self-hosted** — No cloud accounts, no subscriptions, no telemetry
+- **Thumbnails** — Spawns async workers
+- **Bundles** — Bundle your files
+- **Reminders** — 
+- **Self-hosted** — No subscriptions
 
 ---
 
@@ -80,7 +55,7 @@ vault/
 │   └── types/        # Shared TypeScript types
 ├── infra/
 │   └── docker/       # Dockerfiles and Compose configs
-├── docs/             # OpenAPI spec and test coverage plan
+├── docs/             # OpenAPI spec
 ├── test-results/     # Generated HTML test reports
 └── scripts/          # linux-setup.sh, windows-setup.ps1
 ```
@@ -133,7 +108,7 @@ To stop or restart Vault:
 # Stop all services
 docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml down
 
-# Start again (no rebuild)
+# Start again 
 docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml up -d
 ```
 

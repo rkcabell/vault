@@ -12,7 +12,7 @@
     "worker:ocr": "tsx src/worker/ocr.ts",
     "worker:thumb": "tsx src/worker/thumb.ts",
     "start": "tsx src/index.ts",
-    "build": "tsc -p . --extendedDiagnostics && tsc-alias -p tsconfig.json && node -e \"require('fs').copyFileSync('src/lib/fileTransport.mjs','dist/lib/fileTransport.mjs')\"",
+    "build": "tsc -p . --extendedDiagnostics && tsc-alias -p tsconfig.json",
     "build:worker": "tsc -p tsconfig.worker.json",
     "typecheck": "tsc --noEmit",
     "typecheck:worker": "tsc -p tsconfig.worker.json --noEmit",

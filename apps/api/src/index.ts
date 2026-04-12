@@ -31,10 +31,11 @@ dotenv.config({
   path: process.env.DOTENV_CONFIG_PATH ?? path.join(process.cwd(), ".env"),
 });
 
-initLogFile();
+if (process.env.NODE_ENV !== "production") initLogFile();
 
 async function main () {
   const level = process.env.LOG_LEVEL ?? "info";
+  const transportTargets = buildTransportTargets(level);
 
   const app = Fastify({
     disableRequestLogging: true,
@@ -42,7 +43,7 @@ async function main () {
       level,
       base: { name: "api" },
       formatters: LOG_FORMATTERS,
-      transport: { targets: buildTransportTargets(level) },
+      ...(transportTargets.length > 0 ? { transport: { targets: transportTargets } } : {}),
     },
   });
 

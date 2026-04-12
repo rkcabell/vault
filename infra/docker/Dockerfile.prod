@@ -15,7 +15,7 @@ RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 # packages/db postinstall runs `prisma generate` automatically
 # ---------------------------------------------------------------------------
 FROM base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/api/package.json    apps/api/
 COPY apps/web/package.json    apps/web/
 COPY packages/db/package.json     packages/db/
@@ -32,12 +32,15 @@ COPY packages/ packages/
 COPY apps/api/ apps/api/
 COPY apps/web/ apps/web/
 
+# 0. Generate Prisma client from workspace root so the output lands in /app/node_modules/.prisma
+#    Running via --filter runs from packages/db/ and generates into that package's node_modules instead.
+RUN node_modules/.bin/prisma generate --schema=packages/db/prisma/schema.prisma
+
 # 1. Build shared packages
 RUN pnpm -F @vault/types run build
 RUN pnpm -F @vault/db run build
 
 # 2. Compile the Fastify API + workers (tsc + tsc-alias rewrites @/ paths → dist/)
-#    The build script also copies fileTransport.mjs into dist/.
 RUN pnpm -F api run build
 
 # 3. Build Next.js (emits .next/standalone because output:'standalone' is set)
@@ -56,20 +59,14 @@ FROM deps AS api-prod-deps
 COPY packages/ packages/
 COPY apps/api/ apps/api/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm --filter api deploy --prod /deploy/api
-# sharp and @napi-rs/canvas linux binaries may be absent from a Windows-generated
-# lock file — install them explicitly if needed.
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    cd /deploy/api && pnpm add --no-save \
-        "@img/sharp-linux-x64@0.34.5" \
-        "@img/sharp-libvips-linux-x64@1.2.4" \
-        "@napi-rs/canvas-linux-x64-gnu@0.1.89"
+    pnpm --filter api deploy --prod --legacy --ignore-scripts /deploy/api
 
 # ---------------------------------------------------------------------------
 # api: production API image
 # ---------------------------------------------------------------------------
 FROM base AS api
 WORKDIR /app
+ENV NODE_ENV=production
 
 # Production node_modules from pnpm deploy (flat, no symlinks)
 COPY --from=api-prod-deps /deploy/api/node_modules ./node_modules
@@ -80,11 +77,10 @@ COPY --from=builder /app/apps/api/dist ./apps/api/dist
 # Prisma-generated client — copy from builder where prisma generate ran
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
-# Workspace packages — package.json needed so Node resolves the main field
-COPY packages/db/package.json               ./packages/db/package.json
-COPY --from=builder /app/packages/db/dist   ./packages/db/dist
-COPY packages/types/package.json            ./packages/types/package.json
-COPY --from=builder /app/packages/types/dist ./packages/types/dist
+# pnpm deploy copies workspace packages without their dist/ (not built at that point).
+# Patch the compiled output into node_modules where Node actually resolves them.
+COPY --from=builder /app/packages/db/dist    ./node_modules/@vault/db/dist
+COPY --from=builder /app/packages/types/dist ./node_modules/@vault/types/dist
 
 # Prisma schema + migrations (needed by prisma migrate deploy in entrypoint)
 COPY packages/db/prisma ./packages/db/prisma

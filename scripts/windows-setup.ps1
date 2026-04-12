@@ -31,74 +31,17 @@ function New-HexSecret {
     return ([BitConverter]::ToString($bytes) -replace "-", "").ToLower()
 }
 
-function New-AsciiProgressBar {
-    param(
-        [Parameter(Mandatory = $true)]
-        [int]$Percent,
-        [int]$Width = 44
-    )
-
-    $clamped = [Math]::Max(0, [Math]::Min(100, $Percent))
-    $filled = [int][Math]::Floor(($clamped / 100) * $Width)
-    $segments = @(" ") * $Width
-
-    for ($i = 0; $i -lt $filled; $i++) {
-        $segments[$i] = "="
-    }
-
-    $label = "[$clamped%]"
-    $start = [Math]::Max(0, [int][Math]::Floor(($Width - $label.Length) / 2))
-    for ($i = 0; $i -lt $label.Length -and ($start + $i) -lt $Width; $i++) {
-        $segments[$start + $i] = $label[$i]
-    }
-
-    return "[" + ($segments -join "") + "]"
-}
-
-function Write-AsciiProgressLine {
-    param(
-        [Parameter(Mandatory = $true)]
-        [int]$Percent,
-        [Parameter(Mandatory = $true)]
-        [string]$Label,
-        [string]$Suffix = ""
-    )
-
-    $bar = New-AsciiProgressBar -Percent $Percent
-    $line = "  $Label $bar"
-    if (-not [string]::IsNullOrWhiteSpace($Suffix)) {
-        $line += " $Suffix"
-    }
-
-    # Pad to clear remnants from the previous redraw.
-    [Console]::Write("`r" + $line.PadRight(140))
-}
-
 function Wait-DockerReady {
-    param(
-        [int]$TimeoutSeconds = 120,
-        [int]$IntervalSeconds = 2
-    )
-
-    $startedAt = Get-Date
+    param([int]$TimeoutSeconds = 120, [int]$IntervalSeconds = 2)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    Write-Host "  Waiting for Docker daemon" -NoNewline
     while ((Get-Date) -lt $deadline) {
-        & docker info --format "{{.ServerVersion}}" *> $null
-        if ($LASTEXITCODE -eq 0) {
-            $elapsedSuccess = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
-            Write-AsciiProgressLine -Percent 100 -Label "Docker readiness" -Suffix "ready in ${elapsedSuccess}s"
-            [Console]::WriteLine()
-            return $true
-        }
-
-        $elapsedSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
-        $percent = [int][Math]::Floor(($elapsedSeconds / $TimeoutSeconds) * 100)
-        Write-AsciiProgressLine -Percent $percent -Label "Docker readiness" -Suffix "${elapsedSeconds}s/${TimeoutSeconds}s"
+        & docker info *> $null
+        if ($LASTEXITCODE -eq 0) { Write-Host " ready"; return $true }
+        Write-Host "." -NoNewline
         Start-Sleep -Seconds $IntervalSeconds
     }
-
-    Write-AsciiProgressLine -Percent 100 -Label "Docker readiness" -Suffix "timeout after ${TimeoutSeconds}s"
-    [Console]::WriteLine()
+    Write-Host " timed out"
     return $false
 }
 
@@ -139,59 +82,41 @@ function Show-ComposeDiagnostics {
     }
 }
 
-function Invoke-ComposeUpWithProgress {
-    param(
-        [int]$EstimateSeconds = 300,
-        [int]$RefreshIntervalMs = 500
-    )
+function Invoke-ComposeUp {
+    # Phase 1: build images
+    # Temporarily lower ErrorActionPreference so docker's stderr output (e.g. build status
+    # messages) doesn't throw NativeCommandError under the global "Stop" policy.
+    Write-Host "  Building images (this may take a few minutes on first run)..."
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & docker @(Get-ComposeBaseArgs) --progress plain build 2>&1 | Tee-Object -Variable buildLines | Out-Host
+    $buildExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
 
-    $composeArgs = @(Get-ComposeBaseArgs) + @("up", "-d", "--build")
-    $stdoutFile = [System.IO.Path]::GetTempFileName()
-    $stderrFile = [System.IO.Path]::GetTempFileName()
-    $process = $null
-    $exitCode = 1
-
-    try {
-        $process = Start-Process -FilePath "docker" -ArgumentList $composeArgs -NoNewWindow -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
-        $startedAt = Get-Date
-
-        while (-not $process.HasExited) {
-            $elapsedSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
-            $percent = [int][Math]::Min(99, [Math]::Floor(($elapsedSeconds / $EstimateSeconds) * 100))
-            Write-AsciiProgressLine -Percent $percent -Label "Compose build" -Suffix "${elapsedSeconds}s elapsed"
-            Start-Sleep -Milliseconds $RefreshIntervalMs
-            $process.Refresh()
-        }
-
-        $process.WaitForExit()
-        $exitCode = $process.ExitCode
-        $totalSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
-        $resultLabel = if ($exitCode -eq 0) { "completed in ${totalSeconds}s" } else { "failed in ${totalSeconds}s" }
-        Write-AsciiProgressLine -Percent 100 -Label "Compose build" -Suffix $resultLabel
-        [Console]::WriteLine()
-
-        if ($exitCode -ne 0) {
-            $stderrTail = (Get-Content -Path $stderrFile -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
-            if ($stderrTail) {
-                Warn "docker compose stderr (tail):"
-                Write-Host $stderrTail
-            }
-
-            $stdoutTail = (Get-Content -Path $stdoutFile -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
-            if ($stdoutTail) {
-                Warn "docker compose stdout (tail):"
-                Write-Host $stdoutTail
-            }
-        }
-
-        return ($exitCode -eq 0)
-    } finally {
-        foreach ($path in @($stdoutFile, $stderrFile)) {
-            if ($path -and (Test-Path $path)) {
-                Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue
-            }
-        }
+    # On Windows, docker compose build can exit non-zero even when all images built
+    # successfully (redirected stdout/stderr changes BuildKit's exit behaviour).
+    # Treat it as a real failure only when the output also contains an ERROR line.
+    if (($buildExitCode -ne 0) -and (($buildLines | Out-String) -match '(?m)ERROR')) {
+        return $false
     }
+
+    # Phase 2: start services
+    # Temporarily lower ErrorActionPreference so docker's stderr warnings (e.g. orphan
+    # containers) don't throw NativeCommandError under the global "Stop" policy.
+    Write-Host "  Starting services..." -NoNewline
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $upOutput = & docker @(Get-ComposeBaseArgs) up -d 2>&1
+    $upExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    Write-Host $(if ($upExitCode -eq 0) { " done" } else { " failed" })
+
+    if ($upExitCode -ne 0) {
+        ($upOutput | Select-Object -Last 40 | Out-String).Trim() | Write-Host
+        return $false
+    }
+
+    return $true
 }
 
 function Get-EnvValue {
@@ -211,70 +136,33 @@ function Get-EnvValue {
     return $match.Matches[0].Groups[1].Value.Trim()
 }
 
-function Get-ServiceContainerId {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Service
-    )
-
-    $raw = & docker @(Get-ComposeBaseArgs) ps -q $Service 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        return $null
-    }
-
-    return ($raw | Out-String).Trim()
-}
-
-function Get-ContainerStateField {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$ContainerId,
-        [Parameter(Mandatory = $true)]
-        [string]$Template
-    )
-
-    $value = & docker inspect -f $Template $ContainerId 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        return $null
-    }
-
-    return ($value | Out-String).Trim()
-}
-
 function Assert-ServicesHealthy {
     $issues = @()
+    $baseArgs = Get-ComposeBaseArgs
     $runningServices = @("postgres", "redis", "minio", "api", "web", "jobs-ocr", "jobs-thumb", "nginx")
 
     foreach ($service in $runningServices) {
-        $id = Get-ServiceContainerId -Service $service
-        if (-not $id) {
-            $issues += "$service container is missing"
-            continue
-        }
-
-        $status = Get-ContainerStateField -ContainerId $id -Template "{{.State.Status}}"
+        $id = (& docker @baseArgs ps -q $service 2>$null | Out-String).Trim()
+        if (-not $id) { $issues += "$service container is missing"; continue }
+        $status = (& docker inspect -f "{{.State.Status}}" $id 2>$null | Out-String).Trim()
         if ($status -ne "running") {
             $issues += "$service status is '$status' (expected 'running')"
         }
     }
 
-    $initRaw = & docker @(Get-ComposeBaseArgs) ps --all -q minio-init 2>$null
-    $initId = ($initRaw | Out-String).Trim()
+    $initId = (& docker @baseArgs ps --all -q minio-init 2>$null | Out-String).Trim()
     if (-not $initId) {
         $issues += "minio-init container is missing"
     } else {
-        $initStatus = Get-ContainerStateField -ContainerId $initId -Template "{{.State.Status}}"
-        $initExitCode = Get-ContainerStateField -ContainerId $initId -Template "{{.State.ExitCode}}"
+        $initStatus   = (& docker inspect -f "{{.State.Status}}"   $initId 2>$null | Out-String).Trim()
+        $initExitCode = (& docker inspect -f "{{.State.ExitCode}}" $initId 2>$null | Out-String).Trim()
         if ($initStatus -ne "exited" -or $initExitCode -ne "0") {
             $issues += "minio-init status is '$initStatus' with exit code '$initExitCode' (expected exited/0)"
         }
     }
 
     if ($issues.Count -gt 0) {
-        Warn "Service verification failed:"
-        foreach ($issue in $issues) {
-            Warn $issue
-        }
+        foreach ($issue in $issues) { Warn $issue }
         Show-ComposeDiagnostics
         Die "Vault services are not healthy. See diagnostics above."
     }
@@ -348,7 +236,9 @@ Ok "Required .env.prod values are present"
 # ---------------------------------------------------------------------------
 Step "Building and starting Vault (this may take a few minutes on first run)"
 
-Invoke-ComposeUpWithProgress -EstimateSeconds 480 -RefreshIntervalMs 1000 | Out-Null
+if (-not (Invoke-ComposeUp)) {
+    Die "Build or startup failed. See output above."
+}
 
 Step "Verifying service health"
 Assert-ServicesHealthy
