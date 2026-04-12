@@ -8,21 +8,17 @@ export const PRETTY_OPTS = {
 };
 
 // Absolute file:// URL so pino's worker thread can import this without tsx.
-// In dev (tsx), import.meta.url resolves to the .ts source path — the .mjs
-// sibling is right next to it. In production (node dist/), the .mjs is
-// copied alongside the compiled .js by the build script.
+// Only used in dev — in production the process logs to stdout.
 const FILE_TRANSPORT_URL = new URL("./fileTransport.mjs", import.meta.url).href;
 
-/** Returns the pino transport targets. The file transport reads .current dynamically,
- *  so the worker automatically follows when the API server restarts. */
+/** Returns the pino transport targets for dev. Empty in production — callers
+ *  should omit the transport option entirely so pino defaults to stdout. */
 export function buildTransportTargets (level = "info") {
-  const targets: { target: string; options: object; level: string }[] = [
+  if (isProd) return [];
+  return [
+    { target: "pino-pretty", options: { ...PRETTY_OPTS, colorize: true }, level },
     { target: FILE_TRANSPORT_URL, options: { currentPtr: CURRENT_PTR }, level },
   ];
-  if (!isProd) {
-    targets.unshift({ target: "pino-pretty", options: { ...PRETTY_OPTS, colorize: true }, level });
-  }
-  return targets;
 }
 
 // Fields stripped before any transport sees the log line.
@@ -68,8 +64,8 @@ export function createLogger (name?: string): Logger {
     serializers: { err: pino.stdSerializers.err },
   };
 
-  if (isTest) {
-    return pino(options); // no transport in tests — stdout JSON
+  if (isTest || isProd) {
+    return pino(options); // stdout JSON — no transport in tests or prod Docker
   }
 
   options.transport = { targets: buildTransportTargets(level) };

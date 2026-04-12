@@ -42,9 +42,6 @@ RUN pnpm -F @vault/db run build
 
 # 2. Compile the Fastify API + workers (tsc + tsc-alias rewrites @/ paths → dist/)
 RUN pnpm -F api run build
-# fileTransport.mjs is plain ESM — tsc does not process .mjs files.
-# Copy it explicitly so the pino worker thread can resolve it at runtime.
-RUN cp apps/api/src/lib/fileTransport.mjs apps/api/dist/lib/fileTransport.mjs
 
 # 3. Build Next.js (emits .next/standalone because output:'standalone' is set)
 # API_BASE_URL is baked into routes-manifest.json at build time by next.config.mjs rewrites().
