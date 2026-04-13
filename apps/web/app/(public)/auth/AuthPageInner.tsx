@@ -34,7 +34,7 @@ export default function AuthPage() {
   const getErrorMessage = async (response: Response, fallback: string) => {
     try {
       const data = await response.json();
-      if (data?.error || data?.message) return data.error || data.message;
+      if (data?.message || data?.error) return data.message || data.error;
     } catch {
       // Ignore JSON parse errors and use fallback.
     }

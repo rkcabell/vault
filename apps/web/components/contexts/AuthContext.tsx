@@ -74,17 +74,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if ([401, 404, 500].includes(response.status)) {
+      if (response.status === 401) {
         await logout();
+        return;
+      }
+
+      // 5xx / proxy errors (e.g. 502 from Next.js when the API is restarting).
+      // The Next.js rewrite proxy returns a real HTTP response (not a thrown error),
+      // so the catch block never fires for these. Treat them like network errors:
+      // preserve auth state for already-authenticated users rather than evicting them.
+      if (response.status >= 500) {
+        console.error('Auth refresh got server error:', response.status);
+        setStatus(prev => prev === 'authenticated' ? 'authenticated' : 'unauthenticated');
         return;
       }
 
       setUserState(null);
       setStatus('unauthenticated');
     } catch (error) {
+      // Network error (e.g. server restarting). Don't evict an already-authenticated
+      // user — their session cookie is still valid and will work once the API is back.
       console.error('Auth refresh failed:', error);
-      setUserState(null);
-      setStatus('unauthenticated');
+      setStatus(prev => prev === 'authenticated' ? 'authenticated' : 'unauthenticated');
     }
   }, [logout]);
 

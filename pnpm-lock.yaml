@@ -35,6 +35,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.88
         version: 0.1.97
+      '@prisma/client':
+        specifier: ^6.19.1
+        version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
       '@vault/db':
         specifier: workspace:*
         version: link:../../packages/db

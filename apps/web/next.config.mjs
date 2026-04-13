@@ -2,6 +2,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  env: {
+    NEXT_PUBLIC_NODE_ENV: process.env.NODE_ENV,
+  },
   typedRoutes: true,
   output: 'standalone',
   transpilePackages: ["@vault/types"],
@@ -13,6 +16,10 @@ const nextConfig = {
       {
         source: "/api/:path*",
         destination: `${apiBase}/api/:path*`,
+      },
+      {
+        source: "/health/:path*",
+        destination: `${apiBase}/health/:path*`,
       },
     ];
   },

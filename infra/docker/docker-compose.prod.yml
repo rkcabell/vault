@@ -32,8 +32,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-vault}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio:/data
     restart: unless-stopped
@@ -70,7 +70,7 @@ services:
       minio-init:
         condition: service_completed_successfully
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "node", "-e", "fetch('http://localhost:8000/health/healthz').then(r=>process.exit(r.ok?0:1))" ]

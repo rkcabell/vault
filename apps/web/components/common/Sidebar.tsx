@@ -44,6 +44,8 @@ interface SidebarSectionProps {
   icon: React.ReactNode;
   children: React.ReactNode;
   defaultOpen?: boolean;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   className?: string;
   contentClassName?: string;
 }
@@ -53,15 +55,22 @@ function SidebarSection({
   icon,
   children,
   defaultOpen = true,
+  isOpen: controlledOpen,
+  onOpenChange,
   className,
   contentClassName,
 }: SidebarSectionProps) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const isOpen = controlledOpen !== undefined ? controlledOpen : internalOpen;
+  const toggle = () => {
+    if (onOpenChange) onOpenChange(!isOpen);
+    else setInternalOpen(o => !o);
+  };
 
   return (
     <div className={cn('mb-4', className)}>
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={toggle}
         className={cn(
           'flex w-full items-center justify-between px-3 py-2 text-sm font-semibold',
           'rounded-md hover:bg-accent transition-colors',
@@ -111,6 +120,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
   const [displayedBundles, setDisplayedBundles] = useState<BundleNavItem[]>([]);
   const bundlesAbortRef = useRef<AbortController | null>(null);
   const [isFetchingBundles, setIsFetchingBundles] = useState(false);
+  const [tagsOpen, setTagsOpen] = useState(true);
   const { ratio: tagsSplitRatio, isDragging: isDraggingSplit, containerRef: splitContainerRef, onPointerDown: startSplitDrag, onKeyDown: splitKeyDown } = useSplitDrag({
     storageKey: 'vault.sidebar.tagsSplitRatio.v1',
     defaultRatio: 0.58,
@@ -309,12 +319,17 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
       <div className="h-full px-3 py-4">
         <nav className="h-full min-h-0">
           <div ref={splitContainerRef} className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 overflow-hidden" style={{ flexBasis: `${tagsSplitRatio * 100}%` }}>
+            <div
+              className={cn('overflow-hidden', tagsOpen ? 'min-h-0' : 'shrink-0')}
+              style={tagsOpen ? { flexBasis: `${tagsSplitRatio * 100}%` } : undefined}
+            >
               <SidebarSection
                 title="Tags"
                 icon={<Tag className="h-4 w-4" suppressHydrationWarning />}
                 className="mb-0 flex h-full min-h-0 flex-col"
                 contentClassName="mt-1 flex min-h-0 flex-1 flex-col"
+                isOpen={tagsOpen}
+                onOpenChange={setTagsOpen}
               >
                 <div className="flex min-h-0 flex-1 flex-col space-y-2">
               <button
@@ -441,17 +456,17 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
             role="separator"
             aria-label="Resize tags and bundles"
             aria-orientation="horizontal"
-            tabIndex={0}
-            onPointerDown={startSplitDrag}
-            onKeyDown={splitKeyDown}
+            tabIndex={tagsOpen ? 0 : -1}
+            onPointerDown={tagsOpen ? startSplitDrag : undefined}
+            onKeyDown={tagsOpen ? splitKeyDown : undefined}
             className={cn(
-              'group relative my-1 flex shrink-0 cursor-row-resize items-center py-2',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm'
+              'group relative my-1 flex shrink-0 items-center py-2',
+              tagsOpen ? 'cursor-row-resize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm' : 'cursor-default'
             )}
           >
             <div className={cn(
               'h-px w-full rounded-full bg-border/50 transition-colors',
-              'group-hover:bg-border',
+              tagsOpen && 'group-hover:bg-border',
               isDraggingSplit && 'bg-primary/40'
             )} />
           </div>

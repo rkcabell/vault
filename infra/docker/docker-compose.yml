@@ -53,6 +53,18 @@ services:
         echo 'MinIO bucket ready';
       "
 
+  db-migrate:
+    env_file: ../../.env.docker
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: api
+    command: sh -c "pnpm -F @vault/db exec prisma migrate deploy"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   api:
     env_file: ../../.env.docker
     build:
@@ -60,22 +72,25 @@ services:
       dockerfile: infra/docker/Dockerfile
       target: api
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       minio-init:
+        condition: service_completed_successfully
+      db-migrate:
         condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: "8000"
     ports: [ "8000:8000" ]
+    restart: on-failure
 
   web:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile
       target: web
+      args:
+        API_BASE_URL: http://api:8000
     depends_on:
       - api
     environment:

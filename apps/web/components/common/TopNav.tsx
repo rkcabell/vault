@@ -4,7 +4,7 @@ import * as React from 'react';
 import type { Route } from "next";
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Menu, User, LogOut, ChevronDown, Settings, HelpCircle } from 'lucide-react';
+import { Menu, User, LogOut, ChevronDown, Settings, HelpCircle, Network } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/ui/Button';
 import {
@@ -111,6 +111,12 @@ export function TopNav({ onMenuClick }: TopNavProps) {
               <Link href={"/profile" as Route} className="cursor-pointer">
                 <User className="mr-2 h-4 w-4" />
                 Profile
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href={"/server" as Route} className="cursor-pointer">
+                <Network className="mr-2 h-4 w-4" />
+                Server
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
