@@ -20,6 +20,7 @@ import { MediaTextPanel } from "@/components/media/MediaTextPanel";
 import { TagEditor } from "@/components/media/TagEditor";
 import { MediaMetadataCard } from "@/components/media/MediaMetadataCard";
 import { MediaBundlesPanel } from "@/components/media/MediaBundlesPanel";
+import { MediaRemindersPanel } from "@/components/media/MediaRemindersPanel";
 import MediaDetailSplit from "@/components/media/MediaDetailSplit";
 import { useGroupRef } from "react-resizable-panels";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
@@ -493,6 +494,14 @@ const handleDelete = (e: React.MouseEvent) => {
                     memberBundles={media.memberBundles}
                     disabled={busy}
                     onRemoved={() => refresh({ silent: true })}
+                  />
+                </PanelCard>
+              )}
+              {media.reminders && media.reminders.length > 0 && (
+                <PanelCard title="Reminders" storageKey="mediaDetails:reminders">
+                  <MediaRemindersPanel
+                    reminders={media.reminders}
+                    onUpdated={() => refresh({ silent: true })}
                   />
                 </PanelCard>
               )}

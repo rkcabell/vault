@@ -537,6 +537,11 @@ export class MediaRepository {
             },
           },
         },
+        reminders: {
+          where: { status: 'ACTIVE' },
+          select: { id: true, title: true, note: true, remindAt: true, dueAt: true },
+          orderBy: { remindAt: 'asc' },
+        },
         document: {
           select: {
             rawText: true,

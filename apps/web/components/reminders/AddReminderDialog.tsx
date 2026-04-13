@@ -2,29 +2,30 @@
 
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
-import { Sheet, SheetContent } from "@/components/ui/Sheet";
+import { Dialog, DialogContent } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toaster";
 import { useCreateReminder } from "@/lib/reminders";
+import { MediaPicker, type MediaPickerItem } from "@/components/reminders/MediaPicker";
 
 type AddReminderDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated?: () => void;
+  initialMediaId?: string | null;
 };
 
 function localDateTimeToIso(localValue: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(localValue);
   if (!match) return null;
-
   const year = Number.parseInt(match[1], 10);
   const month = Number.parseInt(match[2], 10);
   const day = Number.parseInt(match[3], 10);
   const hour = Number.parseInt(match[4], 10);
   const minute = Number.parseInt(match[5], 10);
-
   const localDate = new Date(year, month - 1, day, hour, minute, 0, 0);
   if (Number.isNaN(localDate.getTime())) return null;
   return localDate.toISOString();
@@ -33,22 +34,18 @@ function localDateTimeToIso(localValue: string) {
 function withMeridiem(localValue: string, meridiem: "AM" | "PM") {
   const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/.exec(localValue);
   if (!match) return localValue;
-
   const datePart = match[1];
   const minute = match[3];
   const existingHour24 = Number.parseInt(match[2], 10);
   const hour12 = existingHour24 % 12;
   const nextHour24 = hour12 + (meridiem === "PM" ? 12 : 0);
-  const hourText = String(nextHour24).padStart(2, "0");
-
-  return `${datePart}T${hourText}:${minute}`;
+  return `${datePart}T${String(nextHour24).padStart(2, "0")}:${minute}`;
 }
 
 function inferMeridiem(localValue: string): "AM" | "PM" {
   const match = /^\d{4}-\d{2}-\d{2}T(\d{2}):\d{2}$/.exec(localValue);
   if (!match) return "AM";
-  const hour24 = Number.parseInt(match[1], 10);
-  return hour24 >= 12 ? "PM" : "AM";
+  return Number.parseInt(match[1], 10) >= 12 ? "PM" : "AM";
 }
 
 function getNowLocalMin() {
@@ -58,18 +55,8 @@ function getNowLocalMin() {
 }
 
 type RRuleFreq = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
-const FREQ_LABELS: Record<RRuleFreq, string> = {
-  DAILY: "Daily",
-  WEEKLY: "Weekly",
-  MONTHLY: "Monthly",
-  YEARLY: "Yearly",
-};
-const FREQ_UNITS: Record<RRuleFreq, string> = {
-  DAILY: "day(s)",
-  WEEKLY: "week(s)",
-  MONTHLY: "month(s)",
-  YEARLY: "year(s)",
-};
+const FREQ_LABELS: Record<RRuleFreq, string> = { DAILY: "Daily", WEEKLY: "Weekly", MONTHLY: "Monthly", YEARLY: "Yearly" };
+const FREQ_UNITS: Record<RRuleFreq, string> = { DAILY: "day(s)", WEEKLY: "week(s)", MONTHLY: "month(s)", YEARLY: "year(s)" };
 
 function buildRRule(freq: string, intervalStr: string, untilDate: string): string | null {
   if (!freq) return null;
@@ -80,7 +67,10 @@ function buildRRule(freq: string, intervalStr: string, untilDate: string): strin
   return parts.join(";");
 }
 
-export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminderDialogProps) {
+const selectClass =
+  "h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
+
+export function AddReminderDialog({ open, onOpenChange, onCreated, initialMediaId }: AddReminderDialogProps) {
   const createReminder = useCreateReminder();
   const [title, setTitle] = useState("");
   const [minDateTime, setMinDateTime] = useState(getNowLocalMin);
@@ -91,6 +81,7 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
   const [rruleFreq, setRruleFreq] = useState("");
   const [rruleInterval, setRruleInterval] = useState("1");
   const [rruleUntil, setRruleUntil] = useState("");
+  const [selectedMedia, setSelectedMedia] = useState<MediaPickerItem | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -106,13 +97,12 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
     setRruleFreq("");
     setRruleInterval("1");
     setRruleUntil("");
+    setSelectedMedia(null);
     setFormError(null);
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen && !createReminder.isPending) {
-      resetForm();
-    }
+    if (!nextOpen && !createReminder.isPending) resetForm();
     onOpenChange(nextOpen);
   };
 
@@ -121,20 +111,11 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
     if (createReminder.isPending) return;
 
     const trimmedTitle = title.trim();
-    if (!trimmedTitle) {
-      setFormError("Title is required.");
-      return;
-    }
+    if (!trimmedTitle) { setFormError("Title is required."); return; }
 
     const dueAt = localDateTimeToIso(withMeridiem(dueAtLocal, dueMeridiem));
-    if (!dueAt) {
-      setFormError("Please provide a valid due date and time.");
-      return;
-    }
-    if (new Date(dueAt).getTime() <= Date.now()) {
-      setFormError("Due date/time must be in the future.");
-      return;
-    }
+    if (!dueAt) { setFormError("Please provide a valid due date and time."); return; }
+    if (new Date(dueAt).getTime() <= Date.now()) { setFormError("Due date/time must be in the future."); return; }
 
     let parsedOffset: number | undefined;
     const offsetText = remindOffsetDays.trim();
@@ -148,18 +129,16 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
     }
 
     setFormError(null);
-
-    const trimmedNote = note.trim();
-
     const rrule = buildRRule(rruleFreq, rruleInterval, rruleUntil);
 
     try {
       await createReminder.mutateAsync({
         title: trimmedTitle,
-        ...(trimmedNote.length > 0 ? { note: trimmedNote } : {}),
+        ...(note.trim() ? { note: note.trim() } : {}),
         dueAt,
         ...(parsedOffset !== undefined ? { remindOffsetDays: parsedOffset } : {}),
         ...(rrule ? { rrule } : {}),
+        ...(selectedMedia ? { mediaId: selectedMedia.id } : initialMediaId ? { mediaId: initialMediaId } : {}),
       });
       toast("Reminder added", { variant: "success" });
       resetForm();
@@ -171,165 +150,170 @@ export function AddReminderDialog({ open, onOpenChange, onCreated }: AddReminder
   };
 
   return (
-    <Sheet open={open} onOpenChange={handleOpenChange}>
-      <SheetContent side="right" className="reminder-dialog-content">
-        <div className="reminder-dialog-body">
-          <div>
-            <h3 className="reminder-dialog-title">Add reminder</h3>
-            <p className="reminder-dialog-subtitle">Create a quick reminder</p>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-xl w-full max-h-[90vh] overflow-y-auto vault-scrollbar">
+        <h2 className="text-2xl font-bold tracking-tight mb-1">Add reminder</h2>
+        <p className="text-sm text-muted-foreground mb-6">Set a due date and optionally link it to an item in your vault.</p>
+
+        <form className="space-y-5" onSubmit={handleSubmit}>
+          <div className="space-y-2">
+            <Label htmlFor="reminder-title">Reminder</Label>
+            <Input
+              id="reminder-title"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="Renew insurance"
+              required
+              disabled={createReminder.isPending}
+              autoFocus
+            />
           </div>
 
-          <form className="reminder-dialog-form" onSubmit={handleSubmit}>
-            <div className="reminder-form-group">
-              <Label htmlFor="reminder-title">Reminder</Label>
+          <div className="space-y-2">
+            <Label htmlFor="reminder-note">
+              Note <span className="text-muted-foreground font-normal">(optional)</span>
+            </Label>
+            <textarea
+              id="reminder-note"
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder="Add a note..."
+              maxLength={5000}
+              rows={3}
+              disabled={createReminder.isPending}
+              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-none"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>
+              Linked item <span className="text-muted-foreground font-normal">(optional)</span>
+            </Label>
+            <MediaPicker
+              value={selectedMedia}
+              onChange={setSelectedMedia}
+              disabled={createReminder.isPending}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="reminder-due">Due date/time</Label>
+            <div className="grid grid-cols-12 gap-2">
               <Input
-                id="reminder-title"
-                value={title}
-                onChange={event => setTitle(event.target.value)}
-                placeholder="Renew insurance"
-                required
-                disabled={createReminder.isPending}
-              />
-            </div>
-
-            <div className="reminder-form-group">
-              <Label htmlFor="reminder-note">Note (optional)</Label>
-              <textarea
-                id="reminder-note"
-                value={note}
-                onChange={event => setNote(event.target.value)}
-                placeholder="Add a note..."
-                maxLength={5000}
-                rows={3}
-                disabled={createReminder.isPending}
-                className="reminder-note-input"
-                aria-label="Note"
-              />
-            </div>
-
-            <div className="reminder-form-group">
-              <Label htmlFor="reminder-due">Due date/time</Label>
-              <div id="reminder-due" className="reminder-due-grid">
-                <Input
-                  id="reminder-due"
-                  type="datetime-local"
-                  value={dueAtLocal}
-                  min={minDateTime}
-                  onChange={event => {
-                    const nextValue = event.target.value;
-                    setDueAtLocal(nextValue);
-                    setDueMeridiem(inferMeridiem(nextValue));
-                  }}
-                  disabled={createReminder.isPending}
-                  className="reminder-due-input"
-                  aria-label="Due date and time"
-                />
-                <select
-                  value={dueMeridiem}
-                  onChange={event => {
-                    const nextMeridiem = event.target.value === "PM" ? "PM" : "AM";
-                    setDueMeridiem(nextMeridiem);
-                    setDueAtLocal(current => withMeridiem(current, nextMeridiem));
-                  }}
-                  disabled={createReminder.isPending}
-                  className="reminder-meridiem-select"
-                  aria-label="Due meridiem"
-                >
-                  <option value="AM">AM</option>
-                  <option value="PM">PM</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="reminder-form-group">
-              <Label htmlFor="reminder-offset">Remind X days before (optional)</Label>
-              <Input
-                id="reminder-offset"
-                type="number"
-                min={0}
-                max={3650}
-                step={1}
-                inputMode="numeric"
-                placeholder="Leave empty for default"
-                value={remindOffsetDays}
-                onChange={event => setRemindOffsetDays(event.target.value)}
-                onKeyDown={e => { if (['e', 'E', '-', '+'].includes(e.key)) e.preventDefault(); }}
-                disabled={createReminder.isPending}
-              />
-            </div>
-
-            <div className="reminder-form-group">
-              <Label htmlFor="reminder-rrule-freq">Repeats (optional)</Label>
-              <select
-                id="reminder-rrule-freq"
-                value={rruleFreq}
-                onChange={event => {
-                  setRruleFreq(event.target.value);
-                  if (!event.target.value) setRruleInterval("1");
+                id="reminder-due"
+                type="datetime-local"
+                value={dueAtLocal}
+                min={minDateTime}
+                onChange={e => {
+                  setDueAtLocal(e.target.value);
+                  setDueMeridiem(inferMeridiem(e.target.value));
                 }}
                 disabled={createReminder.isPending}
-                className="reminder-meridiem-select"
-                aria-label="Repeat frequency"
-              >
-                <option value="">None</option>
-                {(Object.keys(FREQ_LABELS) as RRuleFreq[]).map(freq => (
-                  <option key={freq} value={freq}>{FREQ_LABELS[freq]}</option>
-                ))}
-              </select>
-              {rruleFreq ? (
-                <>
-                  <p className="reminder-recurrence-sub-label">for</p>
-                  <div className="reminder-due-grid">
-                    <Input
-                      type="number"
-                      min={1}
-                      max={999}
-                      step={1}
-                      inputMode="numeric"
-                      aria-label="Repeat interval"
-                      value={rruleInterval}
-                      onChange={event => setRruleInterval(event.target.value)}
-                      onKeyDown={e => { if (['e', 'E', '-', '+', '.'].includes(e.key)) e.preventDefault(); }}
-                      disabled={createReminder.isPending}
-                      className="reminder-due-input"
-                    />
-                    <span className="reminder-meridiem-select" style={{ display: "flex", alignItems: "center", paddingLeft: "0.5rem" }}>
-                      {FREQ_UNITS[rruleFreq as RRuleFreq]}
-                    </span>
-                  </div>
-                  <p className="reminder-recurrence-sub-label">or until</p>
-                  <Input
-                    type="date"
-                    aria-label="Repeat until date"
-                    value={rruleUntil}
-                    onChange={event => setRruleUntil(event.target.value)}
-                    disabled={createReminder.isPending}
-                    className="reminder-due-input"
-                  />
-                </>
-              ) : null}
-            </div>
-
-            {formError || createReminder.error ? (
-              <p className="reminder-form-error">{formError ?? createReminder.error}</p>
-            ) : null}
-
-            <div className="reminder-form-actions">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => handleOpenChange(false)}
+                className="col-span-9"
+                aria-label="Due date and time"
+              />
+              <select
+                value={dueMeridiem}
+                onChange={e => {
+                  const m = e.target.value === "PM" ? "PM" : "AM";
+                  setDueMeridiem(m);
+                  setDueAtLocal(cur => withMeridiem(cur, m));
+                }}
                 disabled={createReminder.isPending}
+                className={`col-span-3 ${selectClass}`}
+                aria-label="AM or PM"
               >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={createReminder.isPending}>
-                {createReminder.isPending ? "Adding..." : "Add reminder"}
-              </Button>
+                <option value="AM">AM</option>
+                <option value="PM">PM</option>
+              </select>
             </div>
-          </form>
-        </div>
-      </SheetContent>
-    </Sheet>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="reminder-offset">
+              Remind X days before <span className="text-muted-foreground font-normal">(optional)</span>
+            </Label>
+            <Input
+              id="reminder-offset"
+              type="number"
+              min={0}
+              max={3650}
+              step={1}
+              inputMode="numeric"
+              placeholder="Leave empty for none"
+              value={remindOffsetDays}
+              onChange={e => setRemindOffsetDays(e.target.value)}
+              onKeyDown={e => { if (["e", "E", "-", "+"].includes(e.key)) e.preventDefault(); }}
+              disabled={createReminder.isPending}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="reminder-rrule-freq">
+              Repeats <span className="text-muted-foreground font-normal">(optional)</span>
+            </Label>
+            <select
+              id="reminder-rrule-freq"
+              value={rruleFreq}
+              onChange={e => { setRruleFreq(e.target.value); if (!e.target.value) setRruleInterval("1"); }}
+              disabled={createReminder.isPending}
+              className={selectClass}
+              aria-label="Repeat frequency"
+            >
+              <option value="">None</option>
+              {(Object.keys(FREQ_LABELS) as RRuleFreq[]).map(f => (
+                <option key={f} value={f}>{FREQ_LABELS[f]}</option>
+              ))}
+            </select>
+            {rruleFreq && (
+              <div className="space-y-2 pt-1">
+                <p className="text-sm text-muted-foreground">for</p>
+                <div className="grid grid-cols-12 gap-2">
+                  <Input
+                    type="number" min={1} max={999} step={1} inputMode="numeric"
+                    aria-label="Repeat interval"
+                    value={rruleInterval}
+                    onChange={e => setRruleInterval(e.target.value)}
+                    onKeyDown={e => { if (["e", "E", "-", "+", "."].includes(e.key)) e.preventDefault(); }}
+                    disabled={createReminder.isPending}
+                    className="col-span-9"
+                  />
+                  <span className="col-span-3 flex items-center text-sm text-muted-foreground">
+                    {FREQ_UNITS[rruleFreq as RRuleFreq]}
+                  </span>
+                </div>
+                <p className="text-sm text-muted-foreground">or until</p>
+                <Input
+                  type="date"
+                  aria-label="Repeat until date"
+                  value={rruleUntil}
+                  onChange={e => setRruleUntil(e.target.value)}
+                  disabled={createReminder.isPending}
+                />
+              </div>
+            )}
+          </div>
+
+          {(formError ?? createReminder.error) && (
+            <p className="text-sm text-destructive">{formError ?? createReminder.error}</p>
+          )}
+
+          <div className="flex items-center gap-3 pt-1">
+            <Button type="submit" disabled={createReminder.isPending}>
+              {createReminder.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {createReminder.isPending ? "Adding..." : "Add reminder"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => handleOpenChange(false)}
+              disabled={createReminder.isPending}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

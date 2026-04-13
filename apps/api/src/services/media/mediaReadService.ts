@@ -207,6 +207,13 @@ export function createMediaReadService (deps: MediaReadDeps) {
         textAttemptsMade: jobMeta?.textAttemptsMade ?? null,
         textAttemptsTotal: jobMeta?.textAttemptsTotal ?? null,
         memberBundles: media.bundleItems.map(bi => bi.bundle),
+        reminders: media.reminders.map(r => ({
+          id: r.id,
+          title: r.title,
+          note: r.note,
+          remindAt: r.remindAt.toISOString(),
+          dueAt: r.dueAt.toISOString(),
+        })),
       },
       document: media.document
         ? {

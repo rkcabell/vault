@@ -16,11 +16,6 @@ import type { ResultsPanelItem } from './ResultsPanel'
 import { Button } from '@/components/ui/Button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
-// ─── TODO: Known UI bugs in the text extract viewer ──────────────────────────
-// 1. Insufficient vertical spacing — line-height / paragraph gaps are too tight
-//    for comfortable reading of extracted text.
-// ─────────────────────────────────────────────────────────────────────────────
-
 // ─── Toggle ──────────────────────────────────────────────────────────────────
 // Set to false to revert to the page-based TextSegmentList (no react-window).
 const USE_VIRTUAL_SCROLL = true
