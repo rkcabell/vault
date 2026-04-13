@@ -22,6 +22,7 @@
     "boot": "concurrently -n API,WEB,WORKER -c auto \"pnpm -F api run dev\" \"pnpm -F web run dev\" \"pnpm -F api run worker:dev\"",
     "start": "pnpm run localdocker && pnpm run build && concurrently -n API,WEB,WORKER -c auto \"pnpm -F api run start\" \"pnpm -F web run start\" \"pnpm -F api run worker\"",
     "localdocker": "docker compose -f infra/docker/docker-minimal.yml up -d",
+    "localdocker:down": "docker compose -f infra/docker/docker-minimal.yml down",
     "docker:build": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml down --remove-orphans && docker compose --env-file .env.docker -f infra/docker/docker-compose.yml up -d --build --remove-orphans",
     "docker:rebuild-clean": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml down --remove-orphans && docker compose --env-file .env.docker -f infra/docker/docker-compose.yml build --no-cache && docker compose --env-file .env.docker -f infra/docker/docker-compose.yml up -d --remove-orphans",
     "docker:logs": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml logs -f",

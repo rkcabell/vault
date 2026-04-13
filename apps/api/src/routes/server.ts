@@ -1,28 +1,46 @@
-import path from "node:path";
-import fs from "node:fs";
 import type { FastifyPluginAsync } from "fastify";
 import { Queue } from "bullmq";
-import { z, ZodError } from "zod";
+import { ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { requireAuth } from "../utils/authGuard.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 
-function writeEnvKey(envPath: string, key: string, value: string): void {
-  const content = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf-8") : "";
-  const regex = new RegExp(`^${key}=.*$`, "m");
-  const updated = regex.test(content)
-    ? content.replace(regex, `${key}=${value}`)
-    : `${content.trimEnd()}\n${key}=${value}\n`;
-  fs.writeFileSync(envPath, updated, "utf-8");
-}
-
 export const serverRoutes: FastifyPluginAsync = async (app) => {
   app.get("/status", { preHandler: [requireAuth] }, async () => {
+    const mem = process.memoryUsage();
+    const publicUrl = new URL(app.config.S3_PUBLIC_ENDPOINT);
+    publicUrl.port = "9001";
+    const minioConsoleUrl = `${publicUrl.origin}/browser/${app.config.S3_BUCKET}`;
     return {
-      env:          app.config.NODE_ENV,
-      apiPort:      app.config.PORT,
-      corsOrigin:   app.config.CORS_ORIGIN,
+      env:           app.config.NODE_ENV,
+      apiPort:       app.config.PORT,
+      corsOrigin:    app.config.CORS_ORIGIN,
       uptimeSeconds: process.uptime(),
+      memoryMB:      Math.round(mem.rss / 1024 / 1024),
+      minioConsoleUrl,
     };
+  });
+
+  app.get("/storage", { preHandler: [requireAuth] }, async () => {
+    let sizeBytes = 0;
+    let objectCount = 0;
+    let continuationToken: string | undefined;
+    do {
+      const res = await app.s3.send(new ListObjectsV2Command({
+        Bucket: app.config.S3_BUCKET,
+        ContinuationToken: continuationToken,
+      }));
+      for (const obj of res.Contents ?? []) {
+        sizeBytes += obj.Size ?? 0;
+        objectCount++;
+      }
+      continuationToken = res.NextContinuationToken;
+    } while (continuationToken);
+
+    const [{ db_size }] = await app.prisma.$queryRaw<[{ db_size: bigint }]>`
+      SELECT pg_database_size(current_database()) AS db_size
+    `;
+
+    return { sizeBytes, objectCount, dbSizeBytes: Number(db_size) };
   });
 
   app.get("/workers", { preHandler: [requireAuth] }, async () => {
@@ -38,66 +56,16 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
         ocrQueue.getWorkers(),
         thumbQueue.getWorkers(),
       ]);
+      const [ocrCounts, thumbCounts] = await Promise.all([
+        ocrQueue.getJobCounts("waiting", "active", "delayed", "failed"),
+        thumbQueue.getJobCounts("waiting", "active", "delayed", "failed"),
+      ]);
       return {
-        ocr:   { active: ocrWorkers.length   > 0, count: ocrWorkers.length },
-        thumb: { active: thumbWorkers.length > 0, count: thumbWorkers.length },
+        ocr:   { active: ocrWorkers.length   > 0, count: ocrWorkers.length,   counts: ocrCounts   },
+        thumb: { active: thumbWorkers.length > 0, count: thumbWorkers.length, counts: thumbCounts },
       };
     } finally {
       await Promise.allSettled([ocrQueue.close(), thumbQueue.close()]);
     }
-  });
-
-  app.post("/shutdown", { preHandler: [requireAuth] }, async (_req, reply) => {
-    void reply.code(202).send({ ok: true });
-    // Exit with code 0 so Docker's "on-failure" restart policy does NOT restart
-    // the container. SIGTERM would exit with 143 (non-zero), which triggers a restart.
-    setTimeout(() => process.exit(0), 200);
-  });
-
-  app.post("/restart", { preHandler: [requireAuth] }, async (_req, reply) => {
-    void reply.code(202).send({ ok: true });
-    setTimeout(() => {
-      if (process.env.IS_NODEMON) {
-        // Touch a watched trigger file — nodemon detects the change, sends SIGTERM,
-        // and respawns the child. Works because nodemon always restarts on file-change
-        // kills regardless of exit code.
-        fs.writeFileSync(path.join(process.cwd(), "src", ".restart.trigger"), String(Date.now()));
-      } else {
-        process.kill(process.pid, "SIGTERM");
-      }
-    }, 200);
-  });
-
-  app.patch("/config", { preHandler: [requireAuth] }, async (req, reply) => {
-    if (app.config.NODE_ENV === "production") {
-      throw app.httpErrors.forbidden("Use environment variables in production.");
-    }
-
-    let apiPort: number | undefined;
-    try {
-      ({ apiPort } = z.object({
-        apiPort: z.coerce.number().int().min(1024).max(65535).optional(),
-      }).parse(req.body));
-    } catch (e) {
-      if (e instanceof ZodError) {
-        throw app.httpErrors.badRequest(e.errors[0]?.message ?? "Invalid request body");
-      }
-      throw e;
-    }
-
-    if (apiPort !== undefined) {
-      const envPath =
-        process.env.DOTENV_CONFIG_PATH ?? path.join(process.cwd(), ".env");
-      writeEnvKey(envPath, "PORT", String(apiPort));
-    }
-
-    void reply.code(202).send({ ok: true });
-    setTimeout(() => {
-      if (process.env.IS_NODEMON) {
-        fs.writeFileSync(path.join(process.cwd(), "src", ".restart.trigger"), String(Date.now()));
-      } else {
-        process.kill(process.pid, "SIGTERM");
-      }
-    }, 200);
   });
 };

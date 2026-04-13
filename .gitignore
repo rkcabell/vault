@@ -94,6 +94,3 @@ test-results.html
 # Misc
 *.pid
 *.seed
-
-# Nodemon restart trigger (written by /restart route to signal nodemon)
-apps/api/src/.restart.trigger
