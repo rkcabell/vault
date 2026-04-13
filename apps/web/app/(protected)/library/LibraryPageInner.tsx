@@ -486,35 +486,63 @@ export default function LibraryPageInner() {
   // SSE: receive job-state updates pushed from the server instead of polling.
   // Empty deps — mounts once. Uses fetchMediaRef so it always calls the latest
   // version without causing reconnects on every buildQuery/gridCols change.
+  // Uses manual exponential backoff instead of the browser's built-in retry
+  // (~3 s fixed) to avoid socket exhaustion during server restarts.
   useEffect(() => {
-    const es = new EventSource("/api/media/events");
+    let es: EventSource | null = null;
+    let retryDelay = 2_000;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let unmounted = false;
 
-    es.onmessage = (e: MessageEvent<string>) => {
-      try {
-        const { mediaId, field, value } = JSON.parse(e.data) as {
-          mediaId?: string;
-          field?: "textState" | "thumbState" | "tagsUpdated";
-          value?: string;
-        };
-        if (!mediaId || !field || !value) return;
-        if (field === "tagsUpdated") {
-          emitTagsUpdated();
-          return;
+    const connect = () => {
+      if (unmounted) return;
+      es = new EventSource("/api/media/events");
+
+      es.onopen = () => {
+        retryDelay = 2_000; // reset backoff on successful connect
+        // Re-fetch the full list to catch any missed updates during downtime.
+        fetchMediaRef.current({ silent: true });
+      };
+
+      es.onmessage = (e: MessageEvent<string>) => {
+        try {
+          const { mediaId, field, value } = JSON.parse(e.data) as {
+            mediaId?: string;
+            field?: "textState" | "thumbState" | "tagsUpdated";
+            value?: string;
+          };
+          if (!mediaId || !field || !value) return;
+          if (field === "tagsUpdated") {
+            emitTagsUpdated();
+            return;
+          }
+          setMediaItems((prev) =>
+            prev.map((item) => (item.id === mediaId ? { ...item, [field]: value } : item))
+          );
+        } catch {
+          // ignore malformed frames
         }
-        setMediaItems((prev) =>
-          prev.map((item) => (item.id === mediaId ? { ...item, [field]: value } : item))
-        );
-      } catch {
-        // ignore malformed frames
-      }
+      };
+
+      // Close and schedule a reconnect with exponential backoff (2 s → 4 → 8 → … → 60 s).
+      // Prevents the browser's fixed 3 s retry from hammering the port during downtime.
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        if (!unmounted) {
+          retryTimer = setTimeout(connect, retryDelay);
+          retryDelay = Math.min(retryDelay * 2, 60_000);
+        }
+      };
     };
 
-    // On reconnect after a gap, re-fetch the full list to catch any missed updates
-    es.onerror = () => {
-      fetchMediaRef.current({ silent: true });
-    };
+    connect();
 
-    return () => es.close();
+    return () => {
+      unmounted = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      es?.close();
+    };
   }, []);
 
   const handleUploadClick = useCallback(() => {

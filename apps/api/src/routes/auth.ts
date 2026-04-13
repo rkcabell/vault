@@ -105,7 +105,10 @@ export const authRoutes: FastifyPluginAsync = async app => {
           httpOnly: true,
           sameSite: "lax" as const,
           path: "/",
-          secure: process.env.NODE_ENV === "production",
+          // Use COOKIE_SECURE=true only when behind a real HTTPS reverse proxy.
+          // NODE_ENV=production is set in Docker even for plain HTTP local deployments,
+          // so we gate on an explicit env var instead.
+          secure: process.env.COOKIE_SECURE === "true",
         };
 
         reply
