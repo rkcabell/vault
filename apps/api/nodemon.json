@@ -1,0 +1,7 @@
+{
+  "exec": "tsx src/index.ts",
+  "watch": ["src/"],
+  "ext": "ts,trigger",
+  "ignore": ["src/tests/**"],
+  "env": { "IS_NODEMON": "1" }
+}

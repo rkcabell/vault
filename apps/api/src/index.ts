@@ -17,6 +17,7 @@ import { remindersRoutes } from "./routes/reminders.js";
 import { bundlesRoutes } from "./routes/bundles.js";
 import { preferencesRoutes } from "./routes/preferences.js";
 import { initRoutes } from "./routes/init.js";
+import { serverRoutes } from "./routes/server.js";
 import preferencesPlugin from "./plugins/preferences.js";
 import queueEventsPlugin from "./plugins/queueEvents.js";
 import redisPlugin from "./plugins/redis.js";
@@ -95,6 +96,7 @@ async function main () {
   await app.register(bundlesRoutes, { prefix: "/api/bundles" });
   await app.register(preferencesRoutes, { prefix: "/api/preferences" });
   await app.register(initRoutes, { prefix: "/api/init" });
+  await app.register(serverRoutes, { prefix: "/api/server" });
   await app.register(redisPlugin); // Redis for queue/rate-limit groundwork
   await app.register(rateLimitPlugin); // Redis rate limit
 

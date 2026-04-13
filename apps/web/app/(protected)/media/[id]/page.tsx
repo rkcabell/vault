@@ -175,33 +175,59 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
   const title = media?.title || media?.filename || "Media details";
   const busy = isDeleting || isDownloading || isUnpacking;
   useEffect(() => {
-    const es = new EventSource("/api/media/events");
+    let es: EventSource | null = null;
+    let retryDelay = 2_000;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let unmounted = false;
 
-    es.onopen = () => {
-      refresh({ silent: true });
-    };
+    const connect = () => {
+      if (unmounted) return;
+      es = new EventSource("/api/media/events");
 
-    es.onmessage = (e: MessageEvent<string>) => {
-      try {
-        const { mediaId, field, value } = JSON.parse(e.data) as {
-          mediaId?: string;
-          field?: "textState" | "thumbState" | "tagsUpdated";
-          value?: string;
-        };
-        if (mediaId !== id || !field || !value) return;
-        if (field === "tagsUpdated") {
-          emitTagsUpdated();
-          refresh({ silent: true });
-          return;
-        }
-        setMedia((prev) => (prev ? { ...prev, [field]: value } : prev));
+      es.onopen = () => {
+        retryDelay = 2_000; // reset backoff on successful connect
         refresh({ silent: true });
-      } catch {
-        // ignore malformed messages
-      }
+      };
+
+      es.onmessage = (e: MessageEvent<string>) => {
+        try {
+          const { mediaId, field, value } = JSON.parse(e.data) as {
+            mediaId?: string;
+            field?: "textState" | "thumbState" | "tagsUpdated";
+            value?: string;
+          };
+          if (mediaId !== id || !field || !value) return;
+          if (field === "tagsUpdated") {
+            emitTagsUpdated();
+            refresh({ silent: true });
+            return;
+          }
+          setMedia((prev) => (prev ? { ...prev, [field]: value } : prev));
+          refresh({ silent: true });
+        } catch {
+          // ignore malformed messages
+        }
+      };
+
+      // Close and schedule a reconnect with exponential backoff (2 s → 4 → 8 → … → 60 s).
+      // Prevents the browser's fixed 3 s retry from hammering the port during downtime.
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        if (!unmounted) {
+          retryTimer = setTimeout(connect, retryDelay);
+          retryDelay = Math.min(retryDelay * 2, 60_000);
+        }
+      };
     };
 
-    return () => es.close();
+    connect();
+
+    return () => {
+      unmounted = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      es?.close();
+    };
   }, [id, refresh, setMedia]);
 
   useEffect(() => {

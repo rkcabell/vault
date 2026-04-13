@@ -25,6 +25,7 @@ A self-hosted personal document management system. Upload files, tag, and search
 - **Bundles** — Bundle your files
 - **Reminders** — 
 - **Self-hosted** — No subscriptions
+- **Server management** — Monitor service health, and control from a built-in dashboard
 
 ---
 
