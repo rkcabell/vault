@@ -6,11 +6,12 @@ A self-hosted personal document management system. Upload files, tag, and search
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/library-new-moon.jpg" alt="Media Library — New Moon theme" /></td>
-    <td><img src="docs/screenshots/library-solarized.jpg" alt="Media Library — Solarized theme" /></td>
+    <td><img src="https://raw.githubusercontent.com/rkcabell/vault/main/docs/screenshots/library-new-moon.jpg" alt="Media Library — New Moon theme" /></td>
+    <td><img src="https://raw.githubusercontent.com/rkcabell/vault/main/docs/screenshots/library-solarized.jpg" alt="Media Library — Solarized theme" /></td>
   </tr>
   <tr>
-    <td colspan="2"><img src="docs/screenshots/media-detail.jpg" alt="Media detail — metadata, tags, and actions" /></td>
+    <td colspan="2"><img src="https://raw.githubusercontent.com/rkcabell/vault/main/docs/screenshots/media-detail-new-moon.jpg" alt="Media detail — metadata, tags, and actions" /></td>
+    <td><img src="https://raw.githubusercontent.com/rkcabell/vault/main/docs/screenshots/server-dashboard-garden.jpg" alt="Server Dashboard — Garden theme" /></td>
   </tr>
 </table>
 

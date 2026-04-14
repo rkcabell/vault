@@ -1,16 +1,17 @@
 # Vault
 
-A self-hosted personal document management system. Upload files, tag, and search by text, set reminders, and export bundled items in a zip. 
+A self-hosted personal document management system. Upload files, tag, and search by text, set reminders, and export bundled items in a zip.
 
 ---
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/library-new-moon.jpg" alt="Media Library — New Moon theme" /></td>
-    <td><img src="docs/screenshots/library-solarized.jpg" alt="Media Library — Solarized theme" /></td>
+    <td><img src="https://raw.githubusercontent.com/rkcabell/vault/main/docs/screenshots/library-new-moon.jpg" alt="Media Library — New Moon theme" /></td>
+    <td><img src="https://raw.githubusercontent.com/rkcabell/vault/main/docs/screenshots/library-solarized.jpg" alt="Media Library — Solarized theme" /></td>
   </tr>
   <tr>
-    <td colspan="2"><img src="docs/screenshots/media-detail.jpg" alt="Media detail — metadata, tags, and actions" /></td>
+    <td colspan="2"><img src="https://raw.githubusercontent.com/rkcabell/vault/main/docs/screenshots/media-detail-new-moon.jpg" alt="Media detail — metadata, tags, and actions" /></td>
+    <td><img src="https://raw.githubusercontent.com/rkcabell/vault/main/docs/screenshots/server-dashboard-garden.jpg" alt="Server Dashboard — Garden theme" /></td>
   </tr>
 </table>
 
@@ -23,8 +24,9 @@ A self-hosted personal document management system. Upload files, tag, and search
 - **Full-text search** — PostgreSQL native full-text search with GIN-indexed tag filtering
 - **Thumbnails** — Spawns async workers
 - **Bundles** — Bundle your files
-- **Reminders** — 
+- **Reminders** —
 - **Self-hosted** — No subscriptions
+- **Server dashboard** — Monitor service health from a built-in dashboard
 
 ---
 
@@ -108,7 +110,7 @@ To stop or restart Vault:
 # Stop all services
 docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml down
 
-# Start again 
+# Start again
 docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml up -d
 ```
 
@@ -201,50 +203,50 @@ pnpm -F api run worker:dev    # OCR + thumbnail workers
 
 ### Development
 
-| Command                      | Description                                                      |
-| ---------------------------- | ---------------------------------------------------------------- |
-| `pnpm run boot`              | Start API + web + worker in dev mode (hot reload)                |
-| `pnpm run start`             | Build, start infrastructure, and run API + web + worker          |
-| `pnpm run api:dev`           | Start API server only (hot reload)                               |
-| `pnpm run web:dev`           | Start web app only (hot reload)                                  |
-| `pnpm -F api run worker:dev` | Start background workers only (hot reload)                       |
+| Command                      | Description                                             |
+| ---------------------------- | ------------------------------------------------------- |
+| `pnpm run boot`              | Start API + web + worker in dev mode (hot reload)       |
+| `pnpm run start`             | Build, start infrastructure, and run API + web + worker |
+| `pnpm run api:dev`           | Start API server only (hot reload)                      |
+| `pnpm run web:dev`           | Start web app only (hot reload)                         |
+| `pnpm -F api run worker:dev` | Start background workers only (hot reload)              |
 
 ### Build & quality
 
-| Command           | Description                                     |
-| ----------------- | ----------------------------------------------- |
-| `pnpm run build`  | Build all packages                              |
-| `pnpm run lint`   | Run ESLint across API and web                   |
-| `pnpm run sweep`  | Clean, lint, and build all packages             |
-| `pnpm run clean`  | Remove Next.js build output                     |
+| Command          | Description                         |
+| ---------------- | ----------------------------------- |
+| `pnpm run build` | Build all packages                  |
+| `pnpm run lint`  | Run ESLint across API and web       |
+| `pnpm run sweep` | Clean, lint, and build all packages |
+| `pnpm run clean` | Remove Next.js build output         |
 
 ### Testing
 
-| Command              | Description                                  |
-| -------------------- | -------------------------------------------- |
-| `pnpm run test`      | Run full test suite (API + web)              |
-| `pnpm run test:api`  | Run API tests and generate HTML report       |
-| `pnpm run test:web`  | Run web tests                                |
-| `pnpm run coverage`  | Run tests with coverage report               |
+| Command             | Description                            |
+| ------------------- | -------------------------------------- |
+| `pnpm run test`     | Run full test suite (API + web)        |
+| `pnpm run test:api` | Run API tests and generate HTML report |
+| `pnpm run test:web` | Run web tests                          |
+| `pnpm run coverage` | Run tests with coverage report         |
 
 ### Database
 
-| Command                | Description                              |
-| ---------------------- | ---------------------------------------- |
-| `pnpm run prismagen`   | Regenerate Prisma client                 |
-| `pnpm run prismigrate` | Apply database migrations                |
-| `pnpm run prismareset` | Reset database — **destructive**         |
+| Command                | Description                      |
+| ---------------------- | -------------------------------- |
+| `pnpm run prismagen`   | Regenerate Prisma client         |
+| `pnpm run prismigrate` | Apply database migrations        |
+| `pnpm run prismareset` | Reset database — **destructive** |
 
 ### Infrastructure
 
-| Command                       | Description                                         |
-| ----------------------------- | --------------------------------------------------- |
-| `pnpm run localdocker`        | Start local infrastructure (Postgres, Redis, MinIO) |
-| `pnpm run docker:build`       | Build images and start full Docker stack            |
-| `pnpm run docker:rebuild-clean` | Rebuild images without cache and start stack      |
-| `pnpm run dockerup`           | Start full Docker stack (no build)                  |
-| `pnpm run dockerdown`         | Stop full Docker stack                              |
-| `pnpm run docker:logs`        | Tail Docker compose logs                            |
+| Command                         | Description                                         |
+| ------------------------------- | --------------------------------------------------- |
+| `pnpm run localdocker`          | Start local infrastructure (Postgres, Redis, MinIO) |
+| `pnpm run docker:build`         | Build images and start full Docker stack            |
+| `pnpm run docker:rebuild-clean` | Rebuild images without cache and start stack        |
+| `pnpm run dockerup`             | Start full Docker stack (no build)                  |
+| `pnpm run dockerdown`           | Stop full Docker stack                              |
+| `pnpm run docker:logs`          | Tail Docker compose logs                            |
 
 ---
 
@@ -261,17 +263,17 @@ Configure services using `.env.docker` at the repo root. The Dockerfile supports
 
 ### Services
 
-| Service | Role | Exposed port |
-| ----------- | ------------------------------------------- | ------------ |
-| `api` | Fastify REST API | 8000 |
-| `web` | Next.js frontend | 3000 |
-| `nginx` | Reverse proxy — routes `/api/*` to API (prod only) | 80 |
-| `jobs-ocr` | OCR text extraction worker | — |
-| `jobs-thumb` | Thumbnail generation worker | — |
-| `postgres` | PostgreSQL database | 5432 |
-| `redis` | Job queue backing store (BullMQ) | 6379 |
-| `minio` | S3-compatible object storage | 9000 / 9001 |
-| `minio-init` | One-time bucket creation (exits after init) | — |
+| Service      | Role                                               | Exposed port |
+| ------------ | -------------------------------------------------- | ------------ |
+| `api`        | Fastify REST API                                   | 8000         |
+| `web`        | Next.js frontend                                   | 3000         |
+| `nginx`      | Reverse proxy — routes `/api/*` to API (prod only) | 80           |
+| `jobs-ocr`   | OCR text extraction worker                         | —            |
+| `jobs-thumb` | Thumbnail generation worker                        | —            |
+| `postgres`   | PostgreSQL database                                | 5432         |
+| `redis`      | Job queue backing store (BullMQ)                   | 6379         |
+| `minio`      | S3-compatible object storage                       | 9000 / 9001  |
+| `minio-init` | One-time bucket creation (exits after init)        | —            |
 
 ---
 
