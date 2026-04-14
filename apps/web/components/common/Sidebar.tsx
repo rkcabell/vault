@@ -122,8 +122,8 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
   const [isFetchingBundles, setIsFetchingBundles] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(true);
   const { ratio: tagsSplitRatio, isDragging: isDraggingSplit, containerRef: splitContainerRef, onPointerDown: startSplitDrag, onKeyDown: splitKeyDown } = useSplitDrag({
-    storageKey: 'vault.sidebar.tagsSplitRatio.v1',
-    defaultRatio: 0.58,
+    storageKey: 'vault.sidebar.tagsSplitRatio.v2',
+    defaultRatio: 0.40,
     min: 0.25,
     max: 0.8,
   });

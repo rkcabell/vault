@@ -49,6 +49,15 @@ export function useSplitDrag({
   }, []); // intentionally run once on mount
 
   useEffect(() => {
+    const handler = (e: Event) => {
+      const key = (e as CustomEvent<{ storageKey: string }>).detail?.storageKey;
+      if (key === storageKey) setRatio(defaultRatio);
+    };
+    window.addEventListener('vault:split-reset', handler);
+    return () => window.removeEventListener('vault:split-reset', handler);
+  }, [storageKey, defaultRatio]);
+
+  useEffect(() => {
     try {
       window.localStorage.setItem(storageKey, String(ratio));
     } catch {

@@ -117,9 +117,16 @@ export function ExtractionControls (props: {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
 
+  const LANGUAGE_DISPLAY: Record<string, string> = {
+    eng: 'English',
+    spa: 'Spanish',
+    fra: 'French',
+    deu: 'German',
+  }
+
   const advancedSummary = useMemo(() => {
     const languageLabel =
-      language === 'auto' ? 'Auto-detect language' : `Language: ${language.toUpperCase()}`
+      language === 'auto' ? 'Auto-detect language' : `Language: ${LANGUAGE_DISPLAY[language] ?? language.toUpperCase()}`
     return `${languageLabel} | ${rotation} deg rotation`
   }, [language, rotation])
 
@@ -228,10 +235,10 @@ export function ExtractionControls (props: {
               className='mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
             >
               <option value='auto'>Auto-detect</option>
-              <option value='en'>English</option>
-              <option value='es'>Spanish</option>
-              <option value='fr'>French</option>
-              <option value='de'>German</option>
+              <option value='eng'>English</option>
+              <option value='spa'>Spanish</option>
+              <option value='fra'>French</option>
+              <option value='deu'>German</option>
             </select>
             <p className='mt-1 text-xs text-muted-foreground'>
               Choose a language for better accuracy.

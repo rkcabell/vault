@@ -1,4 +1,3 @@
-// File: apps/web/app/(protected)/upload/page.tsx
 "use client";
 
 import { useMemo, useRef, useState } from "react";
@@ -16,6 +15,12 @@ import { toast } from "@/components/ui/Toaster";
 import { emitTagsUpdated } from "@/lib/tags";
 import { getFileSizeError, UPLOAD_LIMIT_LABELS } from "@/lib/media/uploadLimits";
 import { formatBytes } from "@/lib/media/utils";
+import {
+  batchInit, batchFinalize, getPendingFiles, notifyUploadStart, notifyUploadSuccess,
+  notifyUploadFailures, chunkArray, uploadBatch, applyFailures, exitToLibrary,
+  BATCH_CHUNK_SIZE,
+  type BatchInitItem, type UploadPlan, type FailedUpload, type CompletedUpload,
+} from "@/lib/media/upload";
 
 import {
   Upload,
@@ -34,170 +39,7 @@ const getFileIcon = (type: string) => {
   return FileText;
 };
 
-
 const LIBRARY_PATH = "/library";
-
-type BatchInitItem = {
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  title?: string;
-  tags?: string[];
-  autoTagOnUpload?: boolean;
-};
-
-type BatchInitResponseItem = {
-  id: string;
-  storageKey: string;
-  putUrl: string;
-};
-
-type BatchInitResponse = {
-  items: BatchInitResponseItem[];
-};
-
-async function batchInit(items: BatchInitItem[]): Promise<BatchInitResponse> {
-  const res = await fetch("/api/media/batch-init", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items }),
-  });
-
-  if (!res.ok) {
-    let msg = `Upload init failed (${res.status})`;
-    try {
-      const data = await res.json();
-      msg = data?.message || data?.error || msg;
-    } catch {}
-    throw new Error(msg);
-  }
-
-  return (await res.json()) as BatchInitResponse;
-}
-
-async function batchFinalize(ids: string[], autoUnpack?: boolean): Promise<void> {
-  const res = await fetch("/api/media/batch-finalize", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids, ...(autoUnpack !== undefined ? { autoUnpack } : {}) }),
-  });
-
-  if (!res.ok) {
-    let msg = `Upload finalize failed (${res.status})`;
-    try {
-      const data = await res.json();
-      msg = data?.message || data?.error || msg;
-    } catch {}
-    throw new Error(msg);
-  }
-}
-
-
-type FailedUpload = { id: string; message: string };
-type CompletedUpload = { fileId: string; mediaId: string };
-type UploadPlan = {
-  fileId: string;
-  file: File;
-  contentType: string;
-  init: BatchInitResponseItem;
-};
-
-function getPendingFiles(files: Array<{ id: string; file: File; status: string }>) {
-  return files.filter((f) => f.status === "pending");
-}
-
-function notifyUploadStart(count: number) {
-  toast(`${count} ${count === 1 ? "file" : "files"} uploading`, { variant: "default" });
-}
-
-function notifyUploadSuccess() {
-  toast("Upload complete", { variant: "success" });
-}
-
-function notifyUploadFailures(count: number) {
-  toast(`${count} ${count === 1 ? "file" : "files"} failed to upload`, {
-    variant: "error",
-    duration: 5000,
-  });
-}
-
-/**
- * Run `fn` over every item in `items` with at most `limit` concurrent
- * executions — prevents saturating the browser connection pool when
- * uploading large batches.
- */
-async function limitConcurrent<T>(
-  items: T[],
-  fn: (item: T) => Promise<void>,
-  limit: number,
-): Promise<PromiseSettledResult<void>[]> {
-  const results: PromiseSettledResult<void>[] = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      try {
-        await fn(items[i]);
-        results[i] = { status: "fulfilled", value: undefined };
-      } catch (err) {
-        results[i] = { status: "rejected", reason: err };
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
-const UPLOAD_CONCURRENCY = 5;
-const BATCH_CHUNK_SIZE = 100;
-
-function chunkArray<T>(arr: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    chunks.push(arr.slice(i, i + size));
-  }
-  return chunks;
-}
-
-async function uploadBatch(
-  pendingFiles: UploadPlan[],
-  uploadOne: (plan: UploadPlan) => Promise<void>,
-): Promise<{ failed: FailedUpload[]; completed: CompletedUpload[] }> {
-  const results = await limitConcurrent(pendingFiles, uploadOne, UPLOAD_CONCURRENCY);
-
-  const failed: FailedUpload[] = [];
-  const completed: CompletedUpload[] = [];
-  results.forEach((r, idx) => {
-    if (r.status === "rejected") {
-      const id = pendingFiles[idx].fileId;
-      const message = r.reason instanceof Error ? r.reason.message : "Upload failed";
-      failed.push({ id, message });
-      return;
-    }
-    const plan = pendingFiles[idx];
-    completed.push({ fileId: plan.fileId, mediaId: plan.init.id });
-  });
-
-  return { failed, completed };
-}
-
-function applyFailures(
-  failed: FailedUpload[],
-  updateFileStatus: (id: string, status: "error", error?: string) => void,
-) {
-  for (const f of failed) {
-    updateFileStatus(f.id, "error", f.message);
-  }
-}
-
-function exitToLibrary(clearFiles: () => void, navigate: () => void) {
-  setTimeout(() => {
-    clearFiles();
-    navigate();
-  }, 400);
-}
 
 export default function UploadPage() {
   const router = useRouter();

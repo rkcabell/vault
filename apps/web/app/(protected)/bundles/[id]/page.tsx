@@ -8,10 +8,11 @@ import { ArrowLeft, ChevronDown, FolderOpen, MoreHorizontal, Pencil, Plus, Star,
 import { EditBundleModal } from '@/components/bundles/EditBundleModal';
 import { AddMediaDialog } from '@/components/bundles/AddMediaDialog';
 import { cn } from '@/lib/utils';
-import { emitBundlesUpdated } from '@/lib/bundles';
+import { emitBundlesUpdated, toMediaItem } from '@/lib/bundles';
 import { emitTagsUpdated } from '@/lib/tags';
-import type { BundleDetail, BundleMediaItem } from '@vault/types';
-import { httpStatusMessage } from '@/lib/http';
+import type { BundleDetail } from '@vault/types';
+import { httpStatusMessage, readErrorFromResponse } from '@/lib/http';
+import { SORT_OPTIONS, DEFAULT_SORT, sortItems, type SortValue } from '@/lib/bundles/sorting';
 import { MediaCard } from '@/components/media/MediaCard';
 import { TagFilterChip, type TagFilterState } from '@/components/media/TagFilterChip';
 import { Button } from '@/components/ui/Button';
@@ -23,52 +24,6 @@ import {
 } from '@/components/ui/DropdownMenu';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmPopover } from '@/components/ui/ConfirmPopover';
-import type { MediaWorkerState } from '@/lib/media/types';
-
-// ── Sort options ──────────────────────────────────────────────────────────────
-
-const SORT_OPTIONS = [
-  { value: "addedAt_desc",   label: "Newest" },
-  { value: "addedAt_asc",    label: "Oldest" },
-  { value: "title_asc",      label: "Name A-Z" },
-  { value: "title_desc",     label: "Name Z-A" },
-  { value: "size_desc",      label: "Largest" },
-  { value: "size_asc",       label: "Smallest" },
-  { value: "mimeType_asc",   label: "Type" },
-] as const;
-
-type SortValue = (typeof SORT_OPTIONS)[number]["value"];
-const DEFAULT_SORT: SortValue = "addedAt_desc";
-
-function sortItems(items: BundleDetail["items"], sort: SortValue): BundleDetail["items"] {
-  const sorted = [...items];
-  switch (sort) {
-    case "addedAt_desc":  return sorted.sort((a, b) => b.addedAt.localeCompare(a.addedAt));
-    case "addedAt_asc":   return sorted.sort((a, b) => a.addedAt.localeCompare(b.addedAt));
-    case "title_asc":     return sorted.sort((a, b) => a.title.localeCompare(b.title));
-    case "title_desc":    return sorted.sort((a, b) => b.title.localeCompare(a.title));
-    case "size_desc":     return sorted.sort((a, b) => b.sizeBytes - a.sizeBytes);
-    case "size_asc":      return sorted.sort((a, b) => a.sizeBytes - b.sizeBytes);
-    case "mimeType_asc":  return sorted.sort((a, b) => a.mimeType.localeCompare(b.mimeType));
-  }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function toMediaItem(item: BundleMediaItem) {
-  return {
-    id: item.mediaId,
-    title: item.title,
-    thumbState: item.thumbState as MediaWorkerState,
-    textState: item.textState as MediaWorkerState,
-    mimeType: item.mimeType,
-  };
-}
-
-async function readError(res: Response): Promise<string> {
-  const text = await res.text().catch(() => '');
-  return text || httpStatusMessage(res.status);
-}
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -117,7 +72,7 @@ export default function BundleDetailPage() {
       const res = await fetch(`/api/bundles/${id}`, { credentials: 'include' });
       if (!res.ok) {
         if (res.status === 404) { router.replace('/bundles' as Route); return; }
-        setError(await readError(res));
+        setError(await readErrorFromResponse(res));
         return;
       }
       const data = (await res.json()) as { bundle: BundleDetail };

@@ -1,23 +1,7 @@
 import Link from "next/link";
 import { listMedia } from "@/lib/api.server";
-import { formatMimeTag } from "@/lib/media/utils";
+import { formatMimeTag, describeInboxStatus } from "@/lib/media/utils";
 import { OverviewRemindersCard } from "@/components/reminders/OverviewRemindersCard";
-import type { MediaWorkerState } from "@vault/types";
-
-function describeInboxStatus(thumbState: MediaWorkerState, textState: MediaWorkerState): string {
-  const thumbFailed = thumbState === "ERROR" || thumbState === "FAILED";
-  const textFailed = textState === "ERROR" || textState === "FAILED";
-  const thumbPending = thumbState === "PENDING";
-  const textPending = textState === "PENDING";
-
-  if (thumbFailed && textFailed) return "Thumbnail + text extraction failed";
-  if (thumbFailed) return "Thumbnail generation failed";
-  if (textFailed) return "Text extraction failed";
-  if (thumbPending && textPending) return "Processing…";
-  if (thumbPending) return "Generating thumbnail…";
-  if (textPending) return "Extracting text…";
-  return "Processing…";
-}
 
 export default async function OverviewPage() {
   const recent = (await listMedia({ q: "" })).slice(0, 9);

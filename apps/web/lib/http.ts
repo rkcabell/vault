@@ -1,3 +1,9 @@
+/** Reads a plain-text error message from a failed Response, falling back to a status phrase. */
+export async function readErrorFromResponse(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "");
+  return text || httpStatusMessage(res.status);
+}
+
 /** Converts an HTTP status code to a short, user-readable phrase. */
 export function httpStatusMessage(status: number): string {
   if (status === 400) return 'Invalid request';
