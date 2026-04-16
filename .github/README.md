@@ -66,32 +66,6 @@ vault/
 
 ## Local Setup
 
-### Linux (Ubuntu/Debian)
-
-```bash
-# 1. Install git and clipboard support (VMware guests)
-sudo apt-get update && sudo apt-get install -y git open-vm-tools-desktop
-
-# 2. Clone
-git clone https://github.com/rkcabell/vault.git
-cd vault
-
-# 3. Run setup (installs Node.js, Docker, OCR tools, starts infrastructure, runs migrations)
-sudo bash scripts/linux-setup.sh
-
-# 4. Add your user to the docker group so you don't need sudo
-sudo usermod -aG docker $USER
-newgrp docker
-
-# 5. Fix file ownership (setup runs as root, this reclaims the files)
-sudo chown -R $USER:$USER ~/vault
-
-# 6. Start
-pnpm run start
-```
-
-Open [http://localhost:3000](http://localhost:3000).
-
 ### Windows
 
 ```
