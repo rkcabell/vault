@@ -28,6 +28,8 @@
     "docker:logs": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml logs -f",
     "dockerup": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml up -d",
     "dockerdown": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml down",
+    "vault:up": "docker compose --env-file .env.prod -f infra/docker/docker-compose.prod.yml up -d",
+    "vault:down": "docker compose --env-file .env.prod -f infra/docker/docker-compose.prod.yml down",
     "docker:restart": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml restart"
   },
   "engines": {

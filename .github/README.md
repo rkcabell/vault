@@ -57,9 +57,9 @@ vault/
 │   └── types/        # Shared TypeScript types
 ├── infra/
 │   └── docker/       # Dockerfiles and Compose configs
-├── docs/             # OpenAPI spec
+├── docs/             # OpenAPI spec, README screenshots
 ├── test-results/     # Generated HTML test reports
-└── scripts/          # linux-setup.sh, windows-setup.ps1
+└── scripts/          # Install and run Docker containers on linux and windows
 ```
 
 ---
@@ -94,35 +94,23 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### Windows
 
-```powershell
+```
 git clone https://github.com/rkcabell/vault.git
 cd vault
-powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
+vault-windows.bat
 ```
 
-Works from PowerShell, cmd, Git Bash, or Windows Terminal. If Docker Desktop was just installed, the script will ask you to restart and re-run.
+Double-click `vault-windows.bat` from the repo folder at any time — installs on first run, starts Vault on subsequent runs. Docker Desktop does not need to be pre-installed. If it was just installed, the script will ask you to restart and re-run.
 
-Open [http://localhost](http://localhost).
-
-To stop or restart Vault:
-
-```powershell
-# Stop all services
-docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml down
-
-# Start again
-docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml up -d
-```
-
-### macOS
+### Linux / macOS
 
 ```bash
-brew install git node ocrmypdf tesseract ghostscript qpdf
 git clone https://github.com/rkcabell/vault.git
 cd vault
-bash scripts/linux-setup.sh
-pnpm run start
+bash vault.sh
 ```
+
+Run `bash vault.sh` at any time — installs on first run, starts Vault on subsequent runs. Requires Docker to be installed ([Docker Desktop](https://www.docker.com/products/docker-desktop/) or Docker Engine).
 
 ---
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Edit2, Save, X, MapPin, Globe, Mail, Calendar, Loader2 } from 'lucide-react';
 import { useAuth } from '@/components/contexts/AuthContext';
+import { readErrorMessage } from '@/lib/media/utils';
 
 type UserProfile = {
   id: string;
@@ -33,16 +34,6 @@ const emptyForm: ProfileFormData = {
   location: '',
   avatarUrl: '',
 };
-
-async function readErrorMessage(response: Response, fallback: string) {
-  try {
-    const data = await response.json();
-    if (data?.error || data?.message) return data.error || data.message;
-  } catch {
-    // Ignore JSON parse errors and use fallback.
-  }
-  return `${fallback} (${response.status})`;
-}
 
 function formatDate(dateString: string) {
   return new Date(dateString).toLocaleDateString('en-US', {

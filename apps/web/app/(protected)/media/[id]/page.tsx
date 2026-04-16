@@ -6,11 +6,11 @@ import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Container, PanelCard } from "@/components/common";
-import { Button } from "@/components/ui/Button";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 
 import { parseSearchTerms, readErrorMessage } from "@/lib/media/utils";
+import { MessageCard } from "@/components/ui/MessageCard";
 import { TAGS_UPDATED_EVENT, emitTagsUpdated } from "@/lib/tags";
 import { emitBundlesUpdated } from "@/lib/bundles";
 import { useMediaDetail } from "@/hooks/media/useMediaDetail";
@@ -24,29 +24,6 @@ import { MediaRemindersPanel } from "@/components/media/MediaRemindersPanel";
 import MediaDetailSplit from "@/components/media/MediaDetailSplit";
 import { useGroupRef } from "react-resizable-panels";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
-
-function MessageCard(props: {
-  heading: string;
-  body: string;
-  actionLabel?: string;
-  onAction?: () => void;
-  actionVariant?: "default" | "outline";
-}) {
-  const { heading, body, actionLabel, onAction, actionVariant = "default" } = props;
-  return (
-    <Card>
-      <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-        <div className="text-lg font-semibold">{heading}</div>
-        <p className="max-w-md text-sm text-muted-foreground">{body}</p>
-        {actionLabel && onAction && (
-          <Button variant={actionVariant} onClick={onAction}>
-            {actionLabel}
-          </Button>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
 
 export default function MediaDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();

@@ -1,8 +1,16 @@
-# scripts/windows-setup.ps1 - One-shot Vault setup on Windows.
-# Requires only Docker Desktop - no Node.js needed.
+# File: scripts/_windows-setup.ps1
+# Installs dependencies and starts the application.
+# Called by vault-windows.bat — run that instead of invoking this directly.
 #
-# Run from the repo root (PowerShell, cmd, Git Bash, or Windows Terminal):
-#   powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
+# Or run from the repo root (PowerShell, cmd, Git Bash, or Windows Terminal):
+#   powershell -ExecutionPolicy Bypass -File scripts\_windows-setup.ps1
+#
+# Does five things:
+# 1. Checks for Docker Desktop and installs it
+# 2. Checks for Node.js and installs it
+# 3. Checks for pnpm and installs it
+# 4. Creates .env.prod from .env.docker.example
+# 5. Runs `docker compose up`
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -20,9 +28,9 @@ $REQUIRED_ENV_KEYS = @(
 
 $step = 0
 function Step($msg) { $script:step++; Write-Host "`n[$($script:step)] $msg" -ForegroundColor Cyan }
-function Ok($msg)   { Write-Host "  + $msg" -ForegroundColor Green }
+function Ok($msg) { Write-Host "  + $msg" -ForegroundColor Green }
 function Warn($msg) { Write-Host "  ! $msg" -ForegroundColor Yellow }
-function Die($msg)  { Write-Host "`nError: $msg" -ForegroundColor Red; exit 1 }
+function Die($msg) { Write-Host "`nError: $msg" -ForegroundColor Red; exit 1 }
 
 function New-HexSecret {
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -50,7 +58,8 @@ function Show-DockerDiagnostics {
     $context = (& docker context show 2>$null | Out-String).Trim()
     if ($LASTEXITCODE -eq 0 -and $context) {
         Write-Host "  Context: $context" -ForegroundColor Yellow
-    } else {
+    }
+    else {
         Write-Host "  Context: unavailable" -ForegroundColor Yellow
     }
 
@@ -83,9 +92,8 @@ function Show-ComposeDiagnostics {
 }
 
 function Invoke-ComposeUp {
+
     # Phase 1: build images
-    # Temporarily lower ErrorActionPreference so docker's stderr output (e.g. build status
-    # messages) doesn't throw NativeCommandError under the global "Stop" policy.
     Write-Host "  Building images (this may take a few minutes on first run)..."
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -93,16 +101,11 @@ function Invoke-ComposeUp {
     $buildExitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
 
-    # On Windows, docker compose build can exit non-zero even when all images built
-    # successfully (redirected stdout/stderr changes BuildKit's exit behaviour).
-    # Treat it as a real failure only when the output also contains an ERROR line.
     if (($buildExitCode -ne 0) -and (($buildLines | Out-String) -match '(?m)ERROR')) {
         return $false
     }
 
     # Phase 2: start services
-    # Temporarily lower ErrorActionPreference so docker's stderr warnings (e.g. orphan
-    # containers) don't throw NativeCommandError under the global "Stop" policy.
     Write-Host "  Starting services..." -NoNewline
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -153,8 +156,9 @@ function Assert-ServicesHealthy {
     $initId = (& docker @baseArgs ps --all -q minio-init 2>$null | Out-String).Trim()
     if (-not $initId) {
         $issues += "minio-init container is missing"
-    } else {
-        $initStatus   = (& docker inspect -f "{{.State.Status}}"   $initId 2>$null | Out-String).Trim()
+    }
+    else {
+        $initStatus = (& docker inspect -f "{{.State.Status}}"   $initId 2>$null | Out-String).Trim()
         $initExitCode = (& docker inspect -f "{{.State.ExitCode}}" $initId 2>$null | Out-String).Trim()
         if ($initStatus -ne "exited" -or $initExitCode -ne "0") {
             $issues += "minio-init status is '$initStatus' with exit code '$initExitCode' (expected exited/0)"
@@ -165,6 +169,29 @@ function Assert-ServicesHealthy {
         foreach ($issue in $issues) { Warn $issue }
         Show-ComposeDiagnostics
         Die "Vault services are not healthy. See diagnostics above."
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Fast path: already running or installed-but-stopped
+# ---------------------------------------------------------------------------
+if ((Test-Path $ENV_FILE) -and (Get-Command docker -ErrorAction SilentlyContinue)) {
+    & docker info *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $running = (& docker @(Get-ComposeBaseArgs) ps -q 2>$null | Out-String).Trim()
+        if ($running) {
+            Write-Host "Vault is already running." -ForegroundColor Green
+            Write-Host "  Web app -> http://localhost"
+            Start-Process "http://localhost"
+            exit 0
+        }
+        Write-Host "Starting Vault..." -ForegroundColor Cyan
+        & docker @(Get-ComposeBaseArgs) up -d
+        Write-Host ""
+        Write-Host "Vault is running!" -ForegroundColor Green
+        Write-Host "  Web app -> http://localhost"
+        Start-Process "http://localhost"
+        exit 0
     }
 }
 
@@ -186,19 +213,61 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 Step "Waiting for Docker Engine"
 if (Wait-DockerReady -TimeoutSeconds 120 -IntervalSeconds 2) {
     Ok "Docker daemon is reachable"
-} else {
+}
+else {
     Show-DockerDiagnostics
     Die "Docker daemon did not become ready within 120s. Start Docker Desktop and re-run this script."
 }
 
 # ---------------------------------------------------------------------------
-# 2. .env.prod
+# 2. Node.js
+# ---------------------------------------------------------------------------
+Step "Checking Node.js"
+
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Host "  Installing Node.js LTS via winget..."
+    & winget install OpenJS.NodeJS.LTS --silent --accept-source-agreements --accept-package-agreements
+    if ($LASTEXITCODE -ne 0) {
+        Die "Failed to install Node.js."
+    }
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+}
+
+$nodeVersion = (& node --version 2>$null | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) {
+    Die "Node.js installed but not available. Restart your machine and re-run this script."
+}
+Ok "Node.js $nodeVersion"
+
+# ---------------------------------------------------------------------------
+# 3. pnpm
+# ---------------------------------------------------------------------------
+Step "Checking pnpm"
+
+if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+    Write-Host "  Installing pnpm..."
+    & npm install -g pnpm --silent
+    if ($LASTEXITCODE -ne 0) {
+        Die "Failed to install pnpm."
+    }
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+}
+
+$pnpmVersion = (& pnpm --version 2>$null | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) {
+    Die "pnpm installed but not available. Restart your machine and re-run this script."
+}
+Ok "pnpm $pnpmVersion"
+
+# ---------------------------------------------------------------------------
+# 4. .env.prod
 # ---------------------------------------------------------------------------
 Step "Configuring environment"
 
 if (Test-Path $ENV_FILE) {
     Ok ".env.prod already exists - skipping"
-} else {
+}
+else {
     if (-not (Test-Path $EXAMPLE)) {
         Die "$EXAMPLE not found. Is this a complete clone of the repository?"
     }
@@ -211,7 +280,7 @@ if (Test-Path $ENV_FILE) {
     $content = $content -replace "(?m)^JWT_REFRESH_SECRET=\S+", "JWT_REFRESH_SECRET=$jwtRefreshSecret"
     $content = $content -replace "(?m)^CORS_ORIGIN=\S+", "CORS_ORIGIN=http://localhost"
 
-    # Write without BOM and with LF line endings so docker compose parses it cleanly.
+    # Write without BOM and with LF line endings for docker compose.
     [System.IO.File]::WriteAllText($ENV_FILE, ($content -replace "`r`n", "`n"))
 
     Ok ".env.prod created with generated JWT secrets"
@@ -232,7 +301,7 @@ if ($missingKeys.Count -gt 0) {
 Ok "Required .env.prod values are present"
 
 # ---------------------------------------------------------------------------
-# 3. Build and start everything
+# 5. Build and start Vault
 # ---------------------------------------------------------------------------
 Step "Building and starting Vault (this may take a few minutes on first run)"
 
@@ -251,9 +320,10 @@ Write-Host ""
 Write-Host "Vault is running!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Web app       ->  http://localhost"
+Start-Process "http://localhost"
 Write-Host "  API           ->  http://localhost:8000"
 Write-Host "  MinIO console ->  http://localhost:9001  (vault / vaultvault)"
 Write-Host ""
-Write-Host "To stop:   docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml down"
-Write-Host "To start:  docker compose --env-file .env.prod -f infra\docker\docker-compose.prod.yml up -d"
+Write-Host "To stop:   pnpm vault:down"
+Write-Host "To start:  pnpm vault:up"
 Write-Host ""
