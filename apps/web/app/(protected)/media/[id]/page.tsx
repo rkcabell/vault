@@ -4,7 +4,7 @@ import React, { use, useCallback, useEffect, useMemo, useRef, useState } from "r
 import Link from "next/link";
 import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Move } from "lucide-react";
 import { Container, PanelCard } from "@/components/common";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -146,6 +146,49 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
       window.document.removeEventListener("mouseup", onMouseUp);
     };
 
+    window.document.addEventListener("mousemove", onMouseMove);
+    window.document.addEventListener("mouseup", onMouseUp);
+  }, [panelGroupRef]);
+
+  const handleCornerDragMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const naturalHeight = thumbContainerRef.current?.offsetHeight ?? 300;
+    const startHeight = thumbHeightRef.current ?? naturalHeight;
+    const startLeftPct = panelGroupRef.current?.getLayout()?.left ?? 62;
+    // Derive total container width from left panel pixel width + current percentage
+    const leftPx = thumbContainerRef.current?.offsetWidth ?? 0;
+    const containerWidth = leftPx > 0 && startLeftPct > 0 ? leftPx / (startLeftPct / 100) : 0;
+
+    if (snapHeightRef.current === null) snapHeightRef.current = naturalHeight;
+    setThumbHeight(startHeight);
+
+    const SNAP_ZONE = 18;
+    const MIN_HEIGHT = 120;
+    const MAX_HEIGHT = Math.round(window.innerHeight * 0.75);
+    const snap = snapHeightRef.current;
+
+    const computeHeight = (clientY: number) => {
+      const raw = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + clientY - startY));
+      return snap !== null && Math.abs(raw - snap) <= SNAP_ZONE ? snap : raw;
+    };
+
+    const onMouseMove = (ev: MouseEvent) => {
+      setThumbHeight(computeHeight(ev.clientY));
+      if (panelGroupRef.current && containerWidth > 0) {
+        const minLeftPct = (300 / containerWidth) * 100;
+        const maxLeftPct = ((containerWidth - 215) / containerWidth) * 100;
+        const newLeft = Math.min(maxLeftPct, Math.max(minLeftPct,
+          startLeftPct + ((ev.clientX - startX) / containerWidth) * 100
+        ));
+        panelGroupRef.current.setLayout({ left: newLeft, right: 100 - newLeft });
+      }
+    };
+    const onMouseUp = () => {
+      window.document.removeEventListener("mousemove", onMouseMove);
+      window.document.removeEventListener("mouseup", onMouseUp);
+    };
     window.document.addEventListener("mousemove", onMouseMove);
     window.document.addEventListener("mouseup", onMouseUp);
   }, [panelGroupRef]);
@@ -449,6 +492,12 @@ const handleDelete = (e: React.MouseEvent) => {
                 onMouseDown={handleThumbSeparatorMouseDown}
               >
                 <div className="h-px w-full bg-border" />
+                <div
+                  className="absolute -right-2 top-1/2 -translate-y-1/2 z-10 flex h-5 w-5 cursor-move items-center justify-center rounded-sm opacity-0 transition-opacity hover:opacity-100 hover:bg-muted/60"
+                  onMouseDown={(e) => { e.stopPropagation(); handleCornerDragMouseDown(e); }}
+                >
+                  <Move className="h-3 w-3 text-muted-foreground" />
+                </div>
               </div>
 
               <div className="pt-4">

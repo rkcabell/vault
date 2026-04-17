@@ -23,6 +23,9 @@ tags:
   - name: Tags
   - name: Bundles
   - name: Reminders
+  - name: Preferences
+  - name: Server
+  - name: Init
   - name: Health
 security:
   - bearerAuth: []
@@ -228,6 +231,97 @@ paths:
                     message: "Invalid or expired refresh token"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/auth/forgot-password:
+    post:
+      summary: Request a password reset
+      description: |
+        Always returns 200 to prevent user enumeration. If the email is registered,
+        a reset token is issued. In development the token is returned in the response body;
+        in production it would be delivered via email.
+      tags:
+        - Auth
+      operationId: auth_forgotPassword
+      security: []
+      x-rateLimit:
+        max: 5
+        timeWindow: "1 minute"
+        keyBy: IP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgotPasswordRequest"
+            examples:
+              forgot:
+                value:
+                  email: "user@example.com"
+      responses:
+        "200":
+          description: Request accepted (always 200 to prevent user enumeration)
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                noAccount:
+                  value: {}
+                withToken:
+                  value:
+                    token: "a3f9b2..."
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/auth/reset-password:
+    post:
+      summary: Reset password using a token
+      tags:
+        - Auth
+      operationId: auth_resetPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordRequest"
+            examples:
+              reset:
+                value:
+                  token: "a3f9b2..."
+                  password: "new-secure-password"
+      responses:
+        "200":
+          description: Password updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                required:
+                  - message
+              examples:
+                success:
+                  value:
+                    message: "Password updated"
+        "400":
+          description: Invalid or expired reset token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                expired:
+                  value:
+                    statusCode: 400
+                    error: "Bad Request"
+                    message: "This reset link is invalid or has expired."
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -477,6 +571,58 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalServerError"
+    delete:
+      summary: Bulk delete media matching filter params
+      description: |
+        Deletes all media items matching the given filters for the current user.
+        If no filters are provided, all media is deleted.
+      tags:
+        - Media
+      operationId: media_bulkDelete
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+          description: Search text filter.
+        - in: query
+          name: tags
+          schema:
+            type: string
+          description: Comma-separated tag filters.
+        - in: query
+          name: excludeTags
+          schema:
+            type: string
+          description: Comma-separated tags to exclude.
+        - in: query
+          name: thumbState
+          schema:
+            $ref: "#/components/schemas/MediaWorkerState"
+        - in: query
+          name: textState
+          schema:
+            $ref: "#/components/schemas/MediaWorkerState"
+        - in: query
+          name: excludeUnpacked
+          schema:
+            type: boolean
+          description: Exclude items that were extracted from an archive.
+      responses:
+        "200":
+          description: Bulk delete result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkDeleteResponse"
+              examples:
+                success:
+                  value:
+                    count: 42
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
   /api/media/batch-init:
     post:
       summary: Initialize multiple uploads in a batch
@@ -556,6 +702,44 @@ paths:
                     count: 2
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/media/bulk-download:
+    post:
+      summary: Download multiple media items as a zip
+      description: Streams the selected media items as a single zip archive (max 50 items).
+      tags:
+        - Media
+      operationId: media_bulkDownload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkDownloadRequest"
+            examples:
+              download:
+                value:
+                  ids:
+                    - "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
+                    - "8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da"
+      responses:
+        "200":
+          description: Zip archive stream
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              example: 'attachment; filename="vault-download.zip"'
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalServerError"
   /api/media/tags:
@@ -923,6 +1107,55 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalServerError"
+  /api/media/{id}/unpack:
+    post:
+      summary: Unpack an archive into a bundle
+      description: |
+        Extracts the archive and creates a new bundle containing the extracted items.
+        Returns `400` if the file is not a recognised archive type, or `409` if it is
+        already linked to a bundle.
+      tags:
+        - Media
+      operationId: media_unpack
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+      responses:
+        "200":
+          description: Archive unpacked, bundle created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bundleId:
+                    type: string
+                required:
+                  - bundleId
+              examples:
+                success:
+                  value:
+                    bundleId: "c1d2e3f4-0001-0000-0000-000000000001"
+        "400":
+          description: File is not a recognised archive type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Archive is already linked to a bundle
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          $ref: "#/components/responses/InternalServerError"
   /api/media/{id}/thumbnail:
     get:
       summary: Get a thumbnail image
@@ -1014,7 +1247,94 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalServerError"
+  /api/tags/orphaned:
+    delete:
+      summary: Delete all orphaned tags
+      description: Deletes tags that are not referenced by any media for the current user.
+      tags:
+        - Tags
+      operationId: tags_deleteOrphaned
+      responses:
+        "200":
+          description: Orphaned tags deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  deleted:
+                    type: integer
+                required:
+                  - ok
+                  - deleted
+              examples:
+                success:
+                  value:
+                    ok: true
+                    deleted: 3
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
   /api/tags/{tag}:
+    patch:
+      summary: Rename or recolor a tag
+      tags:
+        - Tags
+      operationId: tags_update
+      parameters:
+        - in: path
+          name: tag
+          required: true
+          schema:
+            type: string
+          description: Tag name (will be normalized before update).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagPatchRequest"
+            examples:
+              rename:
+                value:
+                  name: "receipts"
+              recolor:
+                value:
+                  color: "#ff5733"
+              clearColor:
+                value:
+                  color: null
+      responses:
+        "200":
+          description: Tag updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagPatchResponse"
+              examples:
+                renamed:
+                  value:
+                    ok: true
+                    tag: "receipt"
+                    newName: "receipts"
+                    affected: 12
+                recolored:
+                  value:
+                    ok: true
+                    tag: "receipt"
+        "400":
+          description: Invalid tag name or no fields to update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
     delete:
       summary: Delete a tag and remove it from all media
       tags:
@@ -1355,6 +1675,35 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  /api/bundles/{id}/export:
+    get:
+      summary: Export a bundle as a zip archive
+      description: Streams all items in the bundle as a single zip file.
+      tags:
+        - Bundles
+      operationId: bundles_export
+      parameters:
+        - $ref: "#/components/parameters/BundleId"
+      responses:
+        "200":
+          description: Zip archive stream
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              example: 'attachment; filename="Tax documents 2025.zip"'
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   # ---------------------------------------------------------------------------
   # Reminders
   # ---------------------------------------------------------------------------
@@ -1649,6 +1998,251 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  /api/reminders/{id}/unsnooze:
+    post:
+      summary: Clear a reminder's snooze
+      tags:
+        - Reminders
+      operationId: reminders_unsnooze
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+      responses:
+        "200":
+          description: Snooze cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "400":
+          description: Reminder is not ACTIVE
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ---------------------------------------------------------------------------
+  # Preferences
+  # ---------------------------------------------------------------------------
+  /api/preferences:
+    get:
+      summary: Get the current user's preferences
+      tags:
+        - Preferences
+      operationId: preferences_get
+      responses:
+        "200":
+          description: User preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreferencesResponse"
+              examples:
+                success:
+                  value:
+                    preferences:
+                      libraryViewMode: "grid"
+                      libraryGridCols: 5
+                      libraryIsCompactList: false
+                      autoTagOnUpload: true
+                      extractMetadata: true
+                      detectDuplicates: false
+                      lowMemoryMode: false
+                      autoUnpackArchives: false
+                      hideUnpackedItems: false
+                      soonWindowDays: 7
+                      themePreference: "system"
+                      yellowHighlight: false
+                      lightTheme: "default"
+                      darkTheme: "new-moon"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    patch:
+      summary: Update the current user's preferences
+      tags:
+        - Preferences
+      operationId: preferences_update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreferencesPatchRequest"
+            examples:
+              update:
+                value:
+                  libraryViewMode: "list"
+                  themePreference: "dark"
+                  darkTheme: "matrix"
+      responses:
+        "200":
+          description: Updated preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreferencesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ---------------------------------------------------------------------------
+  # Server
+  # ---------------------------------------------------------------------------
+  /api/server/status:
+    get:
+      summary: Get server runtime status
+      tags:
+        - Server
+      operationId: server_status
+      responses:
+        "200":
+          description: Server status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerStatusResponse"
+              examples:
+                success:
+                  value:
+                    env: "production"
+                    apiPort: 8000
+                    corsOrigin: "http://localhost"
+                    uptimeSeconds: 3600
+                    memoryMB: 128
+                    minioConsoleUrl: "http://localhost:9001/browser/vault-media"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/server/storage:
+    get:
+      summary: Get storage usage statistics
+      tags:
+        - Server
+      operationId: server_storage
+      responses:
+        "200":
+          description: Storage stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerStorageResponse"
+              examples:
+                success:
+                  value:
+                    sizeBytes: 104857600
+                    objectCount: 250
+                    dbSizeBytes: 52428800
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/server/workers:
+    get:
+      summary: Get worker queue status
+      tags:
+        - Server
+      operationId: server_workers
+      responses:
+        "200":
+          description: Worker queue status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerWorkersResponse"
+              examples:
+                success:
+                  value:
+                    ocr:
+                      active: true
+                      count: 1
+                      counts:
+                        waiting: 0
+                        active: 1
+                        delayed: 0
+                        failed: 0
+                    thumb:
+                      active: true
+                      count: 1
+                      counts:
+                        waiting: 2
+                        active: 1
+                        delayed: 0
+                        failed: 0
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ---------------------------------------------------------------------------
+  # Init
+  # ---------------------------------------------------------------------------
+  /api/init:
+    get:
+      summary: Bootstrap initial app data
+      description: |
+        Returns all data needed to bootstrap the app in a single request:
+        user profile, preferences, tags, bundles, reminder summary counts,
+        and the reminder overview.
+      tags:
+        - Init
+      operationId: init_get
+      responses:
+        "200":
+          description: Bootstrap payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InitResponse"
+              examples:
+                success:
+                  value:
+                    user:
+                      id: "usr_123"
+                      email: "user@example.com"
+                      name: "Casey"
+                      username: "casey"
+                      avatarUrl: null
+                    preferences:
+                      libraryViewMode: "grid"
+                      themePreference: "system"
+                    tags:
+                      - name: "receipt"
+                        count: 12
+                        color: null
+                    bundles:
+                      - id: "c1d2e3f4-0001-0000-0000-000000000001"
+                        name: "Tax documents 2025"
+                        starred: true
+                        itemCount: 7
+                    remindersSummary:
+                      visibleNow: 3
+                      overdue: 1
+                      dueToday: 1
+                      dueSoon: 1
+                      totalActive: 5
+                      soonWindowDays: 7
+                    overviewReminders:
+                      items: []
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   # ---------------------------------------------------------------------------
   # Health
   # ---------------------------------------------------------------------------
@@ -1904,6 +2498,27 @@ components:
           type: string
       required:
         - access
+    ForgotPasswordRequest:
+      type: object
+      description: Email address to send a password reset to.
+      properties:
+        email:
+          type: string
+          format: email
+      required:
+        - email
+    ResetPasswordRequest:
+      type: object
+      description: Reset token and new password.
+      properties:
+        token:
+          type: string
+        password:
+          type: string
+          minLength: 8
+      required:
+        - token
+        - password
     AuthMeResponse:
       type: object
       description: Current user response.
@@ -2543,25 +3158,67 @@ components:
     # --- Tags ---
     TagCount:
       type: object
-      description: Tag name with usage count.
+      description: Tag name with usage count and optional color.
       properties:
         name:
           type: string
         count:
           type: integer
+        color:
+          type: [string, "null"]
+          description: Hex color string (e.g. `#ff5733`) or null.
       required:
         - name
         - count
     TagsResponse:
       type: object
-      description: Tag list response.
+      description: Tag list response with pagination metadata.
       properties:
         tags:
           type: array
           items:
             $ref: "#/components/schemas/TagCount"
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
       required:
         - tags
+        - total
+        - offset
+        - limit
+    TagPatchRequest:
+      type: object
+      description: Fields to update on a tag (at least one required).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: New tag name (will be normalized).
+        color:
+          type: [string, "null"]
+          pattern: "^#[0-9a-fA-F]{6}$"
+          description: Hex color string or null to clear.
+    TagPatchResponse:
+      type: object
+      description: Result of a tag update.
+      properties:
+        ok:
+          type: boolean
+        tag:
+          type: string
+          description: Original tag name.
+        newName:
+          type: string
+          description: Normalized new name (only present on rename).
+        affected:
+          type: integer
+          description: Number of media items updated (only present on rename).
+      required:
+        - ok
+        - tag
     TagDeleteResponse:
       type: object
       description: Tag deletion response.
@@ -2684,7 +3341,7 @@ components:
         - name
     BundlePatchRequest:
       type: object
-      description: Update bundle name or description (at least one field required).
+      description: Update bundle fields (at least one field required).
       properties:
         name:
           type: string
@@ -2693,6 +3350,11 @@ components:
         description:
           type: [string, "null"]
           maxLength: 1000
+        starred:
+          type: boolean
+        coverMediaId:
+          type: [string, "null"]
+          format: uuid
     BundleAddItemsRequest:
       type: object
       description: Add media items to a bundle (1–100 IDs).
@@ -2961,6 +3623,245 @@ components:
           description: Must be in the future.
       required:
         - until
+
+    # --- Media bulk ops ---
+    BulkDeleteResponse:
+      type: object
+      description: Result of a bulk delete operation.
+      properties:
+        count:
+          type: integer
+          description: Number of media items deleted.
+      required:
+        - count
+    BulkDownloadRequest:
+      type: object
+      description: List of media IDs to include in the zip (1–50).
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: string
+            format: uuid
+      required:
+        - ids
+
+    # --- Preferences ---
+    Preferences:
+      type: object
+      description: User preferences object.
+      properties:
+        libraryViewMode:
+          type: string
+          enum: [grid, list]
+        libraryGridCols:
+          type: integer
+          enum: [4, 5, 6, 7, 8]
+        libraryIsCompactList:
+          type: boolean
+        autoTagOnUpload:
+          type: boolean
+        extractMetadata:
+          type: boolean
+        detectDuplicates:
+          type: boolean
+        lowMemoryMode:
+          type: boolean
+        autoUnpackArchives:
+          type: boolean
+        hideUnpackedItems:
+          type: boolean
+        soonWindowDays:
+          type: integer
+          minimum: 2
+          maximum: 14
+        themePreference:
+          type: string
+          enum: [system, light, dark]
+        yellowHighlight:
+          type: boolean
+        lightTheme:
+          type: string
+          enum: [default, latte, sandstone, mist, lavender, dream, cotton-candy, mint, garden]
+        darkTheme:
+          type: string
+          enum: [new-moon, matrix, charcoal, solarized]
+    PreferencesResponse:
+      type: object
+      description: Preferences response envelope.
+      properties:
+        preferences:
+          $ref: "#/components/schemas/Preferences"
+      required:
+        - preferences
+    PreferencesPatchRequest:
+      type: object
+      description: Preference fields to update (all optional, at least one expected).
+      properties:
+        libraryViewMode:
+          type: string
+          enum: [grid, list]
+        libraryGridCols:
+          type: integer
+          enum: [4, 5, 6, 7, 8]
+        libraryIsCompactList:
+          type: boolean
+        autoTagOnUpload:
+          type: boolean
+        extractMetadata:
+          type: boolean
+        detectDuplicates:
+          type: boolean
+        lowMemoryMode:
+          type: boolean
+        autoUnpackArchives:
+          type: boolean
+        hideUnpackedItems:
+          type: boolean
+        soonWindowDays:
+          type: integer
+          minimum: 2
+          maximum: 14
+        themePreference:
+          type: string
+          enum: [system, light, dark]
+        yellowHighlight:
+          type: boolean
+        lightTheme:
+          type: string
+          enum: [default, latte, sandstone, mist, lavender, dream, cotton-candy, mint, garden]
+        darkTheme:
+          type: string
+          enum: [new-moon, matrix, charcoal, solarized]
+      additionalProperties: false
+
+    # --- Server ---
+    ServerStatusResponse:
+      type: object
+      description: Server runtime status.
+      properties:
+        env:
+          type: string
+          description: NODE_ENV value.
+        apiPort:
+          type: integer
+        corsOrigin:
+          type: string
+        uptimeSeconds:
+          type: number
+        memoryMB:
+          type: integer
+          description: RSS memory usage in megabytes.
+        minioConsoleUrl:
+          type: string
+      required:
+        - env
+        - apiPort
+        - corsOrigin
+        - uptimeSeconds
+        - memoryMB
+        - minioConsoleUrl
+    ServerStorageResponse:
+      type: object
+      description: Storage usage statistics.
+      properties:
+        sizeBytes:
+          type: integer
+          description: Total S3 object size in bytes.
+        objectCount:
+          type: integer
+          description: Total number of S3 objects.
+        dbSizeBytes:
+          type: integer
+          description: Postgres database size in bytes.
+      required:
+        - sizeBytes
+        - objectCount
+        - dbSizeBytes
+    WorkerQueueCounts:
+      type: object
+      description: Job counts for a single worker queue.
+      properties:
+        waiting:
+          type: integer
+        active:
+          type: integer
+        delayed:
+          type: integer
+        failed:
+          type: integer
+      required:
+        - waiting
+        - active
+        - delayed
+        - failed
+    WorkerQueueStatus:
+      type: object
+      description: Status of a single worker queue.
+      properties:
+        active:
+          type: boolean
+          description: Whether at least one worker process is connected.
+        count:
+          type: integer
+          description: Number of connected worker processes.
+        counts:
+          $ref: "#/components/schemas/WorkerQueueCounts"
+      required:
+        - active
+        - count
+        - counts
+    ServerWorkersResponse:
+      type: object
+      description: Status of all worker queues.
+      properties:
+        ocr:
+          $ref: "#/components/schemas/WorkerQueueStatus"
+        thumb:
+          $ref: "#/components/schemas/WorkerQueueStatus"
+      required:
+        - ocr
+        - thumb
+
+    # --- Init ---
+    InitResponse:
+      type: object
+      description: Bootstrap payload returned on app load.
+      properties:
+        user:
+          anyOf:
+            - $ref: "#/components/schemas/User"
+            - type: "null"
+        preferences:
+          $ref: "#/components/schemas/Preferences"
+        tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/TagCount"
+        bundles:
+          type: array
+          items:
+            $ref: "#/components/schemas/BundleSummary"
+        remindersSummary:
+          $ref: "#/components/schemas/ReminderSummaryStats"
+        overviewReminders:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReminderSummaryItem"
+          required:
+            - items
+      required:
+        - user
+        - preferences
+        - tags
+        - bundles
+        - remindersSummary
+        - overviewReminders
 
   # ---------------------------------------------------------------------------
   # Examples
