@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "clean": "node scripts/clean-next.mjs",
-    "dev": "next dev -p 3000",
+    "dev": "next dev --turbo -p 3000",
     "prebuild": "node scripts/clean-next.mjs",
     "build": "next build",
     "start": "next start",
@@ -13,9 +13,7 @@
   },
   "dependencies": {
     "@radix-ui/react-collapsible": "^1.1.12",
-    "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
-    "@radix-ui/react-scroll-area": "^1.2.10",
     "@vault/types": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
