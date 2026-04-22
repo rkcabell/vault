@@ -926,6 +926,151 @@ html:not(.dark).theme-garden a.overview-card:focus-visible {
 }
 
 /* --------------------------------------
+   Overview: stat row
+   ------------------------------------ */
+:root {
+  --type-pdf:   #f87171;
+  --type-img:   #60a5fa;
+  --type-docx:  #34d399;
+  --type-zip:   #fbbf24;
+  --type-other: hsl(var(--muted-foreground));
+}
+
+.overview-stat-card {
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.overview-stat-label {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: hsl(var(--muted-foreground));
+}
+
+.overview-stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: hsl(var(--foreground));
+}
+
+.overview-stat-sub {
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.overview-type-bar {
+  height: 4px;
+  border-radius: 2px;
+  background-color: hsl(var(--muted-foreground) / 0.2);
+}
+
+/* --------------------------------------
+   Overview: doc table
+   ------------------------------------ */
+.overview-doc-table {
+  width: 100%;
+  font-size: 0.8125rem;
+  border-collapse: collapse;
+}
+
+.overview-doc-table th {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: hsl(var(--muted-foreground));
+  padding: 0.5rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.overview-doc-table td {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid hsl(var(--border) / 0.4);
+  color: hsl(var(--foreground));
+}
+
+.overview-doc-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.overview-doc-table__row:hover td {
+  background-color: hsl(var(--muted) / 0.5);
+}
+
+.overview-doc-table__row--inbox td {
+  border-left: 2px solid var(--reminder-today);
+}
+
+.overview-doc-table__row--inbox-error td {
+  border-left: 2px solid var(--reminder-overdue);
+}
+
+.overview-type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 0.625rem;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.04em;
+  padding: 0.125rem 0.375rem;
+}
+
+/* --------------------------------------
+   Overview: worker cards
+   ------------------------------------ */
+.overview-worker-card {
+  background-color: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+
+.overview-worker-label {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: hsl(var(--muted-foreground));
+  margin-bottom: 0.5rem;
+}
+
+.overview-worker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.375rem 0;
+  border-bottom: 1px solid hsl(var(--border) / 0.4);
+  font-size: 0.75rem;
+}
+
+.overview-worker-row:last-child {
+  border-bottom: none;
+}
+
+.overview-worker-count {
+  font-size: 1.125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: hsl(var(--foreground));
+}
+
+/* --------------------------------------
    Reminders surfaces
    ------------------------------------ */
 .reminders-section {

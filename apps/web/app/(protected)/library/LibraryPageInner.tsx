@@ -1098,59 +1098,100 @@ export default function LibraryPageInner() {
           </div>
         )}
 
-        {viewMode === "list" && (mediaItems.length > 0 || isLoading) && (
-          <MediaCardListHeader density={cardDensity} isSelectMode={isSelectMode} />
-        )}
-
-        {isLoading && mediaItems.length === 0 ? (
-          <div className={layoutClass}>
-            {Array.from({ length: 6 }).map((_, i) => (
-              <MediaCardSkeleton
-                key={i}
-                variant={viewMode}
-                density={cardDensity}
-              />
-            ))}
-          </div>
-        ) : mediaItems.length > 0 ? (
-          <div className={layoutClass}>
-            {mediaItems.map((media, index) => (
-              <MediaCard
-                key={media.id}
-                media={media}
-                variant={viewMode}
-                density={cardDensity}
-                gridCols={viewMode === 'grid' ? gridCols : undefined}
-                loading={index < EAGER_THUMB_COUNT ? "eager" : "lazy"}
-                onDownload={isSelectMode ? undefined : (id) => void handleDownload(id)}
-                onDelete={isSelectMode ? undefined : handleDelete}
-                onRename={isSelectMode ? undefined : handleRename}
-                isDeleting={deletingIds.has(media.id)}
-                isSelectMode={isSelectMode}
-                isSelected={selectedIds.has(media.id)}
-                onSelect={handleSelect}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <p className="mb-4 text-lg text-muted-foreground">No media items found</p>
-            {nextCursor ? (
-              <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}>
-                {isLoadingMore ? "Loading more..." : "Load more"}
-              </Button>
+        {viewMode === "list" ? (
+          <>
+            {(isLoading || mediaItems.length > 0) ? (
+              <div className="rounded-2xl border overflow-hidden">
+                <MediaCardListHeader density={cardDensity} isSelectMode={isSelectMode} />
+                <div className={layoutClass}>
+                  {isLoading && mediaItems.length === 0
+                    ? Array.from({ length: 6 }).map((_, i) => (
+                        <MediaCardSkeleton key={i} variant={viewMode} density={cardDensity} />
+                      ))
+                    : mediaItems.map((media, index) => (
+                        <MediaCard
+                          key={media.id}
+                          media={media}
+                          variant={viewMode}
+                          density={cardDensity}
+                          loading={index < EAGER_THUMB_COUNT ? "eager" : "lazy"}
+                          onDownload={isSelectMode ? undefined : (id) => void handleDownload(id)}
+                          onDelete={isSelectMode ? undefined : handleDelete}
+                          onRename={isSelectMode ? undefined : handleRename}
+                          isDeleting={deletingIds.has(media.id)}
+                          isSelectMode={isSelectMode}
+                          isSelected={selectedIds.has(media.id)}
+                          onSelect={handleSelect}
+                        />
+                      ))
+                  }
+                </div>
+              </div>
             ) : (
-              <Button onClick={handleUploadClick}>
-                <Plus className="mr-2 h-4 w-4" />
-                {hasAnyFilter ? "Upload" : "Upload Your First Item"}
-              </Button>
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <p className="mb-4 text-lg text-muted-foreground">No media items found</p>
+                {nextCursor ? (
+                  <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}>
+                    {isLoadingMore ? "Loading more..." : "Load more"}
+                  </Button>
+                ) : (
+                  <Button onClick={handleUploadClick}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    {hasAnyFilter ? "Upload" : "Upload Your First Item"}
+                  </Button>
+                )}
+              </div>
             )}
-          </div>
+          </>
+        ) : (
+          <>
+            {isLoading && mediaItems.length === 0 ? (
+              <div className={layoutClass}>
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <MediaCardSkeleton key={i} variant={viewMode} density={cardDensity} />
+                ))}
+              </div>
+            ) : mediaItems.length > 0 ? (
+              <div className={layoutClass}>
+                {mediaItems.map((media, index) => (
+                  <MediaCard
+                    key={media.id}
+                    media={media}
+                    variant={viewMode}
+                    density={cardDensity}
+                    gridCols={gridCols}
+                    loading={index < EAGER_THUMB_COUNT ? "eager" : "lazy"}
+                    onDownload={isSelectMode ? undefined : (id) => void handleDownload(id)}
+                    onDelete={isSelectMode ? undefined : handleDelete}
+                    onRename={isSelectMode ? undefined : handleRename}
+                    isDeleting={deletingIds.has(media.id)}
+                    isSelectMode={isSelectMode}
+                    isSelected={selectedIds.has(media.id)}
+                    onSelect={handleSelect}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <p className="mb-4 text-lg text-muted-foreground">No media items found</p>
+                {nextCursor ? (
+                  <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}>
+                    {isLoadingMore ? "Loading more..." : "Load more"}
+                  </Button>
+                ) : (
+                  <Button onClick={handleUploadClick}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    {hasAnyFilter ? "Upload" : "Upload Your First Item"}
+                  </Button>
+                )}
+              </div>
+            )}
+          </>
         )}
 
         {nextCursor && mediaItems.length > 0 && (
           <div className=" mt-6 flex justify-center">
-            <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}> 
+            <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}>
               {isLoadingMore ? "Loading more..." : "Load more"}
             </Button>
           </div>

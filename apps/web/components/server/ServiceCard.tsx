@@ -58,12 +58,15 @@ export interface ServiceCardProps {
   jobCounts?: QueueCounts;
   href?: string;
   linkLabel?: string;
+  className?: string;
+  compact?: boolean;
+  fill?: boolean;
 }
 
-export function ServiceCard({ icon, name, detail, subDetail, status, jobCounts, href, linkLabel }: ServiceCardProps) {
+export function ServiceCard({ icon, name, detail, subDetail, status, jobCounts, href, linkLabel, className, compact, fill }: ServiceCardProps) {
   return (
-    <Card>
-      <CardContent className="pt-5 pb-4 px-4 flex flex-col gap-3">
+    <Card className={className}>
+      <CardContent className={cn(compact ? "pt-3 pb-3 px-3 flex flex-col gap-1.5" : "pt-5 pb-4 px-4 flex flex-col gap-3", fill && "h-full")}>
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">{icon}</span>
           <span className="font-medium text-sm">{name}</span>
@@ -82,7 +85,7 @@ export function ServiceCard({ icon, name, detail, subDetail, status, jobCounts, 
             </a>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className={cn("flex items-center gap-2", fill && "mt-auto")}>
           <StatusDot status={status} />
           <StatusText status={status} />
         </div>

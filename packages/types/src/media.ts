@@ -20,6 +20,7 @@ export const MediaListItemSchema = z.object({
   createdAt: z.string(), // ISO date string
   tags: z.array(z.string()),
   mimeType: z.string(),
+  sizeBytes: z.number().nullable().optional(),
 });
 export type MediaListItem = z.infer<typeof MediaListItemSchema>;
 
