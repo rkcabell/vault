@@ -1,8 +1,13 @@
 // File: apps/api/src/services/thumbnails/renderPdfThumbnail.ts
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createCanvas, Path2D, DOMMatrix, ImageData } from "@napi-rs/canvas";
+import type { Path2D, DOMMatrix, ImageData } from "@napi-rs/canvas";
 import { loadPdfJs, getStandardFontDataUrl } from "../pdf/loadPdfJs.js";
+
+let _canvas: typeof import("@napi-rs/canvas") | null = null;
+async function getCanvas() {
+  return (_canvas ??= await import("@napi-rs/canvas"));
+}
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 
 function toPdfJsData (input: Uint8Array | Buffer): Uint8Array {
@@ -18,7 +23,8 @@ type CanvasGlobals = {
   ImageData?: typeof ImageData;
 };
 
-function ensureCanvasGlobals () {
+async function ensureCanvasGlobals () {
+  const { Path2D, DOMMatrix, ImageData } = await getCanvas();
   const g = globalThis as typeof globalThis & CanvasGlobals;
   if (!g.Path2D) g.Path2D = Path2D;
   if (!g.DOMMatrix) g.DOMMatrix = DOMMatrix;
@@ -33,7 +39,7 @@ export async function renderPdfThumbnail (args: {
 }): Promise<Buffer> {
   const { pdf, targetWidth = 1200, maxWidth = 2000, maxPixels = 10_000_000 } = args;
 
-  ensureCanvasGlobals();
+  await ensureCanvasGlobals();
 
   const pdfjs = await loadPdfJs();
   const data = toPdfJsData(pdf);
@@ -72,6 +78,7 @@ export async function renderPdfThumbnail (args: {
     const width = Math.max(1, Math.floor(viewport.width));
     const height = Math.max(1, Math.floor(viewport.height));
 
+    const { createCanvas } = await getCanvas();
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext("2d");
 

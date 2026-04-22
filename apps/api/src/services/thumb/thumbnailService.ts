@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
 import { GetObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
-import sharp from "sharp";
 import type { Logger } from "pino";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { MediaMetadataRepository } from "../../repositories/mediaMetadataRepository.js";
@@ -70,6 +69,7 @@ async function getObjectToBuffer (s3: S3Client, bucket: string, key: string): Pr
  * upscaling images that are already smaller than `size`.
  */
 async function renderWebp(input: Buffer, size: number): Promise<Buffer> {
+  const { default: sharp } = await import("sharp");
   return sharp(input, { failOn: "none" })
     .rotate()
     .resize(size, size, { fit: "inside", withoutEnlargement: true })

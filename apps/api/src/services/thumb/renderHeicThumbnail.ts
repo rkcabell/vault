@@ -1,5 +1,3 @@
-import convert from "heic-convert";
-
 export type RenderHeicThumbnailArgs = {
   image: Uint8Array | Buffer;
   targetWidth?: number;
@@ -16,6 +14,7 @@ export async function renderHeicThumbnail(args: RenderHeicThumbnailArgs): Promis
   const { image } = args;
 
   try {
+    const { default: convert } = await import("heic-convert");
     const outputBuffer = await convert({
       buffer: Buffer.from(image),
       format: "PNG",

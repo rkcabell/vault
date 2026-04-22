@@ -4,10 +4,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import sharp from "sharp";
-import { PDFDocument } from "pdf-lib";
-import convert from "heic-convert";
 import { looksLikeHeic } from "../../lib/fileSignatures.js";
+
+let _pdfLib: typeof import("pdf-lib") | null = null;
+async function getPdfLib() {
+  return (_pdfLib ??= await import("pdf-lib"));
+}
 
 const MAX_CAPTURE_BYTES = 50 * 1024;
 
@@ -100,6 +102,7 @@ async function toPdfBuffer (
     (!!mimeType && (mimeType.includes("heic") || mimeType.includes("heif")));
 
   if (isHeic) {
+    const { default: convert } = await import("heic-convert");
     const pngBuffer = await convert({ buffer: input, format: "PNG" });
     return imageToPdf(Buffer.from(pngBuffer), rotation);
   }
@@ -122,6 +125,7 @@ function looksLikePdf (buf: Buffer): boolean {
 /** Return the page count of a PDF buffer, or null if pdf-lib fails to parse it. */
 async function getPdfPageCount (buffer: Buffer): Promise<number | null> {
   try {
+    const { PDFDocument } = await getPdfLib();
     const doc = await PDFDocument.load(buffer);
     return doc.getPageCount();
   } catch {
@@ -236,6 +240,8 @@ function buildOcrmypdfError (result: OcrmypdfRunResult): Error {
  */
 async function imageToPdf (buffer: Buffer, rotation?: string | number | null): Promise<Buffer> {
   const angle = normalizeRotation(rotation);
+  const { default: sharp } = await import("sharp");
+  const { PDFDocument } = await getPdfLib();
 
   // 1) Normalize to PNG with white background (Sharp supports this reliably)
   const png = await sharp(buffer)

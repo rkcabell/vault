@@ -12,15 +12,25 @@
     "coverage": "pnpm -F api -F web run coverage",
     "coverage:api": "pnpm -F api run coverage",
     "coverage:web": "pnpm -F web run coverage",
-    "web:dev": "pnpm -F web run dev",
+
     "web:build": "pnpm -F web run build",
-    "api:dev": "pnpm -F api run dev",
+    "web:dev": "pnpm -F web run dev",
+    "web:stop": "node scripts/stop.mjs web",
     "api:build": "pnpm -F api run build",
+    "api:dev": "pnpm -F api run dev",
+    "api:stop": "node scripts/stop.mjs api",
+    "worker:stop": "node scripts/stop.mjs worker",
+    
+    "vaultdev": "pnpm run localdocker && concurrently -n API,WEB,WORKER -c auto \"pnpm -F api run dev\" \"pnpm -F web run dev\" \"pnpm -F api run worker:dev\"",
+    "vaultdev:down": "pnpm run vault:stop && pnpm run localdocker:down",
+    "vault": "docker compose --env-file .env.prod -f infra/docker/docker-compose.prod.yml up -d",
+    "vault:down": "docker compose --env-file .env.prod -f infra/docker/docker-compose.prod.yml down",
+    "vault:stop": "node scripts/stop.mjs",
+
     "prismagen": "pnpm exec prisma generate --schema packages/db/prisma/schema.prisma",
     "prismigrate": "pnpm exec prisma migrate dev --schema packages/db/prisma/schema.prisma",
     "prismareset": "pnpm exec prisma migrate reset --schema packages/db/prisma/schema.prisma",
-    "boot": "concurrently -n API,WEB,WORKER -c auto \"pnpm -F api run dev\" \"pnpm -F web run dev\" \"pnpm -F api run worker:dev\"",
-    "start": "pnpm run localdocker && pnpm run build && concurrently -n API,WEB,WORKER -c auto \"pnpm -F api run start\" \"pnpm -F web run start\" \"pnpm -F api run worker\"",
+
     "localdocker": "docker compose -f infra/docker/docker-minimal.yml up -d",
     "localdocker:down": "docker compose -f infra/docker/docker-minimal.yml down",
     "docker:build": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml down --remove-orphans && docker compose --env-file .env.docker -f infra/docker/docker-compose.yml up -d --build --remove-orphans",
@@ -28,8 +38,6 @@
     "docker:logs": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml logs -f",
     "dockerup": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml up -d",
     "dockerdown": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml down",
-    "vault:up": "docker compose --env-file .env.prod -f infra/docker/docker-compose.prod.yml up -d",
-    "vault:down": "docker compose --env-file .env.prod -f infra/docker/docker-compose.prod.yml down",
     "docker:restart": "docker compose --env-file .env.docker -f infra/docker/docker-compose.yml restart"
   },
   "engines": {
