@@ -1,20 +1,17 @@
 import Link from "next/link";
-import { listMedia, fetchInit, fetchWorkerCounts } from "@/lib/api.server";
+import { listMediaSizes, fetchMediaStats, fetchWorkerCounts } from "@/lib/api.server";
 import { OverviewRemindersCard } from "@/components/reminders/OverviewRemindersCard";
-import { OverviewStatRow } from "@/components/overview/OverviewStatRow";
-import { OverviewDocTable } from "@/components/overview/OverviewDocTable";
-import { OverviewWorkerPoller } from "@/components/overview/OverviewWorkerPoller";
+import { OverviewVizPanel } from "@/components/overview/OverviewVizPanel";
 import { OverviewHealthPoller } from "@/components/overview/OverviewHealthPoller";
 
 export default async function OverviewPage() {
-  const [initData, allMedia, workerCounts] = await Promise.all([
-    fetchInit(),
-    listMedia({ q: "" }),
+  const [stats, storageItems, workerCounts] = await Promise.all([
+    fetchMediaStats(),
+    listMediaSizes(),
     fetchWorkerCounts(),
   ]);
 
-  const recent = allMedia.slice(0, 15);
-  const mediaStats = initData?.mediaStats ?? { totalDocs: 0, storageBytes: 0, typeBreakdown: [] };
+  const mediaStats = stats ?? { totalDocs: 0, storageBytes: 0, typeBreakdown: [] };
 
   return (
     <div className="overview-page">
@@ -44,35 +41,15 @@ export default async function OverviewPage() {
           </div>
         </header>
 
-        {/* Stat row: server-rendered docs/storage/type + live-polling worker queues */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
-          <OverviewStatRow
-            totalDocs={mediaStats.totalDocs}
-            storageBytes={mediaStats.storageBytes}
-            typeBreakdown={mediaStats.typeBreakdown}
-          />
-          <OverviewWorkerPoller initial={workerCounts} />
-        </div>
-
         <OverviewRemindersCard />
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_8rem]">
-          <section className="space-y-3 min-w-0">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Recent</h2>
-              <Link href="/library" className="text-xs text-muted-foreground hover:underline">
-                See all →
-              </Link>
-            </div>
-            <div className="overview-card rounded-2xl border overflow-hidden">
-              <OverviewDocTable docs={recent} />
-            </div>
-          </section>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_20rem]">
+          <OverviewVizPanel docs={storageItems} mediaStats={mediaStats} />
 
           <section className="flex flex-col gap-3">
             <h2 className="text-lg font-semibold shrink-0">System Status</h2>
-            <div className="flex-1">
-              <OverviewHealthPoller />
+            <div className="overview-card rounded-2xl p-4">
+              <OverviewHealthPoller initialWorkers={workerCounts} />
             </div>
           </section>
         </div>

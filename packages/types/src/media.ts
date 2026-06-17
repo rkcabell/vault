@@ -32,6 +32,25 @@ export const MediaListResponseSchema = z.object({
 export type MediaListResponse = z.infer<typeof MediaListResponseSchema>;
 
 // ---------------------------------------------------------------------------
+// Storage treemap  (GET /media/storage) — minimal per-file size data for the
+// entire vault, used to render file sizes as proportional areas.
+// ---------------------------------------------------------------------------
+
+export const MediaStorageItemSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  filename: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number(),
+});
+export type MediaStorageItem = z.infer<typeof MediaStorageItemSchema>;
+
+export const MediaStorageResponseSchema = z.object({
+  items: z.array(MediaStorageItemSchema),
+});
+export type MediaStorageResponse = z.infer<typeof MediaStorageResponseSchema>;
+
+// ---------------------------------------------------------------------------
 // Media detail  (GET /media/:id)
 // ---------------------------------------------------------------------------
 

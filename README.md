@@ -148,7 +148,7 @@ pnpm run prismigrate    # Apply migrations
 #### 5. Start development servers
 
 ```bash
-pnpm run boot
+pnpm run vaultdev
 ```
 
 Alternatively, run each process in a separate terminal:
@@ -167,8 +167,8 @@ pnpm -F api run worker:dev    # OCR + thumbnail workers
 
 | Command                      | Description                                             |
 | ---------------------------- | ------------------------------------------------------- |
-| `pnpm run boot`              | Start API + web + worker in dev mode (hot reload)       |
-| `pnpm run start`             | Build, start infrastructure, and run API + web + worker |
+| `pnpm run vaultdev`          | Start infra + API + web + worker in dev mode (hot reload)|
+| `pnpm run vaultdev:down`     | Stop dev processes and infrastructure containers        |
 | `pnpm run api:dev`           | Start API server only (hot reload)                      |
 | `pnpm run web:dev`           | Start web app only (hot reload)                         |
 | `pnpm -F api run worker:dev` | Start background workers only (hot reload)              |

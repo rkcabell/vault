@@ -8,6 +8,13 @@ interface Props {
   initial: WorkerCounts | null;
 }
 
+const WORKERS = [
+  { label: "OCR Worker",       worker: "ocr"   as const },
+  { label: "Thumbnail Worker", worker: "thumb" as const },
+] as const;
+
+const QUEUE_FIELDS = ["waiting", "active", "delayed", "failed"] as const;
+
 export function OverviewWorkerPoller({ initial }: Props) {
   const [counts, setCounts] = useState<WorkerCounts | null>(initial);
   const { files } = useUpload();
@@ -46,32 +53,35 @@ export function OverviewWorkerPoller({ initial }: Props) {
     };
   }, [isUploading]);
 
-  const ocrTotal  = counts ? counts.ocr.counts.waiting  + counts.ocr.counts.active  : null;
-  const thumbTotal = counts ? counts.thumb.counts.waiting + counts.thumb.counts.active : null;
-
   return (
-    <>
-      <div className="overview-stat-card">
-        <div className="overview-stat-label">OCR Queue</div>
-        <div className="overview-stat-value">{ocrTotal === null ? "—" : ocrTotal}</div>
-        {counts && (
-          <div className="overview-stat-sub">
-            {counts.ocr.counts.active} active · {counts.ocr.counts.waiting} waiting
-            {counts.ocr.counts.failed > 0 && ` · ${counts.ocr.counts.failed} failed`}
+    <div className="flex flex-col gap-3">
+      {WORKERS.map(({ label, worker }) => {
+        const w = counts?.[worker];
+        return (
+          <div key={label} className="overview-worker-card">
+            <div className="flex items-center justify-between mb-2">
+              <span className="overview-worker-label">{label}</span>
+              {w && (
+                <span className={`text-xs font-medium ${w.active ? "overview-worker-status--active" : "overview-worker-status--idle"}`}>
+                  {w.active ? "Running" : "Idle"}
+                </span>
+              )}
+            </div>
+            {QUEUE_FIELDS.map(key => {
+              const val = w?.counts[key];
+              const isFailed = key === "failed" && val != null && val > 0;
+              return (
+                <div key={key} className={`overview-worker-row${isFailed ? " overview-worker-row--failed" : ""}`}>
+                  <span className="capitalize">{key}</span>
+                  <span className={`overview-worker-count${isFailed ? " overview-worker-count--failed" : ""}`}>
+                    {val ?? "—"}
+                  </span>
+                </div>
+              );
+            })}
           </div>
-        )}
-      </div>
-
-      <div className="overview-stat-card">
-        <div className="overview-stat-label">Thumbnail Queue</div>
-        <div className="overview-stat-value">{thumbTotal === null ? "—" : thumbTotal}</div>
-        {counts && (
-          <div className="overview-stat-sub">
-            {counts.thumb.counts.active} active · {counts.thumb.counts.waiting} waiting
-            {counts.thumb.counts.failed > 0 && ` · ${counts.thumb.counts.failed} failed`}
-          </div>
-        )}
-      </div>
-    </>
+        );
+      })}
+    </div>
   );
 }

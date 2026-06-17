@@ -90,6 +90,18 @@ test-results.html
 **/playwright-report/
 **/test-results/
 **/test-results.html
+.playwright-mcp/
+
+# Editor / workspace
+*.code-workspace
+
+# Graphify knowledge-graph output
+.graphify_ast.json
+.graphify_detect.json
+.graphify_python
+.graphify_uncached.txt
+.graphifyignore
+graphify-out/
 
 # Misc
 *.pid

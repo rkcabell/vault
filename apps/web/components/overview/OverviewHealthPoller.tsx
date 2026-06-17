@@ -2,7 +2,11 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Activity, Database, ServerCrash, HardDrive } from "lucide-react";
-import { ServiceCard, type ServiceStatus } from "@/components/server/ServiceCard";
+import { StatusDot, StatusText, type ServiceStatus } from "@/components/server/ServiceCard";
+import { OverviewWorkerPoller } from "@/components/overview/OverviewWorkerPoller";
+import type { WorkerCounts } from "@/lib/api.server";
+
+interface Props { initialWorkers: WorkerCounts | null; }
 
 interface HealthState {
   api:   ServiceStatus;
@@ -11,15 +15,34 @@ interface HealthState {
   minio: ServiceStatus;
 }
 
+interface ServerInfo {
+  uptimeSeconds: number | null;
+  memoryMB: number | null;
+}
+
 const CHECKING: HealthState = { api: "checking", db: "checking", redis: "checking", minio: "checking" };
 
-export function OverviewHealthPoller() {
+const SERVICES = [
+  { icon: <Activity   className="h-3.5 w-3.5 text-muted-foreground" />, name: "API",      key: "api"   as const },
+  { icon: <Database   className="h-3.5 w-3.5 text-muted-foreground" />, name: "Database", key: "db"    as const },
+  { icon: <ServerCrash className="h-3.5 w-3.5 text-muted-foreground" />, name: "Redis",   key: "redis" as const },
+  { icon: <HardDrive  className="h-3.5 w-3.5 text-muted-foreground" />, name: "MinIO",    key: "minio" as const },
+] as const;
+
+function formatUptime(s: number): string {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m` : "< 1m";
+}
+
+export function OverviewHealthPoller({ initialWorkers }: Props) {
   const [health, setHealth] = useState<HealthState>(CHECKING);
+  const [serverInfo, setServerInfo] = useState<ServerInfo>({ uptimeSeconds: null, memoryMB: null });
 
   const poll = useCallback(async () => {
-    const [liveness, readiness] = await Promise.allSettled([
+    const [liveness, readiness, status] = await Promise.allSettled([
       fetch("/health/healthz").then(r => r.ok),
       fetch("/health/readyz").then(async r => ({ ok: r.ok, body: await r.json().catch(() => null) })),
+      fetch("/api/server/status").then(r => r.json()),
     ]);
 
     const api: ServiceStatus =
@@ -38,6 +61,11 @@ export function OverviewHealthPoller() {
     }
 
     setHealth({ api, db, redis, minio });
+
+    if (status.status === "fulfilled") {
+      const s = status.value as { uptimeSeconds?: number; memoryMB?: number };
+      setServerInfo({ uptimeSeconds: s.uptimeSeconds ?? null, memoryMB: s.memoryMB ?? null });
+    }
   }, []);
 
   useEffect(() => {
@@ -47,11 +75,46 @@ export function OverviewHealthPoller() {
   }, [poll]);
 
   return (
-    <div className="flex flex-col gap-3 h-full">
-      <ServiceCard icon={<Activity className="h-4 w-4" />}    name="API"      detail="Port 8000"            status={health.api}   compact fill className="flex-1" />
-      <ServiceCard icon={<Database className="h-4 w-4" />}    name="Database" detail="Port 5432" subDetail="PostgreSQL" status={health.db}    compact fill className="flex-1" />
-      <ServiceCard icon={<ServerCrash className="h-4 w-4" />} name="Redis"    detail="Port 6379"            status={health.redis} compact fill className="flex-1" />
-      <ServiceCard icon={<HardDrive className="h-4 w-4" />}   name="MinIO"    detail="Port 9000"            status={health.minio} compact fill className="flex-1" />
+    <div className="flex flex-col gap-4">
+
+      <OverviewWorkerPoller initial={initialWorkers} />
+
+      {(serverInfo.uptimeSeconds !== null || serverInfo.memoryMB !== null) && (
+        <div className="overview-worker-card">
+          <p className="overview-worker-label">Server</p>
+          {serverInfo.uptimeSeconds !== null && (
+            <div className="overview-system-info-row">
+              <span>Uptime</span>
+              <span className="overview-system-info-value">{formatUptime(serverInfo.uptimeSeconds)}</span>
+            </div>
+          )}
+          {serverInfo.memoryMB !== null && (
+            <div className="overview-system-info-row">
+              <span>Memory (RSS)</span>
+              <span className="overview-system-info-value">{serverInfo.memoryMB} MB</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div>
+        <p className="overview-stat-label mb-2">Services</p>
+        <div className="overview-service-list">
+          {SERVICES.map(({ icon, name, key }) => (
+            <div key={key} className="overview-service-row">
+              <span className="overview-service-row-name">
+                {icon}
+                {name}
+              </span>
+              <span className="overview-service-row-status">
+                <StatusDot status={health[key]} />
+                <StatusText status={health[key]} />
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
     </div>
   );
 }

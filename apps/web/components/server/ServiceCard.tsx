@@ -90,13 +90,21 @@ export function ServiceCard({ icon, name, detail, subDetail, status, jobCounts, 
           <StatusText status={status} />
         </div>
         {jobCounts && (
-          <div className="flex gap-3 text-xs text-muted-foreground border-t pt-2">
-            <span>{jobCounts.waiting} waiting</span>
-            <span>{jobCounts.active} active</span>
-            {jobCounts.delayed > 0 && <span>{jobCounts.delayed} delayed</span>}
-            <span className={jobCounts.failed > 0 ? "text-destructive font-medium" : ""}>
-              {jobCounts.failed} failed
-            </span>
+          <div className="mt-auto border-t pt-3 pb-1">
+            <div className="grid grid-cols-3 text-center">
+              <div className="flex flex-col items-center gap-0.5">
+                <span className="text-2xl font-bold tabular-nums leading-none">{jobCounts.waiting}</span>
+                <span className="text-xs text-muted-foreground mt-1">Waiting</span>
+              </div>
+              <div className="flex flex-col items-center gap-0.5">
+                <span className="text-2xl font-bold tabular-nums leading-none">{jobCounts.active}</span>
+                <span className="text-xs text-muted-foreground mt-1">Active</span>
+              </div>
+              <div className={cn("flex flex-col items-center gap-0.5", jobCounts.failed > 0 && "text-destructive")}>
+                <span className="text-2xl font-bold tabular-nums leading-none">{jobCounts.failed}</span>
+                <span className={cn("text-xs mt-1", jobCounts.failed > 0 ? "text-destructive" : "text-muted-foreground")}>Failed</span>
+              </div>
+            </div>
           </div>
         )}
       </CardContent>

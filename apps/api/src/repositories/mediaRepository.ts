@@ -694,6 +694,20 @@ export class MediaRepository {
     };
   }
 
+  /**
+   * Minimal per-file size data for the entire vault, largest first. Powers the
+   * storage treemap, which needs every file's relative size — not just a page.
+   * Backed by the [userId, sizeBytes desc] index; zero-byte rows are skipped
+   * since they contribute no area.
+   */
+  async listAllMediaSizes (userId: string) {
+    return this.prisma.media.findMany({
+      where: { userId, sizeBytes: { gt: 0 } },
+      select: { id: true, title: true, filename: true, mimeType: true, sizeBytes: true },
+      orderBy: [{ sizeBytes: "desc" }, { id: "desc" }],
+    });
+  }
+
   async getMediaStats (userId: string) {
     const [agg, breakdown] = await this.prisma.$transaction([
       this.prisma.media.aggregate({

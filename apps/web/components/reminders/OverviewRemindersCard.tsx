@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { Plus, ArrowRight } from "lucide-react";
 import { usePreferences } from "@/hooks/usePreferences";
-import { Button } from "@/components/ui/Button";
+import { Button, buttonVariants } from "@/components/ui/Button";
 import { AddReminderDialog } from "@/components/reminders/AddReminderDialog";
 import {
   useCompleteReminder,
@@ -93,13 +94,22 @@ export function OverviewRemindersCard() {
   return (
     <section className="reminders-section">
       <div className="reminders-header">
-        <h2 className="reminders-title">Reminders</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="reminders-title">Reminders</h2>
+          {!summary.loading && summary.data && summary.data.overdue > 0 && (
+            <span className="reminders-overdue-badge" title={`${summary.data.overdue} overdue`}>
+              {summary.data.overdue > 99 ? "99+" : summary.data.overdue}
+            </span>
+          )}
+        </div>
         <div className="reminders-header-actions">
-          <Button size="sm" variant="ghost" onClick={() => setAddReminderOpen(true)}>
+          <Button size="sm" variant="outline" onClick={() => setAddReminderOpen(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1.5" />
             Add reminder
           </Button>
-          <Link href="/reminders" className="reminders-open-link">
+          <Link href="/reminders" className={buttonVariants({ variant: "ghost", size: "sm" })}>
             Open reminders
+            <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
           </Link>
         </div>
       </div>

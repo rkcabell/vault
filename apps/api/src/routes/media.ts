@@ -234,6 +234,20 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
   });
 
 
+  // GET /media/storage - per-file sizes for the whole vault (storage treemap)
+  app.get("/storage", { preHandler: [requireAuth] }, async req => {
+    const userId = req.userId!;
+    const items = await queryService.listAllSizes(userId);
+    return { items };
+  });
+
+
+  // GET /media/stats - aggregate doc count / storage / type breakdown (overview)
+  app.get("/stats", { preHandler: [requireAuth] }, async req => {
+    return queryService.getStats(req.userId!);
+  });
+
+
   // GET /media/events - Server-Sent Events stream for job state updates (thumb + text)
   app.get("/events", { preHandler: [requireAuth] }, (req, reply) => {
     const userId = req.userId!;

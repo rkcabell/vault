@@ -8,35 +8,41 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   size?: 'default' | 'sm' | 'lg' | 'icon';
 }
 
+const BASE = 'inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50';
+
+const VARIANTS: Record<NonNullable<ButtonProps['variant']>, string> = {
+  default:     'bg-primary text-primary-foreground hover:bg-[var(--color-primary-hover)]',
+  destructive: 'bg-destructive text-destructive-foreground hover:bg-[var(--color-destructive-hover)]',
+  outline:     'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
+  secondary:   'bg-secondary text-secondary-foreground hover:bg-secondary/80',
+  ghost:       'hover:bg-accent hover:text-accent-foreground',
+  link:        'text-primary underline-offset-4 hover:underline',
+};
+
+const SIZES: Record<NonNullable<ButtonProps['size']>, string> = {
+  default: 'h-10 px-4 py-2',
+  sm:      'h-9 rounded-md px-3',
+  lg:      'h-11 rounded-md px-8',
+  icon:    'h-10 w-10',
+};
+
+export function buttonVariants({
+  variant = 'default',
+  size = 'default',
+  className,
+}: { variant?: ButtonProps['variant']; size?: ButtonProps['size']; className?: string } = {}) {
+  return cn(BASE, VARIANTS[variant!], SIZES[size!], className);
+}
+
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = 'default', size = 'default', type = 'button', ...props }, ref) => {
-    const baseStyles = 'inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50';
-
-    const variantStyles = {
-      default: 'bg-primary text-primary-foreground hover:bg-[var(--color-primary-hover)]',
-      destructive: 'bg-destructive text-destructive-foreground hover:bg-[var(--color-destructive-hover)]',
-      outline: 'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
-      secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-      ghost: 'hover:bg-accent hover:text-accent-foreground',
-      link: 'text-primary underline-offset-4 hover:underline',
-    };
-
-    const sizeStyles = {
-      default: 'h-10 px-4 py-2',
-      sm: 'h-9 rounded-md px-3',
-      lg: 'h-11 rounded-md px-8',
-      icon: 'h-10 w-10',
-    };
-
-    return (
-      <button
-        className={cn(baseStyles, variantStyles[variant], sizeStyles[size], className)}
-        ref={ref}
-        type={type}
-        {...props}
-      />
-    );
-  }
+  ({ className, variant = 'default', size = 'default', type = 'button', ...props }, ref) => (
+    <button
+      className={cn(BASE, VARIANTS[variant], SIZES[size], className)}
+      ref={ref}
+      type={type}
+      {...props}
+    />
+  )
 );
 Button.displayName = 'Button';
 
