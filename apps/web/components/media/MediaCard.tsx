@@ -143,7 +143,7 @@ function getMimeTypeLabel(mimeType?: string | null, filename?: string | null): s
 // so column positions stay in sync when values change.
 const LIST_THUMB_W = { comfortable: 'w-24', compact: 'w-20' } as const;
 const LIST_INNER_GAP = { comfortable: 'gap-3', compact: 'gap-2' } as const;
-const LIST_TYPE_W = 'w-34' as const;
+const LIST_TYPE_W = 'w-20' as const;
 const LIST_SIZE_W = 'w-12' as const;
 
 export function MediaCard({
@@ -303,11 +303,11 @@ export function MediaCard({
   if (variant === 'list') {
     return (
       <Card
-        className={cn('hover:bg-accent/50 transition-colors', isSelectMode && 'cursor-pointer select-none', className)}
+        className={cn('rounded-none shadow-none bg-transparent border-0 border-b border-border/40 hover:bg-muted/50 transition-colors', isSelectMode && 'cursor-pointer select-none', className)}
         style={isSelectMode && isSelected ? { outline: '2px solid #06b6d4', outlineOffset: '0px' } : undefined}
         onClick={isSelectMode ? handleSelectClick : undefined}
       >
-        <CardContent className={cn("p-4", isCompact && "px-2 py-1")}>
+        <CardContent className={cn("py-2 px-4", isCompact && "py-1.5 px-3")}>
           <div className={cn("flex items-center gap-4", isCompact && "gap-2")}>
 
             {/* Selection circle (list) */}
@@ -428,8 +428,8 @@ export function MediaCard({
                 </div>
                 {!isRenaming && (
                   <>
-                    <span className={cn(LIST_TYPE_W, "shrink-0 text-xs text-muted-foreground truncate")}>
-                      {getMimeTypeLabel(media.mimeType, media.filename)}
+                    <span className={cn(LIST_TYPE_W, "shrink-0 flex items-center")}>
+                      <span className="overview-type-badge">{getMimeTypeLabel(media.mimeType, media.filename)}</span>
                     </span>
                     <span className={cn(LIST_SIZE_W, "shrink-0 text-xs text-muted-foreground text-right tabular-nums")}>
                       {media.sizeBytes != null ? formatBytes(media.sizeBytes) : "—"}
@@ -437,21 +437,7 @@ export function MediaCard({
                   </>
                 )}
               </div>
-              {media.tags && media.tags.length > 0 && (
-                <div className={cn("mt-1 flex flex-wrap gap-1", isCompact && "mt-0.5")}>
-                  {media.tags.slice(0, 4).map((tag) => (
-                    <Badge key={tag} variant="outline" className="text-xs max-w-[10rem]">
-                      <span className="truncate">{tag}</span>
-                    </Badge>
-                  ))}
-                  {media.tags.length > 4 && (
-                    <Badge variant="outline" className="text-xs">
-                      +{media.tags.length - 4}
-                    </Badge>
-                  )}
-                </div>
-              )}
-            </div>
+              </div>
 
             <div className={cn("flex items-center gap-2", isCompact && "gap-1")}>
               {!isSelectMode && (
@@ -702,14 +688,11 @@ export function MediaCardListHeader({
 }) {
   const isCompact = density === "compact";
   return (
-    // Use Card for identical border width (1px) so content box matches actual cards.
-    // shadow-sm can't be overridden reliably via cn (no tailwind-merge), so use inline style.
     <Card
-      className="border-transparent bg-transparent select-none"
-      style={{ boxShadow: 'none' }}
+      className="rounded-none shadow-none bg-transparent border-0 border-b border-border select-none"
     >
-      <CardContent className={cn("p-4", isCompact && "px-2 py-1")}>
-        <div className={cn("flex items-center border-b pb-1 text-xs font-medium text-muted-foreground", isCompact ? "gap-2" : "gap-4")}>
+      <CardContent className={cn("py-2 px-4", isCompact && "py-1.5 px-3")}>
+        <div className={cn("flex items-center text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground", isCompact ? "gap-2" : "gap-4")}>
           {/* Selection circle placeholder */}
           {isSelectMode && (
             <div className="flex-shrink-0 p-0.5" aria-hidden>
@@ -729,7 +712,7 @@ export function MediaCardListHeader({
             <div className={cn("flex items-center min-w-0", isCompact ? LIST_INNER_GAP.compact : LIST_INNER_GAP.comfortable)}>
               <div className="flex-1">Title</div>
               <span className={cn(LIST_TYPE_W, "shrink-0")}>Type</span>
-              <span className={cn(LIST_SIZE_W, "shrink-0")}>Size</span>
+              <span className={cn(LIST_SIZE_W, "shrink-0 text-right")}>Size</span>
             </div>
           </div>
           {/* Actions placeholder */}

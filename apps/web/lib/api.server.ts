@@ -1,6 +1,6 @@
 ﻿// apps/web/lib/api.ts
 import { cookies } from 'next/headers'
-import type { MediaDetailResponse, MediaListItem, MediaListResponse, DownloadResponse, BundleListItem, BundleDetail, BundlesListResponse } from '@vault/types'
+import type { MediaDetailResponse, MediaListItem, MediaListResponse, MediaStorageItem, DownloadResponse, BundleListItem, BundleDetail, BundlesListResponse, RemindersSummary, ReminderOverviewRow } from '@vault/types'
 
 const API_BASE =
   typeof window === 'undefined'
@@ -84,6 +84,11 @@ export async function listMedia (
   return r.items
 }
 
+export async function listMediaSizes (): Promise<MediaStorageItem[]> {
+  const r = await http<{ items: MediaStorageItem[] }>('/media/storage')
+  return r.items
+}
+
 export async function listBundles (): Promise<BundleListItem[]> {
   const r = await http<BundlesListResponse>('/bundles')
   return r.bundles
@@ -109,5 +114,57 @@ export async function pollReady (
     )
       return
     await new Promise(r => setTimeout(r, ms))
+  }
+}
+
+export interface WorkerQueueCounts {
+  waiting: number
+  active: number
+  delayed: number
+  failed: number
+}
+
+export interface WorkerCounts {
+  ocr:   { active: boolean; count: number; counts: WorkerQueueCounts }
+  thumb: { active: boolean; count: number; counts: WorkerQueueCounts }
+}
+
+export interface MediaStats {
+  totalDocs: number
+  storageBytes: number
+  typeBreakdown: Array<{ mimeType: string; count: number }>
+}
+
+export interface InitResponse {
+  user: { id: string; email: string; name: string | null; username: string | null; avatarUrl: string | null } | null
+  preferences: Record<string, unknown>
+  tags: Array<{ name: string; count: number; color: string | null }>
+  bundles: BundleListItem[]
+  remindersSummary: RemindersSummary
+  overviewReminders: { items: ReminderOverviewRow[] }
+  mediaStats: MediaStats
+}
+
+export async function fetchInit (): Promise<InitResponse | null> {
+  try {
+    return await http<InitResponse>('/init')
+  } catch {
+    return null
+  }
+}
+
+export async function fetchMediaStats (): Promise<MediaStats | null> {
+  try {
+    return await http<MediaStats>('/media/stats')
+  } catch {
+    return null
+  }
+}
+
+export async function fetchWorkerCounts (): Promise<WorkerCounts | null> {
+  try {
+    return await http<WorkerCounts>('/server/workers')
+  } catch {
+    return null
   }
 }

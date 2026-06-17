@@ -58,12 +58,15 @@ export interface ServiceCardProps {
   jobCounts?: QueueCounts;
   href?: string;
   linkLabel?: string;
+  className?: string;
+  compact?: boolean;
+  fill?: boolean;
 }
 
-export function ServiceCard({ icon, name, detail, subDetail, status, jobCounts, href, linkLabel }: ServiceCardProps) {
+export function ServiceCard({ icon, name, detail, subDetail, status, jobCounts, href, linkLabel, className, compact, fill }: ServiceCardProps) {
   return (
-    <Card>
-      <CardContent className="pt-5 pb-4 px-4 flex flex-col gap-3">
+    <Card className={className}>
+      <CardContent className={cn(compact ? "pt-3 pb-3 px-3 flex flex-col gap-1.5" : "pt-5 pb-4 px-4 flex flex-col gap-3", fill && "h-full")}>
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">{icon}</span>
           <span className="font-medium text-sm">{name}</span>
@@ -82,18 +85,26 @@ export function ServiceCard({ icon, name, detail, subDetail, status, jobCounts, 
             </a>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className={cn("flex items-center gap-2", fill && "mt-auto")}>
           <StatusDot status={status} />
           <StatusText status={status} />
         </div>
         {jobCounts && (
-          <div className="flex gap-3 text-xs text-muted-foreground border-t pt-2">
-            <span>{jobCounts.waiting} waiting</span>
-            <span>{jobCounts.active} active</span>
-            {jobCounts.delayed > 0 && <span>{jobCounts.delayed} delayed</span>}
-            <span className={jobCounts.failed > 0 ? "text-destructive font-medium" : ""}>
-              {jobCounts.failed} failed
-            </span>
+          <div className="mt-auto border-t pt-3 pb-1">
+            <div className="grid grid-cols-3 text-center">
+              <div className="flex flex-col items-center gap-0.5">
+                <span className="text-2xl font-bold tabular-nums leading-none">{jobCounts.waiting}</span>
+                <span className="text-xs text-muted-foreground mt-1">Waiting</span>
+              </div>
+              <div className="flex flex-col items-center gap-0.5">
+                <span className="text-2xl font-bold tabular-nums leading-none">{jobCounts.active}</span>
+                <span className="text-xs text-muted-foreground mt-1">Active</span>
+              </div>
+              <div className={cn("flex flex-col items-center gap-0.5", jobCounts.failed > 0 && "text-destructive")}>
+                <span className="text-2xl font-bold tabular-nums leading-none">{jobCounts.failed}</span>
+                <span className={cn("text-xs mt-1", jobCounts.failed > 0 ? "text-destructive" : "text-muted-foreground")}>Failed</span>
+              </div>
+            </div>
           </div>
         )}
       </CardContent>

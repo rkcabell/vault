@@ -117,5 +117,15 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
     return deps.repository.listTopTags(userId, limit);
   };
 
-  return { listMedia, listTopTags };
+  /** Per-file sizes for the whole vault — powers the storage treemap. */
+  const listAllSizes = async (userId: string) => {
+    return deps.repository.listAllMediaSizes(userId);
+  };
+
+  /** Aggregate counts/storage/type breakdown for the overview header + viz. */
+  const getStats = async (userId: string) => {
+    return deps.repository.getMediaStats(userId);
+  };
+
+  return { listMedia, listTopTags, listAllSizes, getStats };
 }

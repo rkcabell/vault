@@ -695,6 +695,43 @@ export class MediaRepository {
   }
 
   /**
+   * Minimal per-file size data for the entire vault, largest first. Powers the
+   * storage treemap, which needs every file's relative size — not just a page.
+   * Backed by the [userId, sizeBytes desc] index; zero-byte rows are skipped
+   * since they contribute no area.
+   */
+  async listAllMediaSizes (userId: string) {
+    return this.prisma.media.findMany({
+      where: { userId, sizeBytes: { gt: 0 } },
+      select: { id: true, title: true, filename: true, mimeType: true, sizeBytes: true },
+      orderBy: [{ sizeBytes: "desc" }, { id: "desc" }],
+    });
+  }
+
+  async getMediaStats (userId: string) {
+    const [agg, breakdown] = await this.prisma.$transaction([
+      this.prisma.media.aggregate({
+        where: { userId },
+        _count: { _all: true },
+        _sum: { sizeBytes: true },
+      }),
+      this.prisma.$queryRaw<Array<{ mimeType: string; count: bigint }>>`
+        SELECT "mimeType", COUNT(*)::bigint AS count
+        FROM "Media"
+        WHERE "userId" = ${userId}
+        GROUP BY "mimeType"
+        ORDER BY COUNT(*) DESC
+        LIMIT 20
+      `,
+    ]);
+    return {
+      totalDocs: agg._count._all,
+      storageBytes: Number(agg._sum.sizeBytes ?? 0),
+      typeBreakdown: breakdown.map(r => ({ mimeType: r.mimeType, count: Number(r.count) })),
+    };
+  }
+
+  /**
    * Remove a tag from every Media row owned by the user, and delete its Tag row.
    * Returns the number of Media rows updated.
    */

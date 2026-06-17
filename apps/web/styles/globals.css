@@ -926,6 +926,729 @@ html:not(.dark).theme-garden a.overview-card:focus-visible {
 }
 
 /* --------------------------------------
+   Overview: stat row
+   ------------------------------------ */
+:root {
+  /* File-type buckets — one designated base colour per family, as H S% L%
+     components so individual types can be rendered as derived shades within the
+     family (see components/overview/viz/vizUtils.ts `typeColor`). Used by the
+     treemap, donut, and stat-row "By Type" breakdown. */
+  --bucket-pdf:          2 82% 61%;    /* red    */
+  --bucket-document:     234 76% 60%;  /* blue   */
+  --bucket-spreadsheet:  142 58% 44%;  /* green  */
+  --bucket-presentation: 28 90% 56%;   /* orange */
+  --bucket-image:        188 80% 50%;  /* cyan   */
+  --bucket-video:        268 68% 64%;  /* violet */
+  --bucket-audio:        322 70% 60%;  /* pink   */
+  --bucket-archive:      45 86% 52%;   /* amber  */
+  --bucket-code:         168 60% 42%;  /* teal   */
+  --bucket-other:        220 8% 55%;   /* gray   */
+}
+
+.overview-stat-card {
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.overview-stat-label {
+  font-family: var(--font-inter), 'Inter', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: hsl(var(--muted-foreground));
+}
+
+.overview-stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: hsl(var(--foreground));
+}
+
+.overview-stat-sub {
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.overview-type-bar {
+  height: 4px;
+  border-radius: 2px;
+  background-color: hsl(var(--muted-foreground) / 0.2);
+}
+
+/* --------------------------------------
+   Overview: doc table
+   ------------------------------------ */
+.overview-doc-table {
+  width: 100%;
+  font-size: 0.8125rem;
+  border-collapse: collapse;
+}
+
+.overview-doc-table th {
+  font-family: var(--font-inter), 'Inter', sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: hsl(var(--muted-foreground));
+  padding: 0.5rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.overview-doc-table td {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid hsl(var(--border) / 0.4);
+  color: hsl(var(--foreground));
+}
+
+.overview-doc-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.overview-doc-table__row:hover td {
+  background-color: hsl(var(--muted) / 0.5);
+}
+
+.overview-doc-table__row--inbox td {
+  border-left: 2px solid var(--reminder-today);
+}
+
+.overview-doc-table__row--inbox-error td {
+  border-left: 2px solid var(--reminder-overdue);
+}
+
+.overview-type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 0.625rem;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.04em;
+  padding: 0.125rem 0.375rem;
+}
+
+/* --------------------------------------
+   Viz Panel
+   ------------------------------------ */
+.viz-combined {
+  display: flex;
+  flex: 1;
+  min-height: 440px;
+}
+
+.viz-storage-spine {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 4.25rem;
+  min-width: 0;
+  border-right: 1px solid hsl(var(--border));
+  background-color: hsl(var(--muted) / 0.2);
+}
+
+.viz-storage-spine-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: hsl(var(--muted-foreground));
+}
+
+/* Unused while the donut (VizDonut) is stashed; kept for if it returns. */
+.viz-combined-chart {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 17.5rem;
+  min-width: 0;
+  border-right: 1px solid hsl(var(--border));
+}
+
+.viz-combined-storage {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.viz-section-label {
+  flex-shrink: 0;
+  padding: 0.5rem 0.875rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+  border-bottom: 1px solid hsl(var(--border));
+  background-color: hsl(var(--muted) / 0.4);
+}
+
+.viz-combined-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Storage meter (thin vertical magnitude bar) */
+.viz-storage-meter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  padding: 0.875rem 0;
+  gap: 0.625rem;
+}
+
+.viz-storage-meter-track {
+  position: relative;
+  flex: 1;
+  width: 0.875rem;
+  min-height: 0;
+  border-radius: 999px;
+  background-color: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  overflow: hidden;
+}
+
+.viz-storage-meter-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--meter-fill, 0%);
+  border-radius: 999px;
+  background: linear-gradient(
+    to top,
+    hsl(var(--foreground) / 0.85),
+    hsl(var(--foreground) / 0.45)
+  );
+  transition: height 700ms ease, width 700ms ease;
+}
+
+.viz-storage-meter-value {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.02em;
+  color: hsl(var(--foreground));
+  white-space: nowrap;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .viz-combined {
+    flex-direction: column;
+    height: auto;
+  }
+  .viz-storage-spine,
+  .viz-combined-chart {
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid hsl(var(--border));
+  }
+  .viz-combined-body {
+    height: 16rem;
+  }
+  /* Lay the meter out horizontally when the panel stacks */
+  .viz-storage-spine .viz-combined-body {
+    height: auto;
+  }
+  .viz-storage-meter {
+    flex-direction: row-reverse;
+    justify-content: flex-end;
+    align-items: center;
+    height: auto;
+    padding: 0.875rem;
+    gap: 0.75rem;
+  }
+  .viz-storage-meter-track {
+    flex: 1;
+    width: auto;
+    height: 0.875rem;
+  }
+  .viz-storage-meter-fill {
+    top: 0;
+    bottom: 0;
+    right: auto;
+    height: auto;
+    width: var(--meter-fill, 0%);
+    background: linear-gradient(
+      to right,
+      hsl(var(--foreground) / 0.45),
+      hsl(var(--foreground) / 0.85)
+    );
+  }
+  .viz-storage-meter-value {
+    writing-mode: horizontal-tb;
+    transform: none;
+  }
+}
+
+/* Donut */
+.viz-donut-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 1.25rem;
+  padding: 1rem;
+}
+
+.viz-donut-svg {
+  flex-shrink: 0;
+  width: 200px;
+  height: 200px;
+}
+
+/* Shared legend (spans the full width of the combined card) */
+.viz-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  justify-content: center;
+  font-size: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-top: 1px solid hsl(var(--border));
+  flex-shrink: 0;
+}
+
+.viz-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.viz-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* Treemap */
+.viz-treemap-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.viz-treemap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.viz-treemap-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.viz-treemap-cell {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid hsl(var(--background) / 0.35);
+  cursor: pointer;
+  overflow: hidden;
+  transition: filter 100ms;
+}
+
+.viz-treemap-cell:hover {
+  filter: brightness(1.18);
+  z-index: 1;
+}
+
+.viz-treemap-cell-label {
+  position: absolute;
+  bottom: 2px;
+  left: 3px;
+  right: 3px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: rgba(0,0,0,0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  line-height: 1.2;
+}
+
+.viz-treemap-tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 50;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.75rem;
+  color: hsl(var(--foreground));
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --------------------------------------
+   Explore page (dedicated treemap)
+   ------------------------------------ */
+.explore-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1.25rem 1.75rem;
+  margin-bottom: 1rem;
+  padding: 0.875rem 1.1rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  background-color: hsl(var(--muted) / 0.3);
+}
+
+.explore-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 13rem;
+}
+
+.explore-control-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+.explore-control-value {
+  font-family: ui-monospace, monospace;
+  color: hsl(var(--muted-foreground));
+}
+
+.explore-control input[type="range"] {
+  width: 100%;
+  accent-color: hsl(var(--primary));
+  cursor: pointer;
+}
+
+.explore-control-hint {
+  font-size: 0.68rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.explore-control-reset {
+  margin-left: auto;
+  align-self: center;
+  font-size: 0.75rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+  cursor: pointer;
+  transition: color 150ms, background-color 150ms;
+}
+
+.explore-control-reset:hover:not(:disabled) {
+  color: hsl(var(--foreground));
+  background-color: hsl(var(--accent));
+}
+
+.explore-control-reset:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* full-vault storage treemap, sized to dominate the viewport */
+.explore-treemap {
+  position: relative;
+  height: min(72vh, 760px);
+  width: 100%;
+}
+
+.explore-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 0.75rem;
+  justify-content: center;
+  padding: 0.9rem 1rem;
+  border-top: 1px solid hsl(var(--border));
+  flex-shrink: 0;
+}
+
+.explore-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 150ms, background-color 150ms, border-color 150ms;
+}
+
+.explore-legend-item:hover {
+  color: hsl(var(--foreground));
+  background-color: hsl(var(--muted) / 0.5);
+}
+
+.explore-legend-item--active {
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--foreground) / 0.55);
+  background-color: hsl(var(--muted));
+  box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.3);
+}
+
+.explore-legend-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+/* Treemap selection / category highlight (driven by the legend + click) */
+.viz-treemap-cell--highlight {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.92);
+  z-index: 1;
+}
+
+/* Non-matching tiles fade back (60%) while a category filter is active. */
+.viz-treemap-cell--dimmed {
+  opacity: 0.6;
+  transition: opacity 150ms;
+}
+
+.viz-treemap-cell--selected {
+  box-shadow: inset 0 0 0 3px #fff;
+  z-index: 2;
+}
+
+/* Detail bar under the grid — one compact row, Library-list density */
+.explore-statbar {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-top: 1rem;
+  padding: 0.7rem 1rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  background-color: hsl(var(--card));
+  font-size: 0.875rem;
+  min-height: 3rem;
+}
+
+.explore-statbar--empty {
+  justify-content: center;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8rem;
+}
+
+.explore-statbar-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.explore-statbar-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.explore-statbar-tag {
+  flex-shrink: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: hsl(var(--muted-foreground));
+  width: 4rem;
+  text-align: right;
+}
+
+.explore-statbar-size {
+  flex-shrink: 0;
+  font-family: ui-monospace, monospace;
+  color: hsl(var(--muted-foreground));
+  width: 4.5rem;
+  text-align: right;
+}
+
+.explore-statbar-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 0.5rem;
+  border: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+  transition: background-color 150ms;
+}
+
+.explore-statbar-link:hover {
+  background-color: hsl(var(--accent));
+}
+
+/* --------------------------------------
+   Overview: worker cards
+   ------------------------------------ */
+.overview-worker-card {
+  background-color: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+
+.overview-worker-label {
+  font-family: var(--font-inter), 'Inter', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: hsl(var(--muted-foreground));
+  margin-bottom: 0.5rem;
+}
+
+.overview-worker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.375rem 0;
+  border-bottom: 1px solid hsl(var(--border) / 0.4);
+  font-size: 0.75rem;
+}
+
+.overview-worker-row:last-child {
+  border-bottom: none;
+}
+
+.overview-worker-count {
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: hsl(var(--foreground));
+}
+
+/* Worker status / failed-count colour modifiers */
+.overview-worker-status--active { color: var(--status-healthy); }
+.overview-worker-status--idle   { color: hsl(var(--muted-foreground)); }
+.overview-worker-row--failed    { color: var(--reminder-overdue); }
+.overview-worker-count--failed  { color: var(--reminder-overdue); }
+
+/* Label/value pairs inside the server info card */
+.overview-system-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.375rem 0;
+  border-bottom: 1px solid hsl(var(--border) / 0.4);
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+}
+.overview-system-info-row:last-child { border-bottom: none; }
+
+.overview-system-info-value {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--foreground));
+}
+
+/* Compact service list inside the system panel */
+.overview-service-list {
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: hsl(var(--card));
+}
+
+.overview-service-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid hsl(var(--border) / 0.5);
+  font-size: 0.8125rem;
+}
+
+.overview-service-row:last-child {
+  border-bottom: none;
+}
+
+.overview-service-row-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: hsl(var(--foreground));
+  font-weight: 500;
+}
+
+.overview-service-row-status {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* Overdue count pill on the Reminders header */
+.reminders-overdue-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.35rem;
+  border-radius: 9999px;
+  background: var(--reminder-overdue);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+html.dark .reminders-overdue-badge,
+:root[data-theme="dark"] .reminders-overdue-badge,
+[data-theme="dark"] .reminders-overdue-badge {
+  color: #1a1a1a;
+}
+
+/* --------------------------------------
    Reminders surfaces
    ------------------------------------ */
 .reminders-section {
@@ -952,20 +1675,8 @@ html:not(.dark).theme-garden a.overview-card:focus-visible {
   gap: 0.25rem;
 }
 
-.reminders-open-link {
-  padding: 0 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: hsl(var(--muted-foreground));
-  text-underline-offset: 2px;
-}
-
-.reminders-open-link:hover {
-  text-decoration: underline;
-}
-
 .reminders-panel {
-  background-color: hsl(var(--muted));
+  background-color: hsl(var(--card));
   border: 1px solid hsl(var(--border));
   border-radius: 1rem;
   padding: 1rem;

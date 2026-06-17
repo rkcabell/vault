@@ -26,6 +26,7 @@ interface TopNavProps {
 const navLinks = [
   { href: '/overview', label: 'Overview' },
   { href: '/library', label: 'Library' },
+  { href: '/explore', label: 'Explore' },
   { href: '/bundles', label: 'Bundles' },
   { href: '/reminders', label: 'Reminders' },
 ];

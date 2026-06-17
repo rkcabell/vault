@@ -17,7 +17,7 @@ export const initRoutes: FastifyPluginAsync = async app => {
     const now = new Date();
     const preferencesPromise = app.preferencesService.getPreferences(userId);
 
-    const [profile, preferences, rawTags, bundles, totalActive, overviewResult] =
+    const [profile, preferences, rawTags, bundles, totalActive, overviewResult, mediaStats] =
       await Promise.all([
         profileService.getProfile(userId),
         preferencesPromise,
@@ -32,6 +32,7 @@ export const initRoutes: FastifyPluginAsync = async app => {
             now,
           )
         ),
+        mediaRepo.getMediaStats(userId).catch(() => ({ totalDocs: 0, storageBytes: 0, typeBreakdown: [] as Array<{ mimeType: string; count: number }> })),
       ]);
 
     return reply.send({
@@ -49,6 +50,7 @@ export const initRoutes: FastifyPluginAsync = async app => {
       bundles,
       remindersSummary: { ...overviewResult.counts, totalActive, soonWindowDays: (preferences.soonWindowDays as number | undefined) ?? SOON_WINDOW_DAYS },
       overviewReminders: { items: overviewResult.items },
+      mediaStats,
     });
   });
 };

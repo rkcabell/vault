@@ -4,7 +4,6 @@ import { NextResponse, type NextRequest } from 'next/server'
 // Public routes that do NOT require auth:
 const PUBLIC_PREFIXES = [
   '/auth',
-  '/shared',
   '/_next',
   '/favicon',
   '/icons',
