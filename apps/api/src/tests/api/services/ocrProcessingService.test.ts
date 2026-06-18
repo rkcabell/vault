@@ -7,6 +7,8 @@ import {
   type OcrProcessingDeps,
 } from "@/services/ocrProcessingService.js";
 import { TextJobError } from "@/lib/text/processTextJob.js";
+import { createS3Adapter } from "@/adapters/s3Adapter.js";
+import type { S3Client } from "@aws-sdk/client-s3";
 import type { Logger } from "pino";
 
 const logger = {
@@ -72,7 +74,7 @@ function makeDeps (opts: {
     documentRepository: {
       upsertDocument: opts.upsertDocument ?? (async () => {}),
     } as unknown as OcrProcessingDeps["documentRepository"],
-    s3: { send: opts.s3Send ?? (async () => ({})) } as unknown as OcrProcessingDeps["s3"],
+    storage: createS3Adapter({ send: opts.s3Send ?? (async () => ({})) } as unknown as S3Client),
     bucket: "test-bucket",
     enqueueOcr: opts.enqueueOcr ?? (async () => {}),
     logger,

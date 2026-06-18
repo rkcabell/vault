@@ -4,6 +4,7 @@ import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { HeadObjectCommand } from "@aws-sdk/client-s3";
 import { s3 } from "@/plugins/s3Client.js";
+import { createS3Adapter } from "@/adapters/s3Adapter.js";
 import { prisma } from "@vault/db";
 import { processOcrJob, type OcrDeps } from "@/worker/ocrWorker.js";
 
@@ -75,7 +76,7 @@ function mockDocumentUpsert (fn: (args: any) => any) {
 function mockOcrDeps (): OcrDeps {
   return {
     prisma,
-    s3,
+    storage: createS3Adapter(s3),
     bucket: "test-bucket",
     enqueueOcr: async () => {},
     sleep: async () => {},

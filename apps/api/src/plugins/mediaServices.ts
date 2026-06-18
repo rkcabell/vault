@@ -1,7 +1,6 @@
 import fp from "fastify-plugin";
 import { Queue } from "bullmq";
 import { buildRedisConnection } from "../lib/config/redis.js";
-import { createS3Adapter } from "../adapters/s3Adapter.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
 import { createMediaUploadService } from "../services/media/mediaUploadService.js";
@@ -38,7 +37,7 @@ export default fp(
 
     const repository = new MediaRepository(app.prisma);
     const bundleRepository = new BundleRepository(app.prisma);
-    const s3Adapter = createS3Adapter(app.s3);
+    const s3Adapter = app.storage;
 
     const services: MediaServices = {
       uploadService: createMediaUploadService({

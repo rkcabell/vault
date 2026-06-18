@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import { s3 } from "@/plugins/s3Client.js";
+import { createS3Adapter } from "@/adapters/s3Adapter.js";
 import { prisma } from "@vault/db";
 import { processThumb, type ThumbDeps } from "@/worker/thumbWorker.js";
 
@@ -33,7 +34,7 @@ function mockS3Send (fn: (cmd: any) => any) {
 function mockThumbDeps (): ThumbDeps {
   return {
     prisma,
-    s3,
+    storage: createS3Adapter(s3),
     bucket: "test-bucket",
   };
 }

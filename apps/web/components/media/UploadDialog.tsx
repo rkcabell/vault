@@ -16,7 +16,16 @@ export function UploadDialog({ onUploaded }: { onUploaded: ()=>void }) {
       const contentType = file.type || "application/octet-stream";
       const title = file.name.replace(/\.[^/.]+$/, "");
       const { id, putUrl } = await initUpload(file.name, contentType, file.size, title);
-      await fetch(putUrl, { method: "PUT", body: file });
+      // Same-origin proxy uploads (filesystem backend) need the auth cookie;
+      // absolute presigned MinIO URLs must not carry credentials.
+      const isProxyUpload = putUrl.startsWith("/");
+      const res = await fetch(putUrl, {
+        method: "PUT",
+        headers: { "Content-Type": contentType },
+        body: file,
+        ...(isProxyUpload ? { credentials: "include" as const } : {}),
+      });
+      if (!res.ok) throw new Error(`Upload failed (${res.status}).`);
       // optimistic ping; optional polling for READY
       await pollReady(id, 12, 1000);
       onUploaded();

@@ -2,6 +2,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  experimental: {
+    middlewareClientMaxBodySize: "2gb",
+  },
   env: {
     NEXT_PUBLIC_NODE_ENV: process.env.NODE_ENV,
   },

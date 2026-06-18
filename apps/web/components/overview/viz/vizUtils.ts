@@ -49,7 +49,7 @@ export const BUCKET_ORDER: BucketKey[] = [
  * Fallback base colours (H, S, L) used only during SSR / if the CSS variable
  * can't be read. Keep in sync with the `--bucket-*` definitions in globals.css.
  */
-const FALLBACK_BASE: Record<BucketKey, [number, number, number]> = {
+export const FALLBACK_BASE: Record<BucketKey, [number, number, number]> = {
   pdf:          [2,   82, 61],
   image:        [188, 80, 50],
   document:     [234, 76, 60],
@@ -103,6 +103,9 @@ export function bucketColor(b: BucketKey): string {
 // ---- per-type shade derivation -------------------------------------------
 
 const baseCache = new Map<BucketKey, { h: number; s: number; l: number }>();
+
+/** Call after programmatically changing `--bucket-*` CSS variables so colors are re-read. */
+export function clearBaseCache() { baseCache.clear(); }
 
 function baseHsl(b: BucketKey): { h: number; s: number; l: number } {
   if (typeof window !== "undefined") {

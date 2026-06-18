@@ -5,7 +5,6 @@ import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 
 import { prisma } from "@vault/db";
-import { s3 } from "../plugins/s3Client.js";
 import { createOcrProcessor, type OcrJobData } from "./ocrWorker.js";
 import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumbWorker.js";
 import { createUnpackProcessor } from "./unpackWorker.js";
@@ -19,12 +18,12 @@ import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
 import { TextJobError } from "../lib/text/processTextJob.js";
 import { markStalledJobs } from "../services/stallDetectionService.js";
-import { createS3Adapter } from "../adapters/s3Adapter.js";
+import { createWorkerStorage, workerBucket } from "./storageFromEnv.js";
 import type { UnpackJob } from "../queues/enqueueUnpack.js";
 import { UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
-const BUCKET = requiredEnv("S3_BUCKET");
+const BUCKET = workerBucket();
 
 const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
 const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
@@ -51,7 +50,8 @@ async function main () {
       .catch(err => logger.warn({ err }, "failed to publish job update"));
   };
 
-  const s3Adapter = createS3Adapter(s3);
+  const s3Adapter = createWorkerStorage();
+
   const mediaRepository = new MediaRepository(prisma);
   const bundleRepository = new BundleRepository(prisma);
   const metadataRepository = new MediaMetadataRepository(prisma);
@@ -69,7 +69,7 @@ async function main () {
     createOcrProcessor({
       mediaRepository,
       documentRepository,
-      s3,
+      storage: s3Adapter,
       bucket: BUCKET,
       enqueueOcr: async (data, opts) => ocrQueue.add("ocr", data, opts),
       logger: ocrLogger,
@@ -91,7 +91,7 @@ async function main () {
       prismaMedia: mediaRepository,
       metadataRepository,
       preferencesService,
-      s3,
+      storage: s3Adapter,
       bucket: BUCKET,
       logger: thumbLogger,
       queueName: THUMB_QUEUE,
@@ -297,23 +297,9 @@ main().catch(err => {
   process.exit(1);
 });
 
-function requiredEnv (name: string): string {
-  const v = process.env[name];
-  if (!v) throw new MissingEnvError(name);
-  return v;
-}
-
 function parseEnvNumber (name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-class MissingEnvError extends Error {
-  code = "ENV_MISSING";
-  constructor (public variable: string) {
-    super(`${variable} env var is required`);
-    this.name = "MissingEnvError";
-  }
 }

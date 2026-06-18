@@ -51,6 +51,8 @@ export default function ServerPage() {
   const [ocrCounts,      setOcrCounts]      = useState<QueueCounts | null>(null);
   const [thumbCounts,    setThumbCounts]    = useState<QueueCounts | null>(null);
   const [minioConsoleUrl, setMinioConsoleUrl] = useState<string | null>(null);
+  const [storageDriver,  setStorageDriver]  = useState<"s3" | "fs" | null>(null);
+  const [storagePath,    setStoragePath]    = useState<string | null>(null);
   const [storageBytes,   setStorageBytes]   = useState<number | null>(null);
   const [storageCount,   setStorageCount]   = useState<number | null>(null);
   const webPort = "3000";
@@ -91,12 +93,17 @@ export default function ServerPage() {
     ]);
 
     if (statusRes.status === "fulfilled") {
-      const s = statusRes.value as { apiPort: number; corsOrigin: string; uptimeSeconds: number; memoryMB: number; minioConsoleUrl: string };
+      const s = statusRes.value as {
+        apiPort: number; corsOrigin: string; uptimeSeconds: number; memoryMB: number;
+        minioConsoleUrl: string | null; storageDriver?: "s3" | "fs"; storagePath?: string | null;
+      };
       setApiPort(String(s.apiPort));
       setCorsOrigin(s.corsOrigin ?? "");
       setUptimeSeconds(s.uptimeSeconds ?? null);
       setMemoryMB(s.memoryMB ?? null);
       setMinioConsoleUrl(s.minioConsoleUrl ?? null);
+      setStorageDriver(s.storageDriver ?? null);
+      setStoragePath(s.storagePath ?? null);
     }
     if (workersRes.status === "fulfilled") {
       const w = workersRes.value as {
@@ -128,11 +135,21 @@ export default function ServerPage() {
     };
   }, [poll, loadServerInfo]);
 
+  // Refresh worker counts immediately whenever any job completes or fails,
+  // rather than waiting for the 30s poll interval.
+  useEffect(() => {
+    const es = new EventSource("/api/media/events");
+    es.addEventListener("message", () => { void loadServerInfo(); });
+    return () => es.close();
+  }, [loadServerInfo]);
+
+  const storageName = storageDriver === "fs" ? "Filesystem" : "MinIO";
+
   const overviewServices: { name: string; status: ServiceStatus }[] = [
-    { name: "API",      status: api   },
-    { name: "Database", status: db    },
-    { name: "Redis",    status: redis },
-    { name: "MinIO",    status: minio },
+    { name: "API",       status: api   },
+    { name: "Database",  status: db    },
+    { name: "Redis",     status: redis },
+    { name: storageName, status: minio },
   ];
 
   return (
@@ -260,11 +277,12 @@ export default function ServerPage() {
             />
             <ServiceCard
               icon={<HardDrive className="h-4 w-4" />}
-              name="MinIO"
-              detail="Port 9000"
+              name={storageName}
+              detail={storageDriver === "fs" ? (storagePath ?? "Filesystem path") : "Port 9000"}
+              subDetail={storageDriver === "fs" ? "Filesystem" : undefined}
               status={minio}
-              href={minioConsoleUrl ?? undefined}
-              linkLabel="View storage"
+              href={storageDriver === "fs" ? undefined : (minioConsoleUrl ?? undefined)}
+              linkLabel={storageDriver === "fs" ? undefined : "View storage"}
             />
           </div>
         </div>

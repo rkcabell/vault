@@ -19,6 +19,7 @@ const preferencesSchema = z
     yellowHighlight: z.boolean().optional(),
     lightTheme: z.enum(["default", "latte", "sandstone", "mist", "lavender", "dream", "cotton-candy", "mint", "garden"]).optional(),
     darkTheme: z.enum(["new-moon", "matrix", "charcoal", "solarized"]).optional(),
+    exploreBucketColors: z.record(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   })
   .strict();
 

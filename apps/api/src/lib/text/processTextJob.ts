@@ -1,8 +1,8 @@
 // File: apps/api/src/lib/text/processTextJob.ts
-import type { S3Client } from "@aws-sdk/client-s3";
 import { extractPdfText, type PdfTextPage } from "@/services/pdf/extractPdfText.js";
 import { ocrWithOcrmypdf } from "@/services/ocr/ocrWithOcrmypdf.js";
-import { getObjectBuffer } from "../../adapters/s3/getObjectBuffer.js";
+import { readObjectBuffer } from "../../adapters/storage/getObjectBuffer.js";
+import type { StorageAdapter } from "../../adapters/storage/types.js";
 import { looksLikeHeic } from "../../lib/fileSignatures.js";
 
 export type TextSource = "NATIVE" | "OCR";
@@ -31,7 +31,7 @@ export type ProcessTextResult = {
 };
 
 export type ProcessTextJobDeps = {
-  getObjectBuffer?: typeof getObjectBuffer;
+  getObjectBuffer?: typeof readObjectBuffer;
   ocrWithOcrmypdf?: typeof ocrWithOcrmypdf;
   isBlankImage?: (buffer: Buffer) => Promise<boolean>;
   logger?: { info: (ctx: object, msg: string) => void };
@@ -57,7 +57,7 @@ export type ProcessTextJobDeps = {
  */
 export async function processTextJob (
   args: {
-    s3: S3Client;
+    storage: StorageAdapter;
     bucket: string;
     key: string;
     mimeType?: string | null;
@@ -69,8 +69,8 @@ export async function processTextJob (
   },
   deps: ProcessTextJobDeps = {},
 ): Promise<ProcessTextResult> {
-  const { s3, bucket, key, mimeType, forceOcr, language, rotation, onProgress, abortSignal } = args;
-  const getBuffer = deps.getObjectBuffer ?? getObjectBuffer;
+  const { storage, bucket, key, mimeType, forceOcr, language, rotation, onProgress, abortSignal } = args;
+  const getBuffer = deps.getObjectBuffer ?? readObjectBuffer;
   const runOcrmypdf = deps.ocrWithOcrmypdf ?? ocrWithOcrmypdf;
   const checkBlankImage = deps.isBlankImage ?? isBlankImage;
   const log = deps.logger;
@@ -82,7 +82,7 @@ export async function processTextJob (
   if (isPdf && !forceOcr) {
     log?.info(ctx, "[text] s3 download start");
     const t0 = Date.now();
-    const pdfBuffer = await getBuffer(s3, bucket, key);
+    const pdfBuffer = await getBuffer(storage, bucket, key);
     log?.info({ ...ctx, bytes: pdfBuffer?.length ?? 0, ms: Date.now() - t0 }, "[text] s3 download done");
     if (!pdfBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 
@@ -101,7 +101,7 @@ export async function processTextJob (
 
   log?.info(ctx, "[text] s3 download start (ocr path)");
   const t2 = Date.now();
-  const sourceBuffer = await getBuffer(s3, bucket, key);
+  const sourceBuffer = await getBuffer(storage, bucket, key);
   log?.info({ ...ctx, bytes: sourceBuffer?.length ?? 0, ms: Date.now() - t2 }, "[text] s3 download done (ocr path)");
   if (!sourceBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 

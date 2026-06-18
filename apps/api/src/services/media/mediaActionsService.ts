@@ -142,6 +142,13 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     // Clear coverMediaId on any bundle that used this media as its cover.
     await deps.bundleRepository.clearCoverMedia(id);
 
+    // Remove any BullMQ jobs for this media item so failed counts stay accurate.
+    // OCR jobs use jobId "ocr-{id}"; thumb jobs use jobId "{id}".
+    await Promise.allSettled([
+      deps.ocrQueue.getJob(`ocr-${id}`).then(job => job?.remove().catch(() => {})),
+      deps.thumbQueue.getJob(id).then(job => job?.remove().catch(() => {})),
+    ]);
+
     return { ok: true };
   };
 
@@ -186,7 +193,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
         rotation: options.rotation,
         forceOcr: options.forceOcr ?? false,
       },
-      { attempts: 1, jobId: `ocr-${media.id}` },
+      { attempts: 1, jobId: `ocr-${media.id}`, removeOnFail: true, removeOnComplete: true },
     );
 
     await deps.repository.setTextStatePending(id);
@@ -271,7 +278,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
         outKey: computeThumbKey(id),
         size: 512,
       },
-      { jobId: `thumb-regen-${id}-${Date.now()}`, attempts: 3, backoff: { type: "exponential", delay: 2000 } },
+      { jobId: `thumb-regen-${id}-${Date.now()}`, attempts: 3, backoff: { type: "exponential", delay: 2000 }, removeOnFail: true, removeOnComplete: true },
     );
 
     return { ok: true };

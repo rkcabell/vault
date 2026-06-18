@@ -7,7 +7,7 @@ import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 
 import { prisma } from "@vault/db";
-import { s3 } from "../plugins/s3Client.js";
+import { createWorkerStorage, workerBucket } from "./storageFromEnv.js";
 import { readLowMemoryPreference } from "./workerPrefs.js";
 import { createOcrProcessor, type OcrJobData } from "./ocrWorker.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
@@ -18,7 +18,7 @@ import { TextJobError } from "../lib/text/processTextJob.js";
 import { markStalledJobs } from "../services/stallDetectionService.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
-const BUCKET = requiredEnv("S3_BUCKET");
+const BUCKET = workerBucket();
 
 // Env var takes precedence; falls back to the DB preference set via the web UI.
 const LOW_MEMORY = process.env.LOW_MEMORY === "true" || process.env.LOW_MEMORY === "1"
@@ -49,6 +49,7 @@ async function main() {
 
   const mediaRepository    = new MediaRepository(prisma);
   const documentRepository = new DocumentRepository(prisma);
+  const storage            = createWorkerStorage();
 
   const ocrLogger = logger.child({ queue: OCR_QUEUE, jobName: "ocr" });
   const ocrQueue  = new Queue<OcrJobData>(OCR_QUEUE, { connection });
@@ -58,7 +59,7 @@ async function main() {
     createOcrProcessor({
       mediaRepository,
       documentRepository,
-      s3,
+      storage,
       bucket: BUCKET,
       enqueueOcr: async (data, opts) => ocrQueue.add("ocr", data, opts),
       logger: ocrLogger,
@@ -182,23 +183,9 @@ main().catch(err => {
   process.exit(1);
 });
 
-function requiredEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new MissingEnvError(name);
-  return v;
-}
-
 function parseEnvNumber(name: string, fallback: number): number {
   const raw    = process.env[name];
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-class MissingEnvError extends Error {
-  code = "ENV_MISSING";
-  constructor(public variable: string) {
-    super(`${variable} env var is required`);
-    this.name = "MissingEnvError";
-  }
 }

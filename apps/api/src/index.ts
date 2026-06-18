@@ -10,6 +10,7 @@ import jwtPlugin from "./plugins/jwt.js";
 import { authRoutes } from "./routes/auth.js";
 import { profileRoutes } from "./routes/profile.js";
 import s3Plugin from "./plugins/s3.js";
+import storagePlugin from "./plugins/storage.js";
 import mediaServicesPlugin from "./plugins/mediaServices.js";
 import { mediaRoutes } from "./routes/media.js";
 import { tagsRoutes } from "./routes/tags.js";
@@ -18,6 +19,7 @@ import { bundlesRoutes } from "./routes/bundles.js";
 import { preferencesRoutes } from "./routes/preferences.js";
 import { initRoutes } from "./routes/init.js";
 import { serverRoutes } from "./routes/server.js";
+import { storageRoutes } from "./routes/storage.js";
 import preferencesPlugin from "./plugins/preferences.js";
 import queueEventsPlugin from "./plugins/queueEvents.js";
 import redisPlugin from "./plugins/redis.js";
@@ -86,7 +88,8 @@ async function main () {
   await app.register(jwtPlugin); // registers jwt plugin
   await app.register(authRoutes, { prefix: "/api/auth" }); // auth routes plugin
   await app.register(profileRoutes, { prefix: "/api/profile" });
-  await app.register(s3Plugin); // aws bucket storage
+  await app.register(s3Plugin); // S3/MinIO client (s3 mode only)
+  await app.register(storagePlugin); // app.storage adapter (s3 or filesystem)
   await app.register(preferencesPlugin); // shared PreferencesService singleton
   await app.register(mediaServicesPlugin); // media services + queues wiring
   await app.register(queueEventsPlugin); // shared QueueEvents + jobEvents emitter for SSE
@@ -97,6 +100,7 @@ async function main () {
   await app.register(preferencesRoutes, { prefix: "/api/preferences" });
   await app.register(initRoutes, { prefix: "/api/init" });
   await app.register(serverRoutes, { prefix: "/api/server" });
+  await app.register(storageRoutes, { prefix: "/api/storage" });
   await app.register(redisPlugin); // Redis for queue/rate-limit groundwork
   await app.register(rateLimitPlugin); // Redis rate limit
 
