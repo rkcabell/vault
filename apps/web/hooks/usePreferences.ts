@@ -23,6 +23,11 @@ const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
   darkTheme: "prefs:darkTheme",
 };
 
+// Keys whose values are JSON objects rather than scalars.
+const LS_JSON_KEYS: Partial<Record<keyof Preferences, string>> = {
+  exploreBucketColors: "prefs:exploreBucketColors",
+};
+
 function readFromLocalStorage(): Partial<Preferences> {
   const out: Partial<Preferences> = {};
   try {
@@ -46,6 +51,12 @@ function readFromLocalStorage(): Partial<Preferences> {
     if (out.themePreference !== undefined && !["system", "light", "dark"].includes(out.themePreference)) delete out.themePreference;
     if (out.lightTheme !== undefined && !["default", "latte", "sandstone", "mist", "lavender", "dream", "cotton-candy", "mint", "garden"].includes(out.lightTheme)) delete out.lightTheme;
     if (out.darkTheme !== undefined && !["new-moon", "matrix", "charcoal", "solarized"].includes(out.darkTheme)) delete out.darkTheme;
+
+    for (const [key, lsKey] of Object.entries(LS_JSON_KEYS) as [keyof Preferences, string][]) {
+      const raw = localStorage.getItem(lsKey);
+      if (raw === null) continue;
+      try { (out as Record<string, unknown>)[key] = JSON.parse(raw); } catch { /* ignore */ }
+    }
   } catch {
     // ignore
   }
@@ -57,6 +68,10 @@ function syncToLocalStorage(patch: Partial<Preferences>) {
     for (const [key, lsKey] of Object.entries(LS_KEYS) as [keyof Preferences, string][]) {
       if (!(key in patch)) continue;
       localStorage.setItem(lsKey, String(patch[key]));
+    }
+    for (const [key, lsKey] of Object.entries(LS_JSON_KEYS) as [keyof Preferences, string][]) {
+      if (!(key in patch)) continue;
+      localStorage.setItem(lsKey, JSON.stringify(patch[key]));
     }
   } catch {
     // ignore

@@ -16,7 +16,7 @@ async function buildApp(opts: BuildOpts = {}) {
   const app = Fastify({ logger: false });
   await app.register(sensible);
 
-  (app as any).decorate("config", { S3_BUCKET: "vault-media" });
+  (app as any).decorate("config", { S3_BUCKET: "vault-media", STORAGE_DRIVER: "s3" });
   (app as any).decorate("prisma", {
     $queryRaw: opts.dbQueryRaw ?? (() => Promise.resolve([{ "?column?": 1 }])),
   });

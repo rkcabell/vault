@@ -16,6 +16,7 @@ export type Preferences = {
   yellowHighlight: boolean;
   lightTheme: LightTheme;
   darkTheme: DarkTheme;
+  exploreBucketColors: Record<string, string>;
 };
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -33,4 +34,5 @@ export const DEFAULT_PREFERENCES: Preferences = {
   yellowHighlight: false,
   lightTheme: "default",
   darkTheme: "new-moon",
+  exploreBucketColors: {},
 };

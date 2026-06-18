@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import type { S3Client } from "@aws-sdk/client-s3";
+import type { StorageAdapter } from "../adapters/storage/types.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import {
   createThumbProcessor,
@@ -12,7 +12,7 @@ import { createLogger } from "../lib/logger.js";
 
 export type ThumbDeps = {
   prisma: PrismaClient;
-  s3: S3Client;
+  storage: StorageAdapter;
   bucket: string;
   logger?: ServiceThumbDeps["logger"];
   queueName?: string;
@@ -23,7 +23,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob) {
   const logger = deps.logger ?? createLogger("thumb-test");
   const serviceDeps: ServiceThumbDeps = {
     prismaMedia: new MediaRepository(deps.prisma),
-    s3: deps.s3,
+    storage: deps.storage,
     bucket: deps.bucket,
     logger,
     queueName: deps.queueName ?? process.env.THUMB_QUEUE ?? "thumb_queue",

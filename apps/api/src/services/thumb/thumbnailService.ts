@@ -4,13 +4,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
-import type { Readable } from "node:stream";
-import { GetObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import type { Logger } from "pino";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { MediaMetadataRepository } from "../../repositories/mediaMetadataRepository.js";
+import type { StorageAdapter } from "../../adapters/storage/types.js";
+import { readObjectBuffer } from "../../adapters/storage/getObjectBuffer.js";
 import { waitUntilObjectExists } from "../../adapters/s3ObjectProbe.js";
-import { streamToBuffer } from "../../lib/streams/toBuffer.js";
 import { looksLikeHeic, looksLikeMp4, looksLikePdf, looksLikePng } from "../../lib/fileSignatures.js";
 import { renderPdfThumbnail } from "./renderPdfThumbnail.js";
 import { renderVideoThumbnail } from "./renderVideoThumbnail.js";
@@ -24,7 +23,7 @@ export type ThumbDeps = {
   prismaMedia: MediaRepository;
   metadataRepository?: MediaMetadataRepository;
   preferencesService?: PrefsLookup;
-  s3: S3Client;
+  storage: StorageAdapter;
   bucket: string;
   logger: Logger;
   queueName: string;
@@ -48,18 +47,6 @@ export function sanitizeThumbError (err: unknown): string {
   return cleaned.length > MAX_THUMB_ERROR_LENGTH
     ? cleaned.slice(0, MAX_THUMB_ERROR_LENGTH)
     : cleaned;
-}
-
-/** Download an S3 object to a Buffer. Returns null (never throws) on any error. */
-async function getObjectToBuffer (s3: S3Client, bucket: string, key: string): Promise<Buffer | null> {
-  try {
-    const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-    const body = res.Body;
-    if (!body) return null;
-    return streamToBuffer(body as NodeJS.ReadableStream);
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -135,7 +122,7 @@ const FORMAT_HANDLERS: FormatHandler[] = [
  * so BullMQ can retry them.
  */
 export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<void> {
-  const { prismaMedia, s3, bucket, logger } = deps;
+  const { prismaMedia, storage, bucket, logger } = deps;
   const startedAt = Date.now();
 
   const size = Math.max(16, Math.min(4096, job.size ?? 512));
@@ -158,7 +145,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
     return;
   }
 
-  const exists = await waitUntilObjectExists(s3, bucket, storageKey, { maxTries: 4 });
+  const exists = await waitUntilObjectExists(storage, bucket, storageKey, { maxTries: 4 });
   if (!exists) throw new Error("SOURCE_NOT_READY");
 
   const mimeType = existing?.mimeType ?? "";
@@ -176,12 +163,12 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   if (isVideo) {
     videoTempDir = await mkdtemp(join(tmpdir(), "vault-src-"));
     videoTempPath = join(videoTempDir, "source.mp4");
-    const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: storageKey }));
-    if (!res.Body) throw new Error("SOURCE_NOT_READY");
-    await pipeline(res.Body as Readable, createWriteStream(videoTempPath));
+    const res = await storage.getObjectStream({ bucket, key: storageKey });
+    if (!res) throw new Error("SOURCE_NOT_READY");
+    await pipeline(res.body, createWriteStream(videoTempPath));
     original = await readFile(videoTempPath);
   } else {
-    const buf = await getObjectToBuffer(s3, bucket, storageKey);
+    const buf = await readObjectBuffer(storage, bucket, storageKey);
     if (!buf) throw new Error("SOURCE_NOT_READY");
     original = buf;
   }
@@ -272,15 +259,13 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
     return;
   }
 
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: bucket,
-      Key: outKey,
-      Body: webp,
-      ContentType: "image/webp",
-      CacheControl: "public, max-age=31536000, immutable",
-    }),
-  );
+  await storage.putObject({
+    bucket,
+    key: outKey,
+    body: webp,
+    contentType: "image/webp",
+    cacheControl: "public, max-age=31536000, immutable",
+  });
 
   await prismaMedia.setThumbReady(job.mediaId, outKey);
   deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "READY" });

@@ -52,6 +52,8 @@ export function makeEnqueueThumbnails (queue: Queue<ThumbJob>) {
       jobId: mediaId,
       attempts: 5,
       backoff: { type: "exponential", delay: 2000 },
+      removeOnFail: true,
+      removeOnComplete: true,
     });
     return outKey;
   };
@@ -77,7 +79,7 @@ export async function enqueueThumbBulk (queue: Queue<ThumbJob>, items: EnqueueTh
       outKey: computeThumbKey(item.mediaId),
       size: item.size ?? 512,
     },
-    opts: { jobId: item.mediaId, attempts: 5, backoff: { type: "exponential", delay: 2000 } },
+    opts: { jobId: item.mediaId, attempts: 5, backoff: { type: "exponential", delay: 2000 }, removeOnFail: true, removeOnComplete: true },
   }));
 
   await queue.addBulk(jobs);

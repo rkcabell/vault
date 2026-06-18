@@ -1,8 +1,17 @@
-import { HeadObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import { setTimeout as delay } from "node:timers/promises";
+import type { StorageAdapter } from "./storage/types.js";
 
+/**
+ * Poll the storage backend until an object exists (newly uploaded objects may
+ * not be immediately readable). Backend-agnostic: works for S3/MinIO and the
+ * filesystem adapter via `StorageAdapter.objectExists`.
+ *
+ * Errors from a single probe (transient backend failures) are swallowed and
+ * retried, matching the original lenient behavior — only a genuine "still
+ * absent after maxTries" returns false.
+ */
 export async function waitUntilObjectExists (
-  s3: S3Client,
+  storage: StorageAdapter,
   bucket: string,
   key: string,
   opts?: { maxTries?: number; baseDelayMs?: number; sleep?: (ms: number) => Promise<unknown> },
@@ -13,11 +22,11 @@ export async function waitUntilObjectExists (
 
   for (let i = 0; i < maxTries; i++) {
     try {
-      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-      return true;
+      if (await storage.objectExists({ bucket, key })) return true;
     } catch {
-      await sleep(baseDelayMs * (i + 1));
+      // transient backend error — fall through to retry
     }
+    await sleep(baseDelayMs * (i + 1));
   }
   return false;
 }

@@ -111,13 +111,32 @@ export default function UploadPage() {
   const uploadOne = async (plan: UploadPlan) => {
     updateFileStatus(plan.fileId, "uploading");
 
-    const res = await fetch(plan.init.putUrl, {
-      method: "PUT",
-      headers: { "Content-Type": plan.contentType },
-      body: plan.file,
-    });
+    // Filesystem-backed storage returns a same-origin proxy URL (/api/storage/blob/...)
+    // that needs the auth cookie; S3/MinIO returns an absolute presigned URL that must
+    // NOT carry credentials. Send cookies only for relative (same-origin) targets.
+    const isProxyUpload = plan.init.putUrl.startsWith("/");
 
-    if (!res.ok) throw new Error(`Upload failed (${res.status}).`);
+    let res: Response;
+    try {
+      res = await fetch(plan.init.putUrl, {
+        method: "PUT",
+        headers: { "Content-Type": plan.contentType },
+        body: plan.file,
+        ...(isProxyUpload ? { credentials: "include" as const } : {}),
+      });
+    } catch (err) {
+      // Network-level failure (offline, DNS, CORS) — distinguish from an HTTP error status.
+      throw new Error(
+        `Upload failed: could not reach storage (${err instanceof Error ? err.message : "network error"}).`,
+      );
+    }
+
+    if (!res.ok) {
+      const detail = isProxyUpload ? await res.text().catch(() => "") : "";
+      throw new Error(
+        `Upload failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})${detail ? `: ${detail.slice(0, 200)}` : ""}.`,
+      );
+    }
 
     updateFileStatus(plan.fileId, "completed");
   };
@@ -240,8 +259,7 @@ export default function UploadPage() {
               Support for images, videos, and documents
             </p>
             <p className="mb-4 text-xs text-muted-foreground">
-              File size limits: photos up to {UPLOAD_LIMIT_LABELS.photo}, documents up to{" "}
-              {UPLOAD_LIMIT_LABELS.document}, other files up to {UPLOAD_LIMIT_LABELS.other} (hard cap).
+              2 GB max per file
             </p>
 
             <input

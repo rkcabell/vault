@@ -1,8 +1,9 @@
 const MB = 1024 * 1024;
+const GB = 1024 * MB;
 
-export const PHOTO_UPLOAD_LIMIT_BYTES = 50 * MB;
-export const DOCUMENT_UPLOAD_LIMIT_BYTES = 250 * MB;
-export const HARD_UPLOAD_LIMIT_BYTES = 500 * MB;
+export const PHOTO_UPLOAD_LIMIT_BYTES = 2 * GB;
+export const DOCUMENT_UPLOAD_LIMIT_BYTES = 2 * GB;
+export const HARD_UPLOAD_LIMIT_BYTES = 2 * GB;
 
 export type UploadKind = "photo" | "document" | "other";
 
@@ -57,9 +58,9 @@ const DOCUMENT_EXTENSIONS = new Set([
 ]);
 
 export const UPLOAD_LIMIT_LABELS: Record<UploadKind, string> = {
-  photo: "50 MB",
-  document: "250 MB",
-  other: "500 MB",
+  photo: "2 GB",
+  document: "2 GB",
+  other: "2 GB",
 };
 
 function getExtension (filename: string): string | null {

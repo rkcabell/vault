@@ -1,6 +1,8 @@
 import { AppearanceCard } from "@/components/settings/AppearanceCard";
 import { GeneralSettingsCard } from "@/components/settings/GeneralSettingsCard";
 import { ManageTagsCard } from "@/components/settings/ManageTagsCard";
+import { StorageSettingsCard } from "@/components/settings/StorageSettingsCard";
+import { ExploreSettingsCard } from "@/components/settings/ExploreSettingsCard";
 
 export default function SettingsPage() {
   return (
@@ -18,6 +20,10 @@ export default function SettingsPage() {
           <AppearanceCard />
         </div>
       </div>
+
+      <StorageSettingsCard />
+
+      <ExploreSettingsCard />
 
       <div className="max-w-2xl">
         <ManageTagsCard />

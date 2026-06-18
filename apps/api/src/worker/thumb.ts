@@ -7,7 +7,7 @@ import { Worker } from "bullmq";
 import IORedis from "ioredis";
 
 import { prisma } from "@vault/db";
-import { s3 } from "../plugins/s3Client.js";
+import { createWorkerStorage, workerBucket } from "./storageFromEnv.js";
 import { readLowMemoryPreference } from "./workerPrefs.js";
 import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumbWorker.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
@@ -16,7 +16,7 @@ import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
 
 const REDIS_URL       = process.env.REDIS_URL ?? "redis://localhost:6379";
-const BUCKET          = requiredEnv("S3_BUCKET");
+const BUCKET          = workerBucket();
 
 // Env var takes precedence; falls back to the DB preference set via the web UI.
 const LOW_MEMORY = process.env.LOW_MEMORY === "true" || process.env.LOW_MEMORY === "1"
@@ -40,6 +40,7 @@ async function main() {
 
   const mediaRepository    = new MediaRepository(prisma);
   const metadataRepository = new MediaMetadataRepository(prisma);
+  const storage            = createWorkerStorage();
 
   const thumbLogger = logger.child({ queue: THUMB_QUEUE, jobName: "thumb" });
 
@@ -48,7 +49,7 @@ async function main() {
     createThumbProcessor({
       prismaMedia: mediaRepository,
       metadataRepository,
-      s3,
+      storage,
       bucket: BUCKET,
       logger: thumbLogger,
       queueName: THUMB_QUEUE,
@@ -136,23 +137,9 @@ main().catch(err => {
   process.exit(1);
 });
 
-function requiredEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new MissingEnvError(name);
-  return v;
-}
-
 function parseEnvNumber(name: string, fallback: number): number {
   const raw    = process.env[name];
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-class MissingEnvError extends Error {
-  code = "ENV_MISSING";
-  constructor(public variable: string) {
-    super(`${variable} env var is required`);
-    this.name = "MissingEnvError";
-  }
 }

@@ -1,0 +1,138 @@
+# Filesystem (NAS) storage variant of the dev/full-stack compose.
+#
+# Identical to docker-compose.yml except blobs are stored on a filesystem path
+# (STORAGE_DRIVER=fs) instead of MinIO/S3. No MinIO container runs. Vault still
+# owns and organizes the files under STORAGE_FS_PATH using the same key scheme.
+#
+# Usage:
+#   cp .env.docker.fs.example .env.docker      # minimal fs-mode env (no S3 vars)
+#   docker compose -f infra/docker/docker-compose.fs.yml up
+#
+# STORAGE_DRIVER and STORAGE_FS_PATH are set in .env.docker (via env_file:), NOT
+# hardcoded here, so editing .env.docker is the single source of truth for the
+# storage path. The .env.docker.fs.example template already sets both to the
+# right defaults (STORAGE_DRIVER=fs, STORAGE_FS_PATH=/data/vault).
+#
+# To put the data on a NAS, replace the `vault-data` named volume with a bind
+# mount to your mounted share, e.g. under each of api / jobs-ocr / jobs-thumb:
+#     volumes:
+#       - /mnt/nas/vault:/data/vault
+# and delete the `vault-data` entry from the top-level `volumes:` block.
+services:
+  postgres:
+    image: postgres:16
+    env_file: ../../.env.docker
+    environment:
+      POSTGRES_DB: vault
+      POSTGRES_USER: ${POSTGRES_USER:-vault}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in .env.docker}
+    ports: [ "5432:5432" ]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vault} -d vault" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports: [ "6379:6379" ]
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  db-migrate:
+    env_file: ../../.env.docker
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: api
+    command: sh -c "pnpm -F @vault/db exec prisma migrate deploy"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    env_file: ../../.env.docker
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: api
+    depends_on:
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: "8000"
+    volumes:
+      - vault-data:/data/vault
+    ports: [ "8000:8000" ]
+    restart: on-failure
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: web
+      args:
+        API_BASE_URL: http://api:8000
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: production
+      API_BASE_URL: http://api:8000
+    ports: [ "3000:3000" ]
+
+  jobs-ocr:
+    env_file: ../../.env.docker
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: jobs
+    command: pnpm -F api run worker:ocr
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+    volumes:
+      - vault-data:/data/vault
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  jobs-thumb:
+    env_file: ../../.env.docker
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: jobs
+    command: pnpm -F api run worker:thumb
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+    volumes:
+      - vault-data:/data/vault
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+volumes:
+  pgdata:
+  vault-data:

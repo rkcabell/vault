@@ -3,8 +3,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
-import type { S3Client } from "@aws-sdk/client-s3";
+import type { StorageAdapter } from "@/adapters/storage/types.js";
 import { processTextJob } from "@/lib/text/processTextJob.js";
+
+/** Build a fake StorageAdapter whose getObjectStream yields the given buffer (or null). */
+function fakeStorage (buffer: Buffer | null): StorageAdapter {
+  return {
+    getObjectStream: async () =>
+      buffer ? { body: Readable.from(buffer), etag: null, contentLength: buffer.length } : null,
+  } as unknown as StorageAdapter;
+}
 
 function buildMinimalPdf (text: string): Buffer {
   const stream = `BT /F1 24 Tf 72 120 Td (${text}) Tj ET`;
@@ -45,12 +53,9 @@ function buildMinimalPdf (text: string): Buffer {
 
 test("processTextJob extracts native text for PDFs", async () => {
   const pdf = buildMinimalPdf("Hello");
-  const s3 = {
-    send: async () => ({ Body: Readable.from(pdf) }),
-  } as unknown as S3Client;
 
   const result = await processTextJob({
-    s3,
+    storage: fakeStorage(pdf),
     bucket: "bucket",
     key: "file.pdf",
     mimeType: "application/pdf",
@@ -62,11 +67,10 @@ test("processTextJob extracts native text for PDFs", async () => {
 });
 
 test("processTextJob runs OCRmyPDF for non-PDFs", async () => {
-  const s3 = { send: async () => ({}) } as unknown as S3Client;
   const ocrCalls: unknown[] = [];
   const result = await processTextJob(
     {
-      s3,
+      storage: fakeStorage(Buffer.from("ignored")),
       bucket: "bucket",
       key: "file.png",
       mimeType: "image/png",
@@ -91,11 +95,10 @@ test("processTextJob runs OCRmyPDF for non-PDFs", async () => {
 });
 
 test("processTextJob skips OCR and returns empty for blank images", async () => {
-  const s3 = { send: async () => ({}) } as unknown as S3Client;
   const ocrCalls: unknown[] = [];
   const result = await processTextJob(
     {
-      s3,
+      storage: fakeStorage(Buffer.from("ignored")),
       bucket: "bucket",
       key: "file.png",
       mimeType: "image/png",
@@ -117,11 +120,10 @@ test("processTextJob skips OCR and returns empty for blank images", async () => 
 });
 
 test("processTextJob runs OCR normally when blank check returns false", async () => {
-  const s3 = { send: async () => ({}) } as unknown as S3Client;
   const ocrCalls: unknown[] = [];
   const result = await processTextJob(
     {
-      s3,
+      storage: fakeStorage(Buffer.from("ignored")),
       bucket: "bucket",
       key: "file.png",
       mimeType: "image/png",
@@ -142,13 +144,9 @@ test("processTextJob runs OCR normally when blank check returns false", async ()
 });
 
 test("processTextJob throws when PDF source is missing", async () => {
-  const s3 = {
-    send: async () => ({ Body: null }),
-  } as unknown as S3Client;
-
   await assert.rejects(
     processTextJob({
-      s3,
+      storage: fakeStorage(null),
       bucket: "bucket",
       key: "file.pdf",
       mimeType: "application/pdf",

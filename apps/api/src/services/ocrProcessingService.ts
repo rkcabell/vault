@@ -1,8 +1,8 @@
-import type { S3Client } from "@aws-sdk/client-s3";
 import type { JobsOptions } from "bullmq";
 import type { Logger } from "pino";
 import type { DocumentRepository } from "../repositories/documentRepository.js";
 import type { MediaRepository } from "../repositories/mediaRepository.js";
+import type { StorageAdapter } from "../adapters/storage/types.js";
 import { waitUntilObjectExists } from "../adapters/s3ObjectProbe.js";
 import {
   processTextJob,
@@ -23,7 +23,7 @@ export type OcrJobData = {
 export type OcrProcessingDeps = {
   mediaRepository: MediaRepository;
   documentRepository: DocumentRepository;
-  s3: S3Client;
+  storage: StorageAdapter;
   bucket: string;
   enqueueOcr: (data: OcrJobData, opts?: JobsOptions) => Promise<unknown>;
   logger: Logger;
@@ -80,7 +80,7 @@ function isTransientError (err: unknown) {
  * starts and after each state write.
  */
 export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) {
-  const { mediaRepository, documentRepository, s3, bucket, enqueueOcr, logger, sleep } = deps;
+  const { mediaRepository, documentRepository, storage, bucket, enqueueOcr, logger, sleep } = deps;
   const { mediaId, storageKey, forceOcr, language, rotation } = data;
 
   const logContext = {
@@ -122,7 +122,7 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
 
   try {
 
-  const exists = await waitUntilObjectExists(s3, bucket, key, {
+  const exists = await waitUntilObjectExists(storage, bucket, key, {
     maxTries: 8,
     baseDelayMs: 1000,
     sleep,
@@ -136,7 +136,7 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
     try {
       logger.info({ ...logContext, key }, "pdf extraction start");
       const extracted = await processTextJob({
-        s3,
+        storage,
         bucket,
         key,
         mimeType: media.mimeType,
@@ -202,7 +202,7 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
   if (sleep) await sleep(1000);
 
   const ocrResult = await processTextJob({
-    s3,
+    storage,
     bucket,
     key,
     mimeType: media.mimeType,
