@@ -4,6 +4,7 @@ import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { S3Adapter } from "../../adapters/s3Adapter.js";
 import type { OcrJobData } from "../ocrProcessingService.js";
 import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
+import { openSourceStream } from "../../adapters/storage/openSource.js";
 import { inferTextSource } from "../../lib/media/textSource.js";
 import { detectTextLanguage } from "../../lib/text/detectLanguage.js";
 import { segmentExtractedText } from "../../lib/text/segmentText.js";
@@ -258,9 +259,41 @@ export function createMediaReadService (deps: MediaReadDeps) {
     }
   };
 
+  /**
+   * Stream the original file for an in-place indexed item, read read-only from
+   * its source path. Managed items return null here — they download via a
+   * presigned URL (getDownloadUrl), not this proxy. Returns null when the item
+   * is missing, not in-place, or the source file is gone.
+   */
+  const getSourceStream = async (userId: string, id: string, allowedRoots: string[]) => {
+    const media = await deps.repository.findSourceInfo(userId, id);
+    if (!media || !media.sourcePath) return null;
+
+    try {
+      const res = await openSourceStream({
+        storage: deps.s3Adapter,
+        bucket: deps.bucket,
+        storageKey: media.storageKey,
+        sourcePath: media.sourcePath,
+        allowedRoots,
+      });
+      if (!res) return null;
+      return {
+        body: res.body,
+        contentLength: res.contentLength,
+        mimeType: media.mimeType || "application/octet-stream",
+        filename: media.filename,
+      };
+    } catch (err) {
+      deps.logger.warn({ err, mediaId: id }, "[media] source stream failed");
+      return null;
+    }
+  };
+
   return {
     getTextChunk,
     getMediaDetail,
     getThumbnail,
+    getSourceStream,
   };
 }

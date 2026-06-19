@@ -15,6 +15,7 @@ export type OcrDeps = {
   prisma: PrismaClient;
   storage: StorageAdapter;
   bucket: string;
+  allowedRoots?: string[];
   enqueueOcr: OcrProcessingDeps["enqueueOcr"];
   logger?: OcrProcessingDeps["logger"];
   queueName?: string;
@@ -30,6 +31,7 @@ export async function processOcrJob (deps: OcrDeps, data: OcrJobData) {
     documentRepository: new DocumentRepository(deps.prisma),
     storage: deps.storage,
     bucket: deps.bucket,
+    allowedRoots: deps.allowedRoots,
     enqueueOcr: deps.enqueueOcr,
     logger,
     queueName: deps.queueName ?? process.env.OCR_QUEUE ?? "ocr_queue",

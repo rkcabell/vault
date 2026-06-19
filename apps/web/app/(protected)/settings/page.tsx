@@ -2,6 +2,7 @@ import { AppearanceCard } from "@/components/settings/AppearanceCard";
 import { GeneralSettingsCard } from "@/components/settings/GeneralSettingsCard";
 import { ManageTagsCard } from "@/components/settings/ManageTagsCard";
 import { StorageSettingsCard } from "@/components/settings/StorageSettingsCard";
+import { IndexingSettingsCard } from "@/components/settings/IndexingSettingsCard";
 import { ExploreSettingsCard } from "@/components/settings/ExploreSettingsCard";
 
 export default function SettingsPage() {
@@ -22,6 +23,8 @@ export default function SettingsPage() {
       </div>
 
       <StorageSettingsCard />
+
+      <IndexingSettingsCard />
 
       <ExploreSettingsCard />
 

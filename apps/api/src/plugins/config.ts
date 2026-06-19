@@ -1,5 +1,6 @@
 import fp from "fastify-plugin";
 import { z } from "zod";
+import { parseAllowedRoots } from "../lib/media/indexRoots.js";
 
 const EnvSchema = z
   .object({
@@ -35,6 +36,11 @@ const EnvSchema = z
     // the filesystem adapter, so it carries a default that fs deployments inherit.
     S3_BUCKET: z.string().default("vault-media"),
     REDIS_URL: z.string().url(),
+
+    // In-place indexing allow-list: comma-separated absolute directories Vault
+    // may walk and read originals from without copying them. Empty/unset = the
+    // in-place indexing feature is disabled. See lib/media/indexRoots.ts.
+    INDEX_ALLOWED_ROOTS: z.string().optional(),
   })
   .superRefine((val, ctx) => {
     if (val.STORAGE_DRIVER === "s3") {
@@ -60,7 +66,13 @@ const EnvSchema = z
         message: "STORAGE_FS_PATH is required when STORAGE_DRIVER=fs",
       });
     }
-  });
+  })
+  // Expose the parsed allow-list alongside the raw env var so callers read a
+  // normalized string[] (`config.indexAllowedRoots`) instead of re-splitting.
+  .transform(val => ({
+    ...val,
+    indexAllowedRoots: parseAllowedRoots(val.INDEX_ALLOWED_ROOTS),
+  }));
 
 declare module "fastify" {
   interface FastifyInstance {

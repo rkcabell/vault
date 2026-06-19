@@ -18,6 +18,8 @@ export type OcrJobData = {
   rotation?: string;
   userId?: string;
   title?: string;
+  sourcePath?: string; // set for in-place indexed items; source read read-only from disk
+  allowedRoots?: string[]; // snapshotted from user preferences at enqueue time
 };
 
 export type OcrProcessingDeps = {
@@ -25,6 +27,8 @@ export type OcrProcessingDeps = {
   documentRepository: DocumentRepository;
   storage: StorageAdapter;
   bucket: string;
+  /** Configured INDEX_ALLOWED_ROOTS; required to read in-place sources. Defaults to []. */
+  allowedRoots?: string[];
   enqueueOcr: (data: OcrJobData, opts?: JobsOptions) => Promise<unknown>;
   logger: Logger;
   queueName: string;
@@ -114,22 +118,30 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
   }
 
   const key = storageKey ?? media.storageKey;
+  // In-place indexed items read their original from disk (read-only), not from
+  // managed storage. The DB row is the source of truth for the path.
+  const sourcePath = media.sourcePath ?? undefined;
+  const allowedRoots = data.allowedRoots?.length ? data.allowedRoots : (deps.allowedRoots ?? []);
   const timeoutMs = deps.timeoutMs ?? computeOcrTimeout(media.sizeBytes ?? 0);
-  logger.info({ ...logContext, key, mimeType: media.mimeType, timeoutMs }, "media loaded");
+  logger.info({ ...logContext, key, sourcePath, mimeType: media.mimeType, timeoutMs }, "media loaded");
 
   const abortController = new AbortController();
   const abortTimer = setTimeout(() => abortController.abort(), timeoutMs);
 
   try {
 
-  const exists = await waitUntilObjectExists(storage, bucket, key, {
-    maxTries: 8,
-    baseDelayMs: 1000,
-    sleep,
-  });
-  if (!exists) {
-    logger.warn({ ...logContext, key }, "source not ready");
-    throw new TextJobError("SOURCE_NOT_READY", `Source not ready for key=${key}`);
+  // S3 objects can lag after upload; in-place files already exist on disk, so
+  // the propagation probe only applies to managed sources.
+  if (!sourcePath) {
+    const exists = await waitUntilObjectExists(storage, bucket, key, {
+      maxTries: 8,
+      baseDelayMs: 1000,
+      sleep,
+    });
+    if (!exists) {
+      logger.warn({ ...logContext, key }, "source not ready");
+      throw new TextJobError("SOURCE_NOT_READY", `Source not ready for key=${key}`);
+    }
   }
 
   if (media.mimeType?.startsWith("application/pdf") && !forceOcr) {
@@ -139,6 +151,8 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
         storage,
         bucket,
         key,
+        sourcePath,
+        allowedRoots,
         mimeType: media.mimeType,
         language,
         rotation,
@@ -182,7 +196,7 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
 
       if (extracted.needsOcr) {
         await enqueueOcr(
-          { mediaId, storageKey: key, forceOcr: true, language, rotation, userId: data.userId, title: data.title },
+          { mediaId, storageKey: key, sourcePath, forceOcr: true, language, rotation, userId: data.userId, title: data.title },
           { attempts: 1 },
         );
         logger.info({ ...logContext }, "queued OCR fallback");
@@ -205,6 +219,8 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
     storage,
     bucket,
     key,
+    sourcePath,
+    allowedRoots,
     mimeType: media.mimeType,
     forceOcr: true,
     language,

@@ -7,10 +7,13 @@ import { createMediaUploadService } from "../services/media/mediaUploadService.j
 import { createMediaQueryService } from "../services/media/mediaQueryService.js";
 import { createMediaReadService } from "../services/media/mediaReadService.js";
 import { createMediaActionsService } from "../services/media/mediaActionsService.js";
+import { createIndexService } from "../services/media/indexService.js";
 import type { OcrJobData } from "../services/ocrProcessingService.js";
 import type { ThumbJob } from "../queues/enqueueThumbnail.js";
 import type { UnpackJob } from "../queues/enqueueUnpack.js";
 import { UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
+import type { IndexJobData } from "../queues/enqueueIndex.js";
+import { INDEX_QUEUE } from "../queues/enqueueIndex.js";
 
 const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
 const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
@@ -20,6 +23,7 @@ type MediaServices = {
   queryService: ReturnType<typeof createMediaQueryService>;
   readService: ReturnType<typeof createMediaReadService>;
   actionsService: ReturnType<typeof createMediaActionsService>;
+  indexService: ReturnType<typeof createIndexService>;
 };
 
 declare module "fastify" {
@@ -34,6 +38,7 @@ export default fp(
     const ocrQueue = new Queue<OcrJobData>(OCR_QUEUE, { connection: redisConnection });
     const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, { connection: redisConnection });
     const unpackQueue = new Queue<UnpackJob>(UNPACK_QUEUE, { connection: redisConnection });
+    const indexQueue = new Queue<IndexJobData>(INDEX_QUEUE, { connection: redisConnection });
 
     const repository = new MediaRepository(app.prisma);
     const bundleRepository = new BundleRepository(app.prisma);
@@ -64,12 +69,16 @@ export default fp(
         ocrQueue,
         thumbQueue,
       }),
+      indexService: createIndexService({
+        indexQueue,
+        logger: app.log,
+      }),
     };
 
     app.decorate("mediaServices", services);
 
     app.addHook("onClose", async () => {
-      await Promise.allSettled([ocrQueue.close(), thumbQueue.close(), unpackQueue.close()]);
+      await Promise.allSettled([ocrQueue.close(), thumbQueue.close(), unpackQueue.close(), indexQueue.close()]);
     });
   },
   { name: "mediaServices" },

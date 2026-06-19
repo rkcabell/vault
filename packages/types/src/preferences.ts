@@ -18,6 +18,8 @@ export type Preferences = {
   lightTheme: LightTheme;
   darkTheme: DarkTheme;
   exploreBucketColors: Record<string, string>;
+  /** Absolute directories Vault may index in place. Empty = feature disabled. */
+  indexAllowedRoots: string[];
 };
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -37,4 +39,5 @@ export const DEFAULT_PREFERENCES: Preferences = {
   lightTheme: "default",
   darkTheme: "new-moon",
   exploreBucketColors: {},
+  indexAllowedRoots: [],
 };

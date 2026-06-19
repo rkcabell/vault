@@ -14,6 +14,7 @@ export type ThumbDeps = {
   prisma: PrismaClient;
   storage: StorageAdapter;
   bucket: string;
+  allowedRoots?: string[];
   logger?: ServiceThumbDeps["logger"];
   queueName?: string;
   publishJobUpdate?: ServiceThumbDeps["publishJobUpdate"];
@@ -25,6 +26,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob) {
     prismaMedia: new MediaRepository(deps.prisma),
     storage: deps.storage,
     bucket: deps.bucket,
+    allowedRoots: deps.allowedRoots,
     logger,
     queueName: deps.queueName ?? process.env.THUMB_QUEUE ?? "thumb_queue",
     publishJobUpdate: deps.publishJobUpdate,

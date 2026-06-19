@@ -8,6 +8,8 @@ export type ThumbJob = {
   storageKey: string;
   outKey: string; // deterministic path for the worker to write the webp
   size: number; // target edge size (px) for the long side
+  sourcePath?: string; // set for in-place indexed items; source read read-only from disk
+  allowedRoots?: string[]; // snapshotted from user preferences at enqueue time
 };
 
 export type EnqueueThumbArgs = {
@@ -15,6 +17,8 @@ export type EnqueueThumbArgs = {
   userId: string;
   storageKey: string;
   size?: number; // default 512
+  sourcePath?: string;
+  allowedRoots?: string[];
 };
 
 export type EnqueueThumbBulkItem = {
@@ -22,6 +26,8 @@ export type EnqueueThumbBulkItem = {
   userId: string;
   storageKey: string;
   size?: number;
+  sourcePath?: string;
+  allowedRoots?: string[];
 };
 
 export function computeThumbKey (mediaId: string) {
@@ -36,7 +42,7 @@ export function computeThumbKey (mediaId: string) {
  */
 export function makeEnqueueThumbnails (queue: Queue<ThumbJob>) {
   return async function enqueueThumbnail (args: EnqueueThumbArgs): Promise<string> {
-    const { mediaId, userId, storageKey, size = 512 } = args;
+    const { mediaId, userId, storageKey, size = 512, sourcePath, allowedRoots } = args;
 
     const outKey = computeThumbKey(mediaId);
     const job: ThumbJob = {
@@ -46,6 +52,8 @@ export function makeEnqueueThumbnails (queue: Queue<ThumbJob>) {
       storageKey,
       outKey,
       size,
+      ...(sourcePath ? { sourcePath } : {}),
+      ...(allowedRoots?.length ? { allowedRoots } : {}),
     };
 
     await queue.add("thumb", job, {
@@ -78,6 +86,8 @@ export async function enqueueThumbBulk (queue: Queue<ThumbJob>, items: EnqueueTh
       storageKey: item.storageKey,
       outKey: computeThumbKey(item.mediaId),
       size: item.size ?? 512,
+      ...(item.sourcePath ? { sourcePath: item.sourcePath } : {}),
+      ...(item.allowedRoots?.length ? { allowedRoots: item.allowedRoots } : {}),
     },
     opts: { jobId: item.mediaId, attempts: 5, backoff: { type: "exponential", delay: 2000 }, removeOnFail: true, removeOnComplete: true },
   }));

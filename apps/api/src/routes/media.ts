@@ -46,7 +46,7 @@ const FALLBACK_WEBP_BASE64 =
 const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
 
 export const mediaRoutes: FastifyPluginAsync = async app => {
-  const { uploadService, queryService, readService, actionsService } = app.mediaServices;
+  const { uploadService, queryService, readService, actionsService, indexService } = app.mediaServices;
   let unpackQueue: Queue<UnpackJob> | null = null;
   const getUnpackQueue = () => {
     if (!unpackQueue) {
@@ -379,11 +379,14 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
       if (items.length === 0) return reply.notFound();
 
+      const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+      const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
       reply.raw.setHeader("Content-Type", "application/zip");
       reply.raw.setHeader("Content-Disposition", 'attachment; filename="vault-download.zip"');
       reply.hijack();
 
-      await actionsService.streamBulkArchive(items, reply.raw, req.log);
+      await actionsService.streamBulkArchive(items, reply.raw, req.log, allowedRoots);
     },
   );
 
@@ -402,6 +405,86 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       return reply.send(url);
     },
   );
+
+  // GET /media/:id/source - stream an in-place indexed original from disk.
+  // Managed items have no source here (they use the presigned /download URL).
+  app.get<{ Params: { id: string } }>(
+    "/:id/source",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+
+      const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+      const allowedRoots = prefs?.indexAllowedRoots ?? [];
+      const result = await readService.getSourceStream(userId, id, allowedRoots);
+      if (!result) return reply.notFound();
+
+      if (result.contentLength != null) reply.header("content-length", String(result.contentLength));
+      reply.type(result.mimeType);
+      reply.header(
+        "content-disposition",
+        `inline; filename="${result.filename.replace(/["\\]/g, "_")}"`,
+      );
+      reply.header("cache-control", "private, max-age=3600");
+      return reply.send(result.body);
+    },
+  );
+
+  // GET /media/index/roots - configured in-place indexing roots (empty = disabled)
+  app.get("/index/roots", { preHandler: [requireAuth] }, async (req) => {
+    const userId = req.userId!;
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const roots = prefs?.indexAllowedRoots ?? [];
+    return { enabled: roots.length > 0, roots };
+  });
+
+  // POST /media/index - scan a server-side folder and index its files in place
+  app.post("/index", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const body = z
+      .object({
+        path: z.string().min(1),
+        recursive: z.boolean().optional(),
+      })
+      .parse(req.body);
+
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const allowedRoots = prefs?.indexAllowedRoots ?? [];
+    const ignoreHidden = prefs?.ignoreHiddenFiles ?? true;
+
+    const result = await indexService.startIndex(userId, {
+      path: body.path,
+      recursive: body.recursive ?? true,
+      ignoreHidden,
+    }, allowedRoots);
+
+    if (!result.ok) {
+      switch (result.reason) {
+        case "disabled":
+          return reply.badRequest("In-place indexing is disabled — add at least one allowed folder in Settings.");
+        case "not_allowed":
+          return reply.forbidden("That folder is not within an allowed indexing root.");
+        case "not_found":
+          return reply.notFound("Folder not found.");
+        case "not_dir":
+          return reply.badRequest("That path is not a directory.");
+      }
+    }
+
+    req.log.info({ userId, path: body.path, jobId: result.jobId }, "index scan requested");
+    return reply.send({ jobId: result.jobId });
+  });
+
+  // GET /media/index/status?jobId=... - poll scan progress
+  app.get("/index/status", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const { jobId } = z.object({ jobId: z.string().min(1) }).parse(req.query);
+
+    const status = await indexService.getStatus(userId, jobId);
+    if (!status) return reply.notFound();
+    return reply.send(status);
+  });
 
   // GET /media/:id/text - chunked extracted text
   app.get<{ Params: { id: string } }>(

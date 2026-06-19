@@ -8,7 +8,7 @@ import type { Logger } from "pino";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { MediaMetadataRepository } from "../../repositories/mediaMetadataRepository.js";
 import type { StorageAdapter } from "../../adapters/storage/types.js";
-import { readObjectBuffer } from "../../adapters/storage/getObjectBuffer.js";
+import { openSourceStream, readSourceBuffer } from "../../adapters/storage/openSource.js";
 import { waitUntilObjectExists } from "../../adapters/s3ObjectProbe.js";
 import { looksLikeHeic, looksLikeMp4, looksLikePdf, looksLikePng } from "../../lib/fileSignatures.js";
 import { renderPdfThumbnail } from "./renderPdfThumbnail.js";
@@ -25,6 +25,8 @@ export type ThumbDeps = {
   preferencesService?: PrefsLookup;
   storage: StorageAdapter;
   bucket: string;
+  /** Configured INDEX_ALLOWED_ROOTS; required to read in-place sources. Defaults to []. */
+  allowedRoots?: string[];
   logger: Logger;
   queueName: string;
   publishJobUpdate?: (update: { userId: string; mediaId: string; field: "thumbState"; value: "READY" | "FAILED" }) => void;
@@ -128,6 +130,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   const size = Math.max(16, Math.min(4096, job.size ?? 512));
   const outKey = job.outKey ?? computeThumbKey(job.mediaId);
   const storageKey = job.storageKey;
+  const allowedRoots = job.allowedRoots?.length ? job.allowedRoots : (deps.allowedRoots ?? []);
   const logContext = {
     jobName: "thumb" as const,
     queue: deps.queueName,
@@ -137,6 +140,11 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
 
   const existing = await prismaMedia.findThumbInfo(job.mediaId);
 
+  // In-place indexed items read their original from disk (read-only); managed
+  // items read from storage at storageKey. The job carries sourcePath for the
+  // bulk index path; the DB row is the fallback (e.g. thumbnail regeneration).
+  const sourcePath = job.sourcePath ?? existing?.sourcePath ?? undefined;
+
   if (existing?.thumbnailKey === outKey) {
     if (existing.thumbState !== "READY") {
       await prismaMedia.setThumbReady(job.mediaId, outKey);
@@ -145,8 +153,12 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
     return;
   }
 
-  const exists = await waitUntilObjectExists(storage, bucket, storageKey, { maxTries: 4 });
-  if (!exists) throw new Error("SOURCE_NOT_READY");
+  // S3 objects can lag after upload; in-place files already exist on disk, so
+  // the propagation probe only applies to managed sources.
+  if (!sourcePath) {
+    const exists = await waitUntilObjectExists(storage, bucket, storageKey, { maxTries: 4 });
+    if (!exists) throw new Error("SOURCE_NOT_READY");
+  }
 
   const mimeType = existing?.mimeType ?? "";
   const isVideo = mimeType.startsWith("video/");
@@ -163,12 +175,12 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   if (isVideo) {
     videoTempDir = await mkdtemp(join(tmpdir(), "vault-src-"));
     videoTempPath = join(videoTempDir, "source.mp4");
-    const res = await storage.getObjectStream({ bucket, key: storageKey });
+    const res = await openSourceStream({ storage, bucket, storageKey, sourcePath, allowedRoots });
     if (!res) throw new Error("SOURCE_NOT_READY");
     await pipeline(res.body, createWriteStream(videoTempPath));
     original = await readFile(videoTempPath);
   } else {
-    const buf = await readObjectBuffer(storage, bucket, storageKey);
+    const buf = await readSourceBuffer({ storage, bucket, storageKey, sourcePath, allowedRoots });
     if (!buf) throw new Error("SOURCE_NOT_READY");
     original = buf;
   }

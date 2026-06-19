@@ -402,7 +402,7 @@ test("streamBulkArchive: produces non-empty zip output", async () => {
 
   const dest = new PassThrough();
   const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger);
+  await svc.streamBulkArchive(items, dest, noopLogger, []);
   const buf = await collected;
 
   // Zip files begin with the PK magic bytes (0x50 0x4B)
@@ -425,7 +425,7 @@ test("streamBulkArchive: calls getObjectStream for each item", async () => {
   });
 
   const dest = new PassThrough();
-  await svc.streamBulkArchive(items, dest, noopLogger);
+  await svc.streamBulkArchive(items, dest, noopLogger, []);
 
   assert.deepEqual(keys, ["key/a", "key/b"]);
 });
@@ -447,7 +447,7 @@ test("streamBulkArchive: skips items where S3 returns null", async () => {
 
   const dest = new PassThrough();
   const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger);
+  await svc.streamBulkArchive(items, dest, noopLogger, []);
   const buf = await collected;
 
   assert.equal(streamCalls, 2, "attempted both items");
@@ -467,7 +467,7 @@ test("streamBulkArchive: deduplicates filenames when two items share a title", a
 
   const dest = new PassThrough();
   const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger);
+  await svc.streamBulkArchive(items, dest, noopLogger, []);
   const buf = await collected;
 
   // Zip contains both entries — a zip with 2 files is always larger than one with 1
@@ -488,7 +488,7 @@ test("streamBulkArchive: falls back to original filename extension for unknown m
 
   const dest = new PassThrough();
   const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger);
+  await svc.streamBulkArchive(items, dest, noopLogger, []);
   const buf = await collected;
 
   assert.ok(buf.toString("binary").includes("Mystery.dat"), "uses extension from original filename");
@@ -504,7 +504,7 @@ test("streamBulkArchive: falls back to original filename extension when mimeType
 
   const dest = new PassThrough();
   const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger);
+  await svc.streamBulkArchive(items, dest, noopLogger, []);
   const buf = await collected;
 
   assert.ok(buf.toString("binary").includes("NoType.heic"), "uses extension from original filename");
@@ -520,7 +520,7 @@ test("streamBulkArchive: produces no extension when mimeType and filename both l
 
   const dest = new PassThrough();
   const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger);
+  await svc.streamBulkArchive(items, dest, noopLogger, []);
   const buf = await collected;
 
   // Entry is stored as just "Bare" with no extension
@@ -538,7 +538,7 @@ test("streamBulkArchive: falls back to item id when title sanitizes to empty str
 
   const dest = new PassThrough();
   const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger);
+  await svc.streamBulkArchive(items, dest, noopLogger, []);
   const buf = await collected;
 
   assert.ok(buf.toString("binary").includes("abc-123.png"), "falls back to item id");

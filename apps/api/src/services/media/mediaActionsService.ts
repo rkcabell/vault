@@ -7,6 +7,7 @@ import type { OcrJobData } from "../ocrProcessingService.js";
 import type { MediaRepository, MediaListFilters } from "../../repositories/mediaRepository.js";
 import type { BundleRepository } from "../../repositories/bundleRepository.js";
 import type { S3Adapter } from "../../adapters/s3Adapter.js";
+import { openSourceStream } from "../../adapters/storage/openSource.js";
 import type { ThumbJob } from "../../queues/enqueueThumbnail.js";
 import { computeThumbKey, enqueueThumbBulk } from "../../queues/enqueueThumbnail.js";
 import { enqueueOcrBulk } from "../../queues/enqueueOcr.js";
@@ -132,7 +133,11 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     const media = await deps.repository.findMediaKeys(userId, id);
     if (!media) return null;
 
-    await deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: media.storageKey });
+    // In-place indexed items live on the user's drive; Vault must never delete
+    // the source. Only managed originals are removed from storage.
+    if (!media.sourcePath) {
+      await deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: media.storageKey });
+    }
     if (media.thumbnailKey) {
       await deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: media.thumbnailKey });
     }
@@ -223,6 +228,12 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     const media = await deps.repository.findStorageKey(userId, id);
     if (!media) return null;
 
+    // In-place originals can't be presigned (they're outside storage) — stream
+    // them through the same-origin source proxy, which authenticates by cookie.
+    if (media.sourcePath) {
+      return { url: `/api/media/${id}/source` };
+    }
+
     const url = await deps.s3Adapter.presignGet({
       bucket: deps.bucket,
       key: media.storageKey,
@@ -237,9 +248,10 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
   };
 
   const streamBulkArchive = async (
-    items: { id: string; storageKey: string; title: string; mimeType: string | null; filename: string }[],
+    items: { id: string; storageKey: string; sourcePath?: string | null; title: string; mimeType: string | null; filename: string }[],
     dest: Writable,
     logger: { error: (obj: unknown, msg: string) => void },
+    allowedRoots: string[],
   ) => {
     const archive = archiver("zip", { zlib: { level: 0 } });
 
@@ -252,7 +264,15 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
 
     const usedNames = new Set<string>();
     for (const item of items) {
-      const result = await deps.s3Adapter.getObjectStream({ bucket: deps.bucket, key: item.storageKey });
+      // In-place items stream from disk; managed items from storage. openSourceStream
+      // branches on sourcePath and re-validates it against the allow-list.
+      const result = await openSourceStream({
+        storage: deps.s3Adapter,
+        bucket: deps.bucket,
+        storageKey: item.storageKey,
+        sourcePath: item.sourcePath,
+        allowedRoots,
+      });
       if (!result) continue;
       const filename = buildFilename(item, usedNames);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -407,9 +427,11 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     if (items.length === 0) return { count: 0 };
     await Promise.allSettled(
       items.flatMap(item => {
-        const ops: Promise<unknown>[] = [
-          deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: item.storageKey }),
-        ];
+        const ops: Promise<unknown>[] = [];
+        // Never delete an in-place source; only managed originals.
+        if (!item.sourcePath) {
+          ops.push(deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: item.storageKey }));
+        }
         if (item.thumbnailKey) {
           ops.push(deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: item.thumbnailKey }));
         }

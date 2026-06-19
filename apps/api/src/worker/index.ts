@@ -8,6 +8,7 @@ import { prisma } from "@vault/db";
 import { createOcrProcessor, type OcrJobData } from "./ocrWorker.js";
 import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumbWorker.js";
 import { createUnpackProcessor } from "./unpackWorker.js";
+import { createIndexProcessor } from "./indexWorker.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
 import { MediaMetadataRepository } from "../repositories/mediaMetadataRepository.js";
@@ -18,9 +19,11 @@ import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
 import { TextJobError } from "../lib/text/processTextJob.js";
 import { markStalledJobs } from "../services/stallDetectionService.js";
-import { createWorkerStorage, workerBucket } from "./storageFromEnv.js";
+import { createWorkerStorage, workerBucket, workerAllowedRoots } from "./storageFromEnv.js";
 import type { UnpackJob } from "../queues/enqueueUnpack.js";
 import { UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
+import type { IndexJobData } from "../queues/enqueueIndex.js";
+import { INDEX_QUEUE } from "../queues/enqueueIndex.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const BUCKET = workerBucket();
@@ -28,6 +31,7 @@ const BUCKET = workerBucket();
 const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
 const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
 const _UNPACK_QUEUE = UNPACK_QUEUE;
+const _INDEX_QUEUE = INDEX_QUEUE;
 const OCR_LOCK_DURATION_MS = parseEnvNumber("OCR_LOCK_DURATION_MS", 30 * 60 * 1000);
 const OCR_LOCK_RENEW_MS = parseEnvNumber(
   "OCR_LOCK_RENEW_MS",
@@ -63,6 +67,9 @@ async function main () {
 
   const ocrQueue = new Queue<OcrJobData>(OCR_QUEUE, { connection });
   const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, { connection });
+  const indexQueue = new Queue<IndexJobData>(_INDEX_QUEUE, { connection });
+
+  const allowedRoots = workerAllowedRoots();
 
   const ocrWorker = new Worker<OcrJobData>(
     OCR_QUEUE,
@@ -71,6 +78,7 @@ async function main () {
       documentRepository,
       storage: s3Adapter,
       bucket: BUCKET,
+      allowedRoots,
       enqueueOcr: async (data, opts) => ocrQueue.add("ocr", data, opts),
       logger: ocrLogger,
       queueName: OCR_QUEUE,
@@ -93,6 +101,7 @@ async function main () {
       preferencesService,
       storage: s3Adapter,
       bucket: BUCKET,
+      allowedRoots,
       logger: thumbLogger,
       queueName: THUMB_QUEUE,
       publishJobUpdate,
@@ -116,9 +125,23 @@ async function main () {
     { connection, concurrency: 2 },
   );
 
+  const indexLogger = logger.child({ queue: _INDEX_QUEUE, jobName: "index" });
+
+  const indexWorker = new Worker<IndexJobData>(
+    _INDEX_QUEUE,
+    createIndexProcessor({
+      mediaRepository,
+      thumbQueue,
+      ocrQueue,
+      logger: indexLogger,
+    }),
+    { connection, concurrency: 1 }, // one walk at a time; the per-file work fans out to thumb/ocr
+  );
+
   ocrWorker.on("ready", () => ocrLogger.info({ queue: OCR_QUEUE }, "worker ready"));
   thumbWorker.on("ready", () => thumbLogger.info({ queue: THUMB_QUEUE }, "worker ready"));
   unpackWorker.on("ready", () => unpackLogger.info({ queue: _UNPACK_QUEUE }, "worker ready"));
+  indexWorker.on("ready", () => indexLogger.info({ queue: _INDEX_QUEUE }, "worker ready"));
 
   // Run stall detection once on startup (catches records left over from a previous crash),
   // then on a recurring interval.
@@ -277,13 +300,23 @@ async function main () {
     unpackLogger.error({ jobName: "unpack", queue: _UNPACK_QUEUE, err }, "worker error"),
   );
 
-  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE] }, "worker started");
+  indexWorker.on("failed", (job, err) =>
+    indexLogger.error(
+      { jobName: "index", queue: _INDEX_QUEUE, jobId: job?.id ?? "unknown", userId: job?.data?.userId ?? null, err },
+      "index job failed",
+    ),
+  );
+  indexWorker.on("error", err =>
+    indexLogger.error({ jobName: "index", queue: _INDEX_QUEUE, err }, "worker error"),
+  );
+
+  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE, _INDEX_QUEUE] }, "worker started");
 
   const shutdown = async () => {
     logger.info("worker shutting down...");
     clearInterval(stallInterval);
-    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close()]);
-    await Promise.allSettled([ocrQueue.close(), thumbQueue.close()]);
+    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close(), indexWorker.close()]);
+    await Promise.allSettled([ocrQueue.close(), thumbQueue.close(), indexQueue.close()]);
     await publisher.quit();
   };
 

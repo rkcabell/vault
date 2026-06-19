@@ -54,6 +54,11 @@ model Media {
   textState       MediaWorkerState @default(PENDING)
   sourceState     MediaWorkerState @default(PENDING)
   storageKey      String
+  // Absolute path to the original file when it is indexed in place on a mounted
+  // drive/NAS (see INDEX_ALLOWED_ROOTS). Null = the file lives in Vault-managed
+  // storage at `storageKey` (normal upload). For in-place rows Vault reads the
+  // source read-only and never writes to or deletes from this path.
+  sourcePath      String?
   filename        String
   mimeType        String
   sizeBytes       Int
@@ -76,6 +81,7 @@ model Media {
   reminders       Reminder[]
   bundleItems     BundleItem[]
 
+  @@unique([userId, sourcePath])
   @@index([tags], type: Gin)
   @@index([userId, contentHash])
   @@index([userId, createdAt(sort: Desc)])

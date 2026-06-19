@@ -2,6 +2,7 @@
 import { extractPdfText, type PdfTextPage } from "@/services/pdf/extractPdfText.js";
 import { ocrWithOcrmypdf } from "@/services/ocr/ocrWithOcrmypdf.js";
 import { readObjectBuffer } from "../../adapters/storage/getObjectBuffer.js";
+import { readSourceBuffer } from "../../adapters/storage/openSource.js";
 import type { StorageAdapter } from "../../adapters/storage/types.js";
 import { looksLikeHeic } from "../../lib/fileSignatures.js";
 
@@ -66,14 +67,26 @@ export async function processTextJob (
     rotation?: string | null;
     onProgress?: (progress: { current: number; total?: number | null }) => void;
     abortSignal?: AbortSignal;
+    /** Absolute external path for in-place indexed items; null/undefined = managed. */
+    sourcePath?: string | null;
+    /** Configured allow-list, required to read an in-place source. */
+    allowedRoots?: string[];
   },
   deps: ProcessTextJobDeps = {},
 ): Promise<ProcessTextResult> {
-  const { storage, bucket, key, mimeType, forceOcr, language, rotation, onProgress, abortSignal } = args;
+  const { storage, bucket, key, mimeType, forceOcr, language, rotation, onProgress, abortSignal, sourcePath } = args;
+  const allowedRoots = args.allowedRoots ?? [];
   const getBuffer = deps.getObjectBuffer ?? readObjectBuffer;
   const runOcrmypdf = deps.ocrWithOcrmypdf ?? ocrWithOcrmypdf;
   const checkBlankImage = deps.isBlankImage ?? isBlankImage;
   const log = deps.logger;
+
+  // Read the original from its real location: in-place items read read-only
+  // from disk; managed items go through the (test-overridable) storage adapter.
+  const loadSource = (): Promise<Buffer | null> =>
+    sourcePath
+      ? readSourceBuffer({ storage, bucket, storageKey: key, sourcePath, allowedRoots })
+      : getBuffer(storage, bucket, key);
 
   const isPdf = mimeType ? mimeType.toLowerCase().includes("pdf") : false;
   const ctx = { key, mimeType, forceOcr: forceOcr ?? false };
@@ -82,7 +95,7 @@ export async function processTextJob (
   if (isPdf && !forceOcr) {
     log?.info(ctx, "[text] s3 download start");
     const t0 = Date.now();
-    const pdfBuffer = await getBuffer(storage, bucket, key);
+    const pdfBuffer = await loadSource();
     log?.info({ ...ctx, bytes: pdfBuffer?.length ?? 0, ms: Date.now() - t0 }, "[text] s3 download done");
     if (!pdfBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 
@@ -101,7 +114,7 @@ export async function processTextJob (
 
   log?.info(ctx, "[text] s3 download start (ocr path)");
   const t2 = Date.now();
-  const sourceBuffer = await getBuffer(storage, bucket, key);
+  const sourceBuffer = await loadSource();
   log?.info({ ...ctx, bytes: sourceBuffer?.length ?? 0, ms: Date.now() - t2 }, "[text] s3 download done (ocr path)");
   if (!sourceBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 

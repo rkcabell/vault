@@ -105,7 +105,10 @@ export function normalizeMimeType(mimeType: string | undefined | null, filename?
 }
 
 export function buildMimeTypeTag(mimeType: string | undefined | null, filename?: string): string {
-  const ext = filename?.split(".").pop()?.toLowerCase() ?? "";
+  // Only treat what follows the last dot as an extension if a dot is present —
+  // without this guard, a filename like "(adobe)" (no dot) would be returned
+  // verbatim as the "extension", producing a tag with invalid characters.
+  const ext = filename?.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
 
   // Look up by MIME type first
   const lower = mimeType?.trim().toLowerCase() ?? "";
@@ -113,9 +116,13 @@ export function buildMimeTypeTag(mimeType: string | undefined | null, filename?:
     return MIME_LABELS[lower];
   }
 
-  // Fall back to file extension (known label, or raw extension if unrecognized)
+  // Fall back to file extension (known label, or sanitized extension if unrecognized)
   if (ext) {
-    return EXT_LABELS[ext] ?? ext;
+    if (EXT_LABELS[ext]) return EXT_LABELS[ext];
+    // Strip chars invalid in tags so a weird extension like ".(adobe)" never
+    // throws TagValidationError downstream.
+    const sanitized = ext.replace(/[^a-z0-9-]/g, "");
+    return sanitized || "unknown";
   }
 
   return "unknown";

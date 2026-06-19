@@ -267,6 +267,34 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, restartRequired: true, driver, envPath };
   });
 
+  // Current in-place indexing allow-list, for pre-filling the settings form.
+  app.get("/index-config", { preHandler: [requireAuth] }, async (req) => {
+    const prefs = await app.preferencesService.getPreferences(req.userId!);
+    return { roots: prefs.indexAllowedRoots };
+  });
+
+  // Save the in-place indexing allow-list to user preferences. Takes effect
+  // immediately — no restart needed.
+  app.patch("/index-config", { preHandler: [requireAuth] }, async (req, reply) => {
+    const body = (req.body ?? {}) as { roots?: unknown };
+    if (!Array.isArray(body.roots)) return reply.badRequest("roots must be an array of absolute paths");
+
+    const roots: string[] = [];
+    for (const raw of body.roots) {
+      if (typeof raw !== "string") return reply.badRequest("each root must be a string");
+      const trimmed = raw.trim();
+      if (!trimmed) continue; // drop blanks
+      if (!(trimmed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(trimmed))) {
+        return reply.badRequest(`Not an absolute path: ${trimmed}`);
+      }
+      roots.push(trimmed);
+    }
+    const unique = Array.from(new Set(roots));
+
+    await app.preferencesService.updatePreferences(req.userId!, { indexAllowedRoots: unique });
+    return { ok: true, roots: unique };
+  });
+
   // Browse server-side directories so the settings UI can pick STORAGE_FS_PATH
   // (which lives on the server/container, not the user's machine). Read-only,
   // directories only, auth-gated. The single authenticated user is the admin,

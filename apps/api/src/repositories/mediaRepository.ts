@@ -32,9 +32,14 @@ export class MediaRepository {
     return media;
   }
 
-  /** Bulk-insert Media rows without returning individual ids (used in batch upload init). */
-  async createBatch (items: Prisma.MediaCreateManyInput[]) {
-    await this.prisma.media.createMany({ data: items });
+  /**
+   * Bulk-insert Media rows without returning individual ids (used in batch
+   * upload init and in-place indexing). `skipDuplicates` lets the index worker
+   * tolerate a race on the (userId, sourcePath) unique index without failing
+   * the whole batch.
+   */
+  async createBatch (items: Prisma.MediaCreateManyInput[], opts?: { skipDuplicates?: boolean }) {
+    await this.prisma.media.createMany({ data: items, skipDuplicates: opts?.skipDuplicates ?? false });
 
     // Sync Tag counts: aggregate tags per userId across all items.
     const tagsByUser = new Map<string, string[]>();
@@ -291,7 +296,15 @@ export class MediaRepository {
   async findMediaKeys (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
-      select: { storageKey: true, thumbnailKey: true },
+      select: { storageKey: true, thumbnailKey: true, sourcePath: true },
+    });
+  }
+
+  /** Info needed to stream an in-place original (GET /:id/source). */
+  async findSourceInfo (userId: string, id: string) {
+    return this.prisma.media.findFirst({
+      where: { id, userId },
+      select: { storageKey: true, sourcePath: true, mimeType: true, filename: true },
     });
   }
 
@@ -329,10 +342,10 @@ export class MediaRepository {
    *  DB-level cascades handle BundleItem, Document, MediaExtractedMetadata, and
    *  the SetNull relations (Reminder.mediaId, Bundle.sourceMediaId). The only
    *  non-FK field, Bundle.coverMediaId, is cleared manually. */
-  async deleteAllMediaForUser (userId: string): Promise<Array<{ storageKey: string; thumbnailKey: string | null }>> {
+  async deleteAllMediaForUser (userId: string): Promise<Array<{ storageKey: string; thumbnailKey: string | null; sourcePath: string | null }>> {
     const items = await this.prisma.media.findMany({
       where: { userId },
-      select: { storageKey: true, thumbnailKey: true },
+      select: { storageKey: true, thumbnailKey: true, sourcePath: true },
     });
     if (items.length === 0) return [];
     await this.prisma.media.deleteMany({ where: { userId } });
@@ -460,14 +473,14 @@ export class MediaRepository {
   async findStorageKey (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
-      select: { storageKey: true },
+      select: { storageKey: true, sourcePath: true },
     });
   }
 
   async findBulkDownloadItems (userId: string, ids: string[]) {
     return this.prisma.media.findMany({
       where: { id: { in: ids }, userId },
-      select: { id: true, storageKey: true, title: true, mimeType: true, filename: true },
+      select: { id: true, storageKey: true, sourcePath: true, title: true, mimeType: true, filename: true },
     });
   }
 
@@ -559,7 +572,7 @@ export class MediaRepository {
   async findThumbInfo (id: string) {
     return this.prisma.media.findUnique({
       where: { id },
-      select: { thumbnailKey: true, thumbState: true, mimeType: true },
+      select: { thumbnailKey: true, thumbState: true, mimeType: true, sourcePath: true },
     });
   }
 
@@ -604,7 +617,7 @@ export class MediaRepository {
   async findForOcr (mediaId: string) {
     return this.prisma.media.findUnique({
       where: { id: mediaId },
-      select: { id: true, storageKey: true, mimeType: true, textState: true, sizeBytes: true },
+      select: { id: true, storageKey: true, sourcePath: true, mimeType: true, textState: true, sizeBytes: true },
     });
   }
 
@@ -664,6 +677,20 @@ export class MediaRepository {
   }
 
   /** Marks textState PENDING → FAILED for items whose MIME type is not supported for text extraction. */
+  /**
+   * Given a list of absolute source paths, return the subset already indexed by
+   * this user. Used by the index worker to skip files that already have a Media
+   * row before inserting (the (userId, sourcePath) unique index is the backstop).
+   */
+  async findExistingSourcePaths (userId: string, paths: string[]): Promise<Set<string>> {
+    if (paths.length === 0) return new Set();
+    const rows = await this.prisma.media.findMany({
+      where: { userId, sourcePath: { in: paths } },
+      select: { sourcePath: true },
+    });
+    return new Set(rows.map(r => r.sourcePath).filter((p): p is string => p !== null));
+  }
+
   async markTextUnsupported (mediaIds: string[]): Promise<void> {
     if (mediaIds.length === 0) return;
     await this.prisma.media.updateMany({

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Container } from "@/components/common/Container";
@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/common/PageHeader";
 
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { DirectoryPicker } from "@/components/settings/DirectoryPicker";
 
 import { useUpload } from "@/components/contexts/UploadContext";
 import { usePreferences } from "@/hooks/usePreferences";
@@ -15,6 +16,10 @@ import { toast } from "@/components/ui/Toaster";
 import { emitTagsUpdated } from "@/lib/tags";
 import { getFileSizeError } from "@/lib/media/uploadLimits";
 import { formatBytes } from "@/lib/media/utils";
+import {
+  getIndexRoots, startIndex, getIndexStatus,
+  type IndexStatus,
+} from "@/lib/media/indexing";
 import {
   batchInit, batchFinalize, getPendingFiles, notifyUploadStart, notifyUploadSuccess,
   notifyUploadFailures, chunkArray, uploadBatch, applyFailures, exitToLibrary,
@@ -50,6 +55,54 @@ export default function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+
+  // In-place indexing (only shown when INDEX_ALLOWED_ROOTS is configured).
+  const [indexEnabled, setIndexEnabled] = useState(false);
+  const [indexRoots, setIndexRoots] = useState<string[]>([]);
+  const [showPicker, setShowPicker] = useState(false);
+  const [indexPath, setIndexPath] = useState<string | null>(null);
+  const [recursive, setRecursive] = useState(true);
+  const [isIndexing, setIsIndexing] = useState(false);
+  const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
+
+  useEffect(() => {
+    void getIndexRoots().then(r => {
+      setIndexEnabled(r.enabled);
+      setIndexRoots(r.roots);
+    });
+  }, []);
+
+  const handleStartIndex = async () => {
+    if (!indexPath) return;
+    setIsIndexing(true);
+    setIndexStatus(null);
+    try {
+      const { jobId } = await startIndex(indexPath, recursive);
+      let last: IndexStatus | null = null;
+      // Poll until the scan job completes or fails.
+      for (;;) {
+        await new Promise(r => setTimeout(r, 1500));
+        const status = await getIndexStatus(jobId);
+        if (status) {
+          last = status;
+          setIndexStatus(status);
+          if (status.done || status.state === "failed") break;
+        }
+      }
+      if (last?.state === "failed") {
+        toast("Indexing failed. Check the server logs.", { variant: "error" });
+      } else if (last) {
+        emitTagsUpdated();
+        toast(`Indexed ${last.indexed} file${last.indexed === 1 ? "" : "s"} (${last.skipped} skipped).`, {
+          variant: "success",
+        });
+      }
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Indexing failed.", { variant: "error" });
+    } finally {
+      setIsIndexing(false);
+    }
+  };
 
   const completedCount = useMemo(
     () => files.filter((f) => f.status === "completed").length,
@@ -275,6 +328,68 @@ export default function UploadPage() {
             </Button>
           </div>
         </Card>
+
+        {indexEnabled && (
+          <Card className="p-6">
+            <h3 className="mb-1 text-lg font-semibold">Index a folder already on the server</h3>
+            <p className="mb-1 text-sm text-muted-foreground">
+              Vault generates thumbnails and text search for files where they sit — no copy is made and
+              the source folder is never modified.
+            </p>
+            {indexRoots.length > 0 && (
+              <p className="mb-4 break-all text-xs text-muted-foreground">
+                Allowed roots: <span className="font-mono">{indexRoots.join(", ")}</span>
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button variant="outline" onClick={() => setShowPicker(true)} disabled={isIndexing}>
+                {indexPath ? "Change folder…" : "Choose folder…"}
+              </Button>
+              {indexPath && (
+                <span className="break-all font-mono text-sm">{indexPath}</span>
+              )}
+            </div>
+
+            {indexPath && (
+              <>
+                <label className="mt-4 flex w-fit items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={recursive}
+                    onChange={e => setRecursive(e.target.checked)}
+                    disabled={isIndexing}
+                  />
+                  Include subfolders
+                </label>
+
+                <div className="mt-4 flex items-center gap-3">
+                  <Button onClick={handleStartIndex} disabled={isIndexing}>
+                    {isIndexing ? "Indexing…" : "Start indexing"}
+                  </Button>
+                  {indexStatus && (
+                    <span className="text-sm text-muted-foreground">
+                      Scanned {indexStatus.scanned} · indexed {indexStatus.indexed} · skipped{" "}
+                      {indexStatus.skipped}
+                      {indexStatus.done ? " · done" : "…"}
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
+          </Card>
+        )}
+
+        {showPicker && (
+          <DirectoryPicker
+            initialPath={indexPath ?? indexRoots[0]}
+            onSelect={path => {
+              setIndexPath(path);
+              setShowPicker(false);
+            }}
+            onClose={() => setShowPicker(false)}
+          />
+        )}
 
         {files.length > 0 && (
           <>
