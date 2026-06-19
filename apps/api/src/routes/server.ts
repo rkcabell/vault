@@ -169,7 +169,7 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
 
   // Current storage config for pre-filling the settings form. The secret is
   // never returned (only whether one is set); everything else is non-sensitive
-  // for a single-user self-hosted admin.
+  // for a self-hosted admin.
   app.get("/storage-config", { preHandler: [requireAuth] }, async () => {
     const c = app.config;
     return {

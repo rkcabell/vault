@@ -11,6 +11,7 @@ export type Preferences = {
   lowMemoryMode: boolean;
   autoUnpackArchives: boolean;
   hideUnpackedItems: boolean;
+  ignoreHiddenFiles: boolean;
   soonWindowDays: number;
   themePreference: "system" | "light" | "dark";
   yellowHighlight: boolean;
@@ -29,6 +30,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   lowMemoryMode: false,
   autoUnpackArchives: false,
   hideUnpackedItems: false,
+  ignoreHiddenFiles: true,
   soonWindowDays: 7,
   themePreference: "system",
   yellowHighlight: false,

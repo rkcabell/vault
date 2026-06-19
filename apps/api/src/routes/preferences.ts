@@ -14,6 +14,7 @@ const preferencesSchema = z
     lowMemoryMode: z.boolean().optional(),
     autoUnpackArchives: z.boolean().optional(),
     hideUnpackedItems: z.boolean().optional(),
+    ignoreHiddenFiles: z.boolean().optional(),
     soonWindowDays: z.number().int().min(2).max(14).optional(),
     themePreference: z.enum(["system", "light", "dark"]).optional(),
     yellowHighlight: z.boolean().optional(),

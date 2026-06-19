@@ -14,7 +14,7 @@ import { InvalidStorageKeyError } from "../adapters/storage/fsAdapter.js";
  *
  * Authorization: keys are namespaced by owner (`userId/mediaId/filename`), so a
  * request may only touch keys under its own `userId/` prefix — defense in depth
- * even for a single-user deployment.
+ * defense in depth across all deployments.
  */
 export const storageRoutes: FastifyPluginAsync = async (app) => {
   // Treat every request body as a raw stream (no buffering, no bodyLimit), so
