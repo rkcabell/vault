@@ -13,7 +13,7 @@ import { useUpload } from "@/components/contexts/UploadContext";
 import { usePreferences } from "@/hooks/usePreferences";
 import { toast } from "@/components/ui/Toaster";
 import { emitTagsUpdated } from "@/lib/tags";
-import { getFileSizeError, UPLOAD_LIMIT_LABELS } from "@/lib/media/uploadLimits";
+import { getFileSizeError } from "@/lib/media/uploadLimits";
 import { formatBytes } from "@/lib/media/utils";
 import {
   batchInit, batchFinalize, getPendingFiles, notifyUploadStart, notifyUploadSuccess,

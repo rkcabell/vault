@@ -27,7 +27,8 @@
     "test:html": "node scripts/run-tests-html.mjs src/tests",
     "test:html:api": "node scripts/run-tests-html.mjs src/tests/api",
     "log": "tsx scripts/logtail.ts",
-    "log:watch": "tsx scripts/logtail.ts --watch"
+    "log:watch": "tsx scripts/logtail.ts --watch",
+    "reset-password": "tsx scripts/reset-password.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.893.0",

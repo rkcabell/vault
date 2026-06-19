@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { apiFetch } from '@/lib/apiFetch'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 
@@ -31,7 +32,7 @@ export function MediaRemindersPanel({ reminders, onUpdated }: MediaRemindersPane
     setCompleting(prev => new Set(prev).add(id))
     setError(null)
     try {
-      const res = await fetch(`/api/reminders/${id}/complete`, {
+      const res = await apiFetch(`/api/reminders/${id}/complete`, {
         method: 'POST',
         credentials: 'include',
       })

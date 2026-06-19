@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import { usePreferences } from "@/hooks/usePreferences";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -354,7 +355,7 @@ export default function LibraryPageInner() {
       }
 
       try {
-        const res = await fetch(`/api/media?${buildQuery(cursor)}`, {
+        const res = await apiFetch(`/api/media?${buildQuery(cursor)}`, {
           method: "GET",
           credentials: "include",
         });
@@ -444,7 +445,7 @@ export default function LibraryPageInner() {
   // Fetch tag options when the panel is opened.
   useEffect(() => {
     if (!showTagFilter) return;
-    fetch('/api/tags?limit=200', { credentials: 'include' })
+    apiFetch('/api/tags?limit=200', { credentials: 'include' })
       .then(r => r.ok ? r.json() : { tags: [] })
       .then((d: { tags: { name: string; count: number; color: string | null }[] }) => {
         setTagOptions(d.tags ?? []);
@@ -458,7 +459,7 @@ export default function LibraryPageInner() {
     const handler = async () => {
       const { showTagFilter, includedTagsList, excludedTagsList, searchParams } = tagFilterStateRef.current;
       try {
-        const res = await fetch('/api/tags?limit=200', { credentials: 'include' });
+        const res = await apiFetch('/api/tags?limit=200', { credentials: 'include' });
         if (!res.ok) return;
         const data = await res.json() as { tags: { name: string; count: number; color: string | null }[] };
         const tags = data.tags ?? [];
@@ -568,7 +569,7 @@ export default function LibraryPageInner() {
             return next;
           });
           try {
-            const res = await fetch(`/api/media/${id}`, {
+            const res = await apiFetch(`/api/media/${id}`, {
               method: "DELETE",
               credentials: "include",
             });
@@ -602,7 +603,7 @@ export default function LibraryPageInner() {
 
   const handleDownload = useCallback(async (id: string) => {
     try {
-      const res = await fetch(`/api/media/${id}/download`, { credentials: "include" });
+      const res = await apiFetch(`/api/media/${id}/download`, { credentials: "include" });
       if (!res.ok) return;
       const { url } = await res.json() as { url: string };
       window.open(url, "_blank");
@@ -618,7 +619,7 @@ export default function LibraryPageInner() {
       if (!trimmedTitle) return;
 
       try {
-        const res = await fetch(`/api/media/${id}`, {
+        const res = await apiFetch(`/api/media/${id}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
           credentials: "include",
@@ -694,7 +695,7 @@ export default function LibraryPageInner() {
     if (selectedIds.size === 0 || isDownloading) return;
     setIsDownloading(true);
     try {
-      const res = await fetch("/api/media/bulk-download", {
+      const res = await apiFetch("/api/media/bulk-download", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -735,7 +736,7 @@ export default function LibraryPageInner() {
           // Delete all items matching the current filter server-side.
           try {
             const qs = buildDeleteAllQuery();
-            const res = await fetch(`/api/media${qs ? `?${qs}` : ""}`, {
+            const res = await apiFetch(`/api/media${qs ? `?${qs}` : ""}`, {
               method: "DELETE",
               credentials: "include",
             });
@@ -768,7 +769,7 @@ export default function LibraryPageInner() {
 
         const results = await Promise.allSettled(
           ids.map(id =>
-            fetch(`/api/media/${id}`, { method: "DELETE", credentials: "include" })
+            apiFetch(`/api/media/${id}`, { method: "DELETE", credentials: "include" })
           )
         );
 

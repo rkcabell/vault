@@ -2,11 +2,12 @@
 import fp from "fastify-plugin";
 import jwt from "jsonwebtoken";
 import type { FastifyPluginAsync } from "fastify";
-import type { JwtPayload } from "jsonwebtoken";
+import type { JwtPayload, SignOptions } from "jsonwebtoken";
 
-// Your tokens always include `sub` plus standard JWT fields.
-type AccessClaims = JwtPayload & { sub: string };
-type RefreshClaims = JwtPayload & { sub: string };
+// Tokens always include `sub`; `tv` (tokenVersion) is present on tokens minted
+// after the session-eviction change and absent on older ones.
+type AccessClaims = JwtPayload & { sub: string; tv?: number };
+type RefreshClaims = JwtPayload & { sub: string; tv?: number };
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -25,6 +26,8 @@ const jwtPlugin: FastifyPluginAsync = async (app) => {
 
   const accessSecret = app.config.JWT_SECRET;
   const refreshSecret = app.config.JWT_REFRESH_SECRET;
+  const accessTtl = app.config.JWT_ACCESS_TTL as SignOptions["expiresIn"];
+  const refreshTtl = app.config.JWT_REFRESH_TTL as SignOptions["expiresIn"];
 
   function assertSub(payload: JwtPayload): asserts payload is AccessClaims {
     if (!payload || typeof payload.sub !== "string") {
@@ -34,10 +37,10 @@ const jwtPlugin: FastifyPluginAsync = async (app) => {
 
   app.decorate("jwt", {
     signAccess(payload: Record<string, unknown>) {
-      return jwt.sign(payload, accessSecret, { expiresIn: "20h" });
+      return jwt.sign(payload, accessSecret, { expiresIn: accessTtl });
     },
     signRefresh(payload: Record<string, unknown>) {
-      return jwt.sign(payload, refreshSecret, { expiresIn: "7d" });
+      return jwt.sign(payload, refreshSecret, { expiresIn: refreshTtl });
     },
     verifyAccess(token: string): AccessClaims {
       const payload = jwt.verify(token, accessSecret) as JwtPayload;

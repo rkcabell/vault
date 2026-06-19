@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import Link from "next/link";
 import type { Route } from "next";
 import { Pencil, Plus, Star } from "lucide-react";
@@ -31,7 +32,7 @@ export function BundleCard({ bundle, onStarToggle, onEdit, onAddMedia }: BundleC
     if (isStarring) return;
     setIsStarring(true);
     try {
-      const res = await fetch(`/api/bundles/${bundle.id}/star`, {
+      const res = await apiFetch(`/api/bundles/${bundle.id}/star`, {
         method: "POST",
         credentials: "include",
       });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { Route } from 'next';
@@ -69,7 +70,7 @@ export default function BundleDetailPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/bundles/${id}`, { credentials: 'include' });
+      const res = await apiFetch(`/api/bundles/${id}`, { credentials: 'include' });
       if (!res.ok) {
         if (res.status === 404) { router.replace('/bundles' as Route); return; }
         setError(await readErrorFromResponse(res));
@@ -90,7 +91,7 @@ export default function BundleDetailPage() {
     if (removingId) return;
     setRemovingId(mediaId);
     try {
-      const res = await fetch(`/api/bundles/${id}/items/${mediaId}`, {
+      const res = await apiFetch(`/api/bundles/${id}/items/${mediaId}`, {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -118,7 +119,7 @@ export default function BundleDetailPage() {
     if (isStarring || !bundle) return;
     setIsStarring(true);
     try {
-      const res = await fetch(`/api/bundles/${id}/star`, {
+      const res = await apiFetch(`/api/bundles/${id}/star`, {
         method: 'POST',
         credentials: 'include',
       });
@@ -136,7 +137,7 @@ export default function BundleDetailPage() {
     if (isExporting || !bundle) return;
     setIsExporting(true);
     try {
-      const res = await fetch(`/api/bundles/${id}/export`, { credentials: 'include' });
+      const res = await apiFetch(`/api/bundles/${id}/export`, { credentials: 'include' });
       if (!res.ok) return;
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -153,7 +154,7 @@ export default function BundleDetailPage() {
   const deleteBundle = async () => {
     setIsDeletingBundle(true);
     try {
-      await fetch(`/api/bundles/${id}`, { method: 'DELETE', credentials: 'include' });
+      await apiFetch(`/api/bundles/${id}`, { method: 'DELETE', credentials: 'include' });
       emitBundlesUpdated();
       emitTagsUpdated();
       router.push('/bundles' as Route);

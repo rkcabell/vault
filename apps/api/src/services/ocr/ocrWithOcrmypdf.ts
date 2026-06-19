@@ -4,9 +4,10 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import type { default as PdfLib } from "pdf-lib";
 import { looksLikeHeic } from "../../lib/fileSignatures.js";
 
-let _pdfLib: typeof import("pdf-lib") | null = null;
+let _pdfLib: typeof PdfLib | null = null;
 async function getPdfLib() {
   return (_pdfLib ??= await import("pdf-lib"));
 }

@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import { FolderOpen, FolderPlus, Check } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import {
@@ -44,7 +45,7 @@ export function BulkBundleDialog({ open, onOpenChange, selectedIds, onDone }: Bu
     setIsCreating(false);
     setNewBundleName('');
     setIsLoading(true);
-    fetch('/api/bundles', { credentials: 'include' })
+    apiFetch('/api/bundles', { credentials: 'include' })
       .then(res => res.ok ? res.json() as Promise<{ bundles: BundleSummary[] }> : Promise.reject(new Error(`Could not load bundles: ${httpStatusMessage(res.status)}`)))
       .then(data => setBundles(data.bundles ?? []))
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load bundles'))
@@ -60,7 +61,7 @@ export function BulkBundleDialog({ open, onOpenChange, selectedIds, onDone }: Bu
       if (isCreating) {
         const trimmed = newBundleName.trim();
         if (!trimmed) return;
-        const createRes = await fetch('/api/bundles', {
+        const createRes = await apiFetch('/api/bundles', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           credentials: 'include',
@@ -73,7 +74,7 @@ export function BulkBundleDialog({ open, onOpenChange, selectedIds, onDone }: Bu
 
       if (!targetId) return;
 
-      const res = await fetch(`/api/bundles/${targetId}/items`, {
+      const res = await apiFetch(`/api/bundles/${targetId}/items`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         credentials: 'include',

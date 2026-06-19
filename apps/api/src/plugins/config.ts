@@ -12,6 +12,11 @@ const EnvSchema = z
     POSTGRES_URL: z.string().url().optional(),
     JWT_SECRET: z.string().min(32),
     JWT_REFRESH_SECRET: z.string().min(32),
+    // Token lifetimes (any `jsonwebtoken` expiresIn string, e.g. "15m", "7d").
+    // Short access TTL + silent refresh bounds the eviction window after a
+    // tokenVersion bump (password reset) to roughly one access lifetime.
+    JWT_ACCESS_TTL: z.string().default("15m"),
+    JWT_REFRESH_TTL: z.string().default("7d"),
 
     // Storage backend selection. "fs" (default) stores blobs on a filesystem
     // path (mountable from a NAS share); "s3" uses the S3_* settings below.

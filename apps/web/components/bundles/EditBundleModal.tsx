@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import { FolderOpen, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/Dialog';
@@ -32,7 +33,7 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
     setIsDeleting(true);
     setError('');
     try {
-      const res = await fetch(`/api/bundles/${bundle.id}`, { method: 'DELETE', credentials: 'include' });
+      const res = await apiFetch(`/api/bundles/${bundle.id}`, { method: 'DELETE', credentials: 'include' });
       if (!res.ok) { setError('Failed to delete bundle.'); return; }
       emitBundlesUpdated();
       onDeleted?.(bundle.id);
@@ -54,7 +55,7 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
       setCoverMediaId(bundle.coverMediaId ?? null);
       setError('');
       setLoadingItems(true);
-      fetch(`/api/bundles/${bundle.id}`, { credentials: 'include' })
+      apiFetch(`/api/bundles/${bundle.id}`, { credentials: 'include' })
         .then(r => r.ok ? r.json() : null)
         .then((d: { bundle: BundleDetail } | null) => {
           if (d?.bundle?.items) setItems(d.bundle.items);
@@ -70,7 +71,7 @@ export function EditBundleModal({ bundle, open, onOpenChange, onSaved, onDeleted
     setIsSaving(true);
     setError('');
     try {
-      const res = await fetch(`/api/bundles/${bundle.id}`, {
+      const res = await apiFetch(`/api/bundles/${bundle.id}`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

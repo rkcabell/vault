@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -150,7 +151,7 @@ export function StorageSettingsCard() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/server/storage-config", { credentials: "include" })
+    apiFetch("/api/server/storage-config", { credentials: "include" })
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((c: StorageConfig) => {
         if (cancelled) return;
@@ -195,7 +196,7 @@ export function StorageSettingsCard() {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch("/api/server/storage/test", { method: "POST", credentials: "include" });
+      const res = await apiFetch("/api/server/storage/test", { method: "POST", credentials: "include" });
       const body = await res.json().catch(() => null);
       if (res.ok && body?.ok) {
         setTestResult({ ok: true, message: `Reachable and writable (${body.driver}, ${body.durationMs} ms).` });
@@ -239,7 +240,7 @@ export function StorageSettingsCard() {
                 secretAccessKey: form.s3Secret.trim() || undefined,
               },
             };
-      const res = await fetch("/api/server/storage-config", {
+      const res = await apiFetch("/api/server/storage-config", {
         method: "PATCH",
         credentials: "include",
         headers: { "content-type": "application/json" },

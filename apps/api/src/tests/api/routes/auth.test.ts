@@ -15,6 +15,7 @@ type UserRow = {
   name: string | null;
   username: string | null;
   avatarUrl?: string | null;
+  tokenVersion?: number;
 };
 
 interface PrismaMockOpts {
@@ -25,10 +26,10 @@ interface PrismaMockOpts {
 }
 
 interface JwtMockOpts {
-  signAccess?: (payload: { sub: string }) => string;
-  signRefresh?: (payload: { sub: string }) => string;
-  verifyAccess?: (token: string) => { sub: string };
-  verifyRefresh?: (token: string) => { sub: string };
+  signAccess?: (payload: { sub: string; tv?: number }) => string;
+  signRefresh?: (payload: { sub: string; tv?: number }) => string;
+  verifyAccess?: (token: string) => { sub: string; tv?: number };
+  verifyRefresh?: (token: string) => { sub: string; tv?: number };
 }
 
 function makePrisma({
@@ -290,10 +291,11 @@ test("POST /login: invalid email body returns 400", async () => {
 
 // ── POST /refresh ─────────────────────────────────────────────────────────────
 
-test("POST /refresh: valid token returns new access token", async () => {
+test("POST /refresh: matching tokenVersion returns new access token", async () => {
   const app = await buildApp({
+    prisma: { userFindUnique: async () => ({ tokenVersion: 3 }) as UserRow },
     jwt: {
-      verifyRefresh: () => ({ sub: "user-1" }),
+      verifyRefresh: () => ({ sub: "user-1", tv: 3 }),
       signAccess: () => "new-access",
     },
   });
@@ -307,6 +309,41 @@ test("POST /refresh: valid token returns new access token", async () => {
 
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().access, "new-access");
+});
+
+test("POST /refresh: stale tokenVersion is rejected (evicted by a password reset)", async () => {
+  const app = await buildApp({
+    // User's tokenVersion was bumped to 4 (e.g. by an admin reset) after this
+    // refresh token (tv: 3) was issued.
+    prisma: { userFindUnique: async () => ({ tokenVersion: 4 }) as UserRow },
+    jwt: { verifyRefresh: () => ({ sub: "user-1", tv: 3 }) },
+  });
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/refresh",
+    headers: JSON_CT,
+    payload: JSON.stringify({ refresh: "stale-refresh-tok" }),
+  });
+
+  assert.equal(res.statusCode, 401);
+  assert.match(res.json().message, /invalid or expired/i);
+});
+
+test("POST /refresh: unknown user is rejected", async () => {
+  const app = await buildApp({
+    prisma: { userFindUnique: async () => null },
+    jwt: { verifyRefresh: () => ({ sub: "ghost", tv: 0 }) },
+  });
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/refresh",
+    headers: JSON_CT,
+    payload: JSON.stringify({ refresh: "tok" }),
+  });
+
+  assert.equal(res.statusCode, 401);
 });
 
 test("POST /refresh: invalid token returns 401", async () => {
@@ -325,121 +362,84 @@ test("POST /refresh: invalid token returns 401", async () => {
   assert.match(res.json().message, /invalid or expired/i);
 });
 
-// ── POST /forgot-password ─────────────────────────────────────────────────────
-
-test("POST /forgot-password: known email returns token", async () => {
+test("POST /refresh: cookie-based refresh sets fresh access + refresh cookies (sliding)", async () => {
   const app = await buildApp({
-    prisma: {
-      userFindUnique: async () => ({
-        id: "user-1", email: "u@example.com", passwordHash: "h", name: null, username: null,
-      }),
-      userUpdate: async () => ({}),
+    prisma: { userFindUnique: async () => ({ tokenVersion: 3 }) as UserRow },
+    jwt: {
+      verifyRefresh: () => ({ sub: "user-1", tv: 3 }),
+      signAccess: () => "new-access",
+      signRefresh: () => "new-refresh",
     },
   });
 
   const res = await app.inject({
     method: "POST",
-    url: "/forgot-password",
-    headers: JSON_CT,
-    payload: JSON.stringify({ email: "u@example.com" }),
+    url: "/refresh",
+    headers: { cookie: "refresh_token=valid-refresh-tok" },
   });
 
   assert.equal(res.statusCode, 200);
-  const body = res.json();
-  assert.ok(typeof body.token === "string" && body.token.length > 0, "token must be a non-empty string");
+  assert.equal(res.json().access, "new-access");
+  assert.equal(res.json().refresh, "new-refresh");
+  assert.ok(hasSetCookie(res, "access_token"), "access_token cookie must be re-set");
+  assert.ok(hasSetCookie(res, "refresh_token"), "refresh_token cookie must be re-set (rotated)");
 });
 
-test("POST /forgot-password: unknown email returns empty object (no token leakage)", async () => {
+test("POST /refresh: missing token (no cookie, no body) returns 401", async () => {
+  const app = await buildApp();
+  const res = await app.inject({ method: "POST", url: "/refresh" });
+  assert.equal(res.statusCode, 401);
+});
+
+test("POST /refresh: stale tokenVersion clears the auth cookies", async () => {
   const app = await buildApp({
-    prisma: { userFindUnique: async () => null },
+    prisma: { userFindUnique: async () => ({ tokenVersion: 4 }) as UserRow },
+    jwt: { verifyRefresh: () => ({ sub: "user-1", tv: 3 }) },
   });
 
   const res = await app.inject({
     method: "POST",
-    url: "/forgot-password",
-    headers: JSON_CT,
-    payload: JSON.stringify({ email: "nobody@example.com" }),
+    url: "/refresh",
+    headers: { cookie: "access_token=a; refresh_token=stale-refresh-tok" },
   });
 
-  assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.json(), {});
+  assert.equal(res.statusCode, 401);
+  const sc = res.headers["set-cookie"];
+  const list = Array.isArray(sc) ? sc : [sc];
+  assert.ok(
+    list.some(c => typeof c === "string" && c.startsWith("access_token=") && /expires=/i.test(c)),
+    "access_token must be cleared on eviction",
+  );
+  assert.ok(
+    list.some(c => typeof c === "string" && c.startsWith("refresh_token=") && /expires=/i.test(c)),
+    "refresh_token must be cleared on eviction",
+  );
 });
 
-test("POST /forgot-password: invalid email format returns empty object (not 400)", async () => {
+// ── POST /logout ──────────────────────────────────────────────────────────────
+
+test("POST /logout: clears the auth cookies", async () => {
   const app = await buildApp();
 
   const res = await app.inject({
     method: "POST",
-    url: "/forgot-password",
-    headers: JSON_CT,
-    payload: JSON.stringify({ email: "not-an-email" }),
-  });
-
-  // Route silently ignores invalid input to avoid user enumeration
-  assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.json(), {});
-});
-
-// ── POST /reset-password ──────────────────────────────────────────────────────
-
-test("POST /reset-password: valid token and password returns success message", async () => {
-  const app = await buildApp({
-    prisma: {
-      userFindFirst: async () => ({ id: "user-1", email: "u@example.com" }),
-      userUpdate: async () => ({}),
-    },
-  });
-
-  const res = await app.inject({
-    method: "POST",
-    url: "/reset-password",
-    headers: JSON_CT,
-    payload: JSON.stringify({ token: "valid-reset-token", password: "newpassword1" }),
+    url: "/logout",
+    headers: { cookie: "access_token=a; refresh_token=b" },
   });
 
   assert.equal(res.statusCode, 200);
-  assert.equal(res.json().message, "Password updated");
+  const sc = res.headers["set-cookie"];
+  const list = Array.isArray(sc) ? sc : [sc];
+  assert.ok(
+    list.some(c => typeof c === "string" && c.startsWith("access_token=") && /expires=/i.test(c)),
+    "access_token must be cleared",
+  );
+  assert.ok(
+    list.some(c => typeof c === "string" && c.startsWith("refresh_token=") && /expires=/i.test(c)),
+    "refresh_token must be cleared",
+  );
 });
 
-test("POST /reset-password: unknown or expired token returns 400", async () => {
-  const app = await buildApp({
-    prisma: { userFindFirst: async () => null },
-  });
-
-  const res = await app.inject({
-    method: "POST",
-    url: "/reset-password",
-    headers: JSON_CT,
-    payload: JSON.stringify({ token: "expired-token", password: "newpassword1" }),
-  });
-
-  assert.equal(res.statusCode, 400);
-  assert.match(res.json().message, /invalid or has expired/i);
-});
-
-test("POST /reset-password: short password returns 400", async () => {
-  const app = await buildApp();
-
-  const res = await app.inject({
-    method: "POST",
-    url: "/reset-password",
-    headers: JSON_CT,
-    payload: JSON.stringify({ token: "some-token", password: "short" }),
-  });
-
-  assert.equal(res.statusCode, 400);
-  assert.match(res.json().message, /8 characters/i);
-});
-
-test("POST /reset-password: missing token field returns 400", async () => {
-  const app = await buildApp();
-
-  const res = await app.inject({
-    method: "POST",
-    url: "/reset-password",
-    headers: JSON_CT,
-    payload: JSON.stringify({ password: "newpassword1" }),
-  });
-
-  assert.equal(res.statusCode, 400);
-});
+// Self-service password reset has been removed — recovery is admin-only via the
+// reset-password CLI (see src/tests/api/lib/resetPassword.test.ts). The
+// /forgot-password and /reset-password routes no longer exist.

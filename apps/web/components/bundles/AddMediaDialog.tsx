@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import { Archive, BookOpen, File as FileIcon, FileText, Film, Image as ImageIcon, Loader2, Music, Search, Video, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { TagFilterChip, type TagFilterState } from '@/components/media/TagFilterChip';
@@ -111,7 +112,7 @@ export function AddMediaDialog({
     setNextCursor(null);
     setHasMore(false);
     try {
-      const res = await fetch(`/api/media?${buildQS(q, tags, excludeTags, type, null)}`, {
+      const res = await apiFetch(`/api/media?${buildQS(q, tags, excludeTags, type, null)}`, {
         credentials: 'include',
         signal: controller.signal,
       });
@@ -139,7 +140,7 @@ export function AddMediaDialog({
     setIsLoadingMore(true);
     setLoadMoreError(null);
     try {
-      const res = await fetch(`/api/media?${buildQS(q, tags, excludeTags, type, cursor)}`, { credentials: 'include' });
+      const res = await apiFetch(`/api/media?${buildQS(q, tags, excludeTags, type, cursor)}`, { credentials: 'include' });
       if (!res.ok) {
         setLoadMoreError(`Could not load more: ${httpStatusMessage(res.status)}`);
         return;
@@ -168,13 +169,13 @@ export function AddMediaDialog({
       setSearchError(null);
       setLoadMoreError(null);
       void freshSearch('', new Set(), new Set(), null);
-      fetch('/api/tags?limit=200', { credentials: 'include' })
+      apiFetch('/api/tags?limit=200', { credentials: 'include' })
         .then(r => r.ok ? r.json() : { tags: [] })
         .then((d: { tags: { name: string }[] }) => setTagOptions(d.tags?.map(t => t.name) ?? []))
         .catch(() => {});
       // Fetch existing IDs only when not provided by the parent
       if (!existingIdsProp) {
-        fetch(`/api/bundles/${bundleId}`, { credentials: 'include' })
+        apiFetch(`/api/bundles/${bundleId}`, { credentials: 'include' })
           .then(r => r.ok ? r.json() : null)
           .then((d: { bundle: { items: { mediaId: string }[] } } | null) => {
             setFetchedExistingIds(new Set(d?.bundle?.items?.map(i => i.mediaId) ?? []));
@@ -248,7 +249,7 @@ export function AddMediaDialog({
     if (!ids.length) return;
     setIsAdding(true);
     try {
-      const res = await fetch(`/api/bundles/${bundleId}/items`, {
+      const res = await apiFetch(`/api/bundles/${bundleId}/items`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

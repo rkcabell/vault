@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import { Button } from "@/components/ui/Button";
 import { Folder, FolderPlus, FolderUp, HardDrive, Loader2, X } from "lucide-react";
 
@@ -54,7 +55,7 @@ export function DirectoryPicker({
     setCreateError(null);
     try {
       const qs = p ? `?path=${encodeURIComponent(p)}` : "";
-      const res = await fetch(`/api/server/fs/list${qs}`, { credentials: "include" });
+      const res = await apiFetch(`/api/server/fs/list${qs}`, { credentials: "include" });
       const body = await res.json().catch(() => null);
       if (!res.ok) {
         setError(body?.message ?? `Could not list directory (${res.status}).`);
@@ -78,7 +79,7 @@ export function DirectoryPicker({
     if (!name || !listing) return;
     setCreateError(null);
     try {
-      const res = await fetch("/api/server/fs/mkdir", {
+      const res = await apiFetch("/api/server/fs/mkdir", {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },

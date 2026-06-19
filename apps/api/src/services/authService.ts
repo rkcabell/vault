@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { createJwtAdapter, type JwtAdapter } from "../adapters/jwtAdapter.js";
 import { createPasswordHasher, type PasswordHasher } from "../adapters/passwordHasher.js";
 import { type UserRepository } from "../repositories/userRepository.js";
@@ -7,7 +6,7 @@ export type AuthTokens = { access: string; refresh: string };
 export type AuthUser = { id: string; email: string; name?: string | null; username?: string | null };
 
 export class AuthError extends Error {
-  constructor(public code: "USER_EXISTS" | "INVALID_CREDENTIALS" | "INVALID_TOKEN" | "TOKEN_EXPIRED") {
+  constructor(public code: "USER_EXISTS" | "INVALID_CREDENTIALS" | "INVALID_TOKEN") {
     super(code);
   }
 }
@@ -42,9 +41,10 @@ export function createAuthService (deps: AuthServiceDeps) {
     const hash = await passwordHasher.hash(password);
     const user = await deps.userRepository.createUser({ email, passwordHash: hash });
 
+    // New account: tokenVersion starts at 0 (the column default).
     const tokens: AuthTokens = {
-      access: jwt.signAccess({ sub: user.id }),
-      refresh: jwt.signRefresh({ sub: user.id }),
+      access: jwt.signAccess({ sub: user.id, tv: 0 }),
+      refresh: jwt.signRefresh({ sub: user.id, tv: 0 }),
     };
 
     return { user, tokens };
@@ -57,22 +57,36 @@ export function createAuthService (deps: AuthServiceDeps) {
     const ok = await passwordHasher.verify(user.passwordHash, password);
     if (!ok) throw new AuthError("INVALID_CREDENTIALS");
 
+    const tv = user.tokenVersion ?? 0;
     const tokens: AuthTokens = {
-      access: jwt.signAccess({ sub: user.id }),
-      refresh: jwt.signRefresh({ sub: user.id }),
+      access: jwt.signAccess({ sub: user.id, tv }),
+      refresh: jwt.signRefresh({ sub: user.id, tv }),
     };
 
     return { user: { id: user.id, email: user.email }, tokens };
   };
 
   const refreshTokens = async (refresh: string) => {
+    let payload: { sub: string; tv?: number };
     try {
-      const payload = jwt.verifyRefresh(refresh);
-      const access = jwt.signAccess({ sub: payload.sub });
-      return { access };
+      payload = jwt.verifyRefresh(refresh);
     } catch {
       throw new AuthError("INVALID_TOKEN");
     }
+
+    // Eviction point: a refresh token only mints a new access token if its
+    // tokenVersion still matches the user's current one. A password reset bumps
+    // tokenVersion, so tokens issued before the reset stop refreshing.
+    const current = await deps.userRepository.getTokenVersion(payload.sub);
+    if (current === null) throw new AuthError("INVALID_TOKEN");
+    if ((payload.tv ?? 0) !== current) throw new AuthError("INVALID_TOKEN");
+
+    // Sliding session: re-issue both tokens so an actively-used session never
+    // expires. The new refresh carries a fresh TTL; eviction still rides on
+    // tokenVersion (a reset bumps it, so every prior refresh stops minting).
+    const access = jwt.signAccess({ sub: payload.sub, tv: current });
+    const newRefresh = jwt.signRefresh({ sub: payload.sub, tv: current });
+    return { access, refresh: newRefresh };
   };
 
   const getMe = async (token: string) => {
@@ -86,30 +100,10 @@ export function createAuthService (deps: AuthServiceDeps) {
     }
   };
 
-  const forgotPassword = async (email: string): Promise<string | null> => {
-    const user = await deps.userRepository.findByEmail(email);
-    if (!user) return null;
-
-    const token = crypto.randomBytes(32).toString("hex");
-    const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-    await deps.userRepository.setResetToken(user.id, token, expiry);
-    return token;
-  };
-
-  const resetPassword = async (token: string, newPassword: string): Promise<void> => {
-    const user = await deps.userRepository.findByResetToken(token);
-    if (!user) throw new AuthError("TOKEN_EXPIRED");
-
-    const newHash = await passwordHasher.hash(newPassword);
-    await deps.userRepository.clearResetToken(user.id, newHash);
-  };
-
   return {
     register,
     login,
     refreshTokens,
     getMe,
-    forgotPassword,
-    resetPassword,
   };
 }

@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useRef, type KeyboardEvent } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -74,7 +75,7 @@ export function BulkTagDialog({ open, onOpenChange, selectedItems, onDone }: Bul
     const results = await Promise.allSettled(
       selectedItems.map(async item => {
         const merged = normalizeTags([...(item.tags ?? []), ...tags]);
-        const res = await fetch(`/api/media/${item.id}`, {
+        const res = await apiFetch(`/api/media/${item.id}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           credentials: 'include',

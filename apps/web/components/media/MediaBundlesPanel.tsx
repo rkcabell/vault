@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState } from 'react'
+import { apiFetch } from '@/lib/apiFetch'
 import Link from 'next/link'
 import { ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -39,7 +40,7 @@ export function MediaBundlesPanel ({
     setIsRemoving(true)
     setError(null)
     try {
-      const res = await fetch(`/api/bundles/${bundleId}/items/${mediaId}`, {
+      const res = await apiFetch(`/api/bundles/${bundleId}/items/${mediaId}`, {
         method: 'DELETE',
         credentials: 'include',
       })
@@ -63,7 +64,7 @@ export function MediaBundlesPanel ({
     try {
       const results = await Promise.allSettled(
         memberBundles.map(b =>
-          fetch(`/api/bundles/${b.id}/items/${mediaId}`, {
+          apiFetch(`/api/bundles/${b.id}/items/${mediaId}`, {
             method: 'DELETE',
             credentials: 'include',
           })

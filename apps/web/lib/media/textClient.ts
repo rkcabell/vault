@@ -1,4 +1,5 @@
 import { app } from '@/lib/app'
+import { apiFetch } from '@/lib/apiFetch'
 import { readErrorMessage } from './utils'
 
 type RerunOptions = {
@@ -10,7 +11,7 @@ type RerunOptions = {
 export async function rerunMediaTextExtraction (mediaId: string, options: RerunOptions = {}) {
   app.log.info('media text rerun requested', { mediaId, options })
 
-  const res = await fetch(`/api/media/${mediaId}/text`, {
+  const res = await apiFetch(`/api/media/${mediaId}/text`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     credentials: 'include',
@@ -27,7 +28,7 @@ export async function rerunMediaTextExtraction (mediaId: string, options: RerunO
 export async function cancelMediaTextExtraction (mediaId: string) {
   app.log.info('media text cancel requested', { mediaId })
 
-  const res = await fetch(`/api/media/${mediaId}/text/cancel`, {
+  const res = await apiFetch(`/api/media/${mediaId}/text/cancel`, {
     method: 'POST',
     credentials: 'include'
   })

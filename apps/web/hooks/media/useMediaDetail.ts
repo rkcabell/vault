@@ -10,6 +10,7 @@ import type {
   DownloadResponse
 } from '@/lib/media/types'
 import { readErrorMessage } from '@/lib/media/utils'
+import { apiFetch } from '@/lib/apiFetch'
 
 export function useMediaDetail (id: string) {
   const [loadState, setLoadState] = useState<LoadState>('loading')
@@ -45,7 +46,7 @@ export function useMediaDetail (id: string) {
       }
 
       try {
-        const res = await fetch(`/api/media/${id}`, {
+        const res = await apiFetch(`/api/media/${id}`, {
           method: 'GET',
           credentials: 'include',
           signal: controller.signal
@@ -106,7 +107,7 @@ export function useMediaDetail (id: string) {
     async (force = false) => {
       if (downloadUrl && !force) return downloadUrl
 
-      const res = await fetch(`/api/media/${id}/download`, {
+      const res = await apiFetch(`/api/media/${id}/download`, {
         method: 'GET',
         credentials: 'include'
       })
@@ -130,7 +131,7 @@ export function useMediaDetail (id: string) {
 
   const updateTitle = useCallback(
     async (nextTitle: string) => {
-      const res = await fetch(`/api/media/${id}`, {
+      const res = await apiFetch(`/api/media/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         credentials: 'include',
@@ -154,7 +155,7 @@ export function useMediaDetail (id: string) {
 
   const updateTags = useCallback(
     async (tags: string[], signal?: AbortSignal) => {
-      const res = await fetch(`/api/media/${id}`, {
+      const res = await apiFetch(`/api/media/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         credentials: 'include',

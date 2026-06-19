@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import { FileText, File as FileIcon, Film, Loader2, Music, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 
@@ -49,7 +50,7 @@ export function MediaPicker({ value, onChange, disabled }: MediaPickerProps) {
       try {
         const params = new URLSearchParams({ limit: "20" });
         if (q.trim()) params.set("query", q.trim());
-        const res = await fetch(`/api/media?${params.toString()}`, {
+        const res = await apiFetch(`/api/media?${params.toString()}`, {
           credentials: "include",
           signal: controller.signal,
         });
