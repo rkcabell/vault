@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import { type Preferences, type LightTheme, type DarkTheme, DEFAULT_PREFERENCES } from "@vault/types";
 
 export type { LightTheme, DarkTheme, Preferences };
@@ -95,7 +96,7 @@ function _flushSave() {
   if (!Object.keys(_savePatch).length) return;
   const patch = _savePatch;
   _savePatch = {};
-  fetch("/api/preferences", {
+  apiFetch("/api/preferences", {
     method: "PATCH",
     credentials: "include",
     headers: { "content-type": "application/json" },

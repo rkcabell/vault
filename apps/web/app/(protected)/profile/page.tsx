@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import { Edit2, Save, X, MapPin, Globe, Mail, Calendar, Loader2 } from 'lucide-react';
 import { useAuth } from '@/components/contexts/AuthContext';
 import { readErrorMessage } from '@/lib/media/utils';
@@ -71,7 +72,7 @@ export default function ProfilePage() {
       setLoading(true);
       setError(null);
 
-      const res = await fetch("/api/profile", {
+      const res = await apiFetch("/api/profile", {
         method: "GET",
         credentials: "include",
       });
@@ -117,7 +118,7 @@ export default function ProfilePage() {
       setSaving(true);
       setError(null);
 
-      const res = await fetch('/api/profile', {
+      const res = await apiFetch('/api/profile', {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

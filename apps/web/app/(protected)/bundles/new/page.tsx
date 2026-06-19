@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { Route } from 'next';
@@ -29,7 +30,7 @@ export default function NewBundlePage() {
     setError(null);
 
     try {
-      const res = await fetch('/api/bundles', {
+      const res = await apiFetch('/api/bundles', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

@@ -21,6 +21,10 @@ model User {
   preferences       Json?
   resetToken        String?   @unique
   resetTokenExpiry  DateTime?
+  // Bumped whenever the password is reset (admin CLI). Embedded in issued JWTs
+  // as `tv`; the /auth/refresh path rejects tokens whose tv no longer matches,
+  // evicting sessions that predate a password change.
+  tokenVersion      Int       @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   media        Media[]

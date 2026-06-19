@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
+import { validatePassword } from "@vault/types";
 import { useAuth } from "@/components/contexts/AuthContext";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 import styles from "./authpage.module.css";
@@ -25,8 +26,14 @@ export default function AuthPage() {
   const validate = () => {
     const errors: { email?: string; password?: string } = {};
     if (!email.includes("@")) errors.email = "Please enter a valid email address.";
-    if (!password || password.length < 8) {
-      errors.password = "Password must be at least 8 characters.";
+    // Only enforce the password policy when creating an account. At login we
+    // just require a value — gating login on the policy would lock out users
+    // whose password predates a policy change.
+    if (isRegister) {
+      const result = validatePassword(password);
+      if (!result.ok) errors.password = result.reason;
+    } else if (!password) {
+      errors.password = "Password is required.";
     }
     return errors;
   };
@@ -178,14 +185,9 @@ export default function AuthPage() {
               : isRegister && <p className={styles.fieldHint}>Must be at least 8 characters.</p>
             }
             {!isRegister && (
-              <button
-                type="button"
-                className={styles.forgotPassword}
-                onClick={() => router.push("/auth/forgot-password")}
-                disabled={loading}
-              >
-                Forgot password?
-              </button>
+              <p className={styles.fieldHint}>
+                Lost your password? Ask your Vault admin to reset it.
+              </p>
             )}
           </div>
 

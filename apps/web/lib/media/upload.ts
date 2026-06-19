@@ -1,4 +1,5 @@
 import { toast } from "@/components/ui/Toaster";
+import { apiFetch } from "@/lib/apiFetch";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ export const BATCH_CHUNK_SIZE   = 100;
 // ── API calls ─────────────────────────────────────────────────────────────────
 
 export async function batchInit(items: BatchInitItem[]): Promise<BatchInitResponse> {
-  const res = await fetch("/api/media/batch-init", {
+  const res = await apiFetch("/api/media/batch-init", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -58,7 +59,7 @@ export async function batchInit(items: BatchInitItem[]): Promise<BatchInitRespon
 }
 
 export async function batchFinalize(ids: string[], autoUnpack?: boolean): Promise<void> {
-  const res = await fetch("/api/media/batch-finalize", {
+  const res = await apiFetch("/api/media/batch-finalize", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },

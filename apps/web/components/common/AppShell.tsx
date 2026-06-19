@@ -2,6 +2,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import { ChevronLeft } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { Sidebar, type TagItem } from "./Sidebar";
@@ -52,7 +53,7 @@ export function AppShell({
     setIsFetchingTags(true);
     setTagsError(null);
     try {
-      const res = await fetch("/api/tags", {
+      const res = await apiFetch("/api/tags", {
         credentials: "include",
         signal: controller.signal,
       });

@@ -188,6 +188,11 @@ paths:
   /api/auth/refresh:
     post:
       summary: Refresh the access token
+      description: |
+        Issues a new access token from a valid refresh token. The refresh token's
+        tokenVersion must still match the user's current tokenVersion; a password
+        reset bumps tokenVersion, so refresh tokens issued before the reset are
+        rejected with 401.
       tags:
         - Auth
       operationId: auth_refresh
@@ -234,94 +239,30 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
-  /api/auth/forgot-password:
+  /api/auth/logout:
     post:
-      summary: Request a password reset
+      summary: Log out (clear auth cookies)
       description: |
-        Always returns 200 to prevent user enumeration. If the email is registered,
-        a reset token is issued. In development the token is returned in the response body;
-        in production it would be delivered via email.
+        Clears the access_token and refresh_token cookies. Stateless JWTs cannot be
+        revoked server-side, so the tokens themselves stay valid until they expire
+        (or are evicted when the user's tokenVersion changes).
+
+        There is no self-service password reset: password recovery is admin-only via
+        the reset-password CLI (`pnpm reset-password --email <addr>`), which sets the
+        password directly and bumps tokenVersion so prior sessions can no longer refresh.
       tags:
         - Auth
-      operationId: auth_forgotPassword
-      security: []
-      x-rateLimit:
-        max: 5
-        timeWindow: "1 minute"
-        keyBy: IP
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ForgotPasswordRequest"
-            examples:
-              forgot:
-                value:
-                  email: "user@example.com"
+      operationId: auth_logout
       responses:
         "200":
-          description: Request accepted (always 200 to prevent user enumeration)
+          description: Cookies cleared
           content:
             application/json:
               schema:
                 type: object
-              examples:
-                noAccount:
-                  value: {}
-                withToken:
-                  value:
-                    token: "a3f9b2..."
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-  /api/auth/reset-password:
-    post:
-      summary: Reset password using a token
-      tags:
-        - Auth
-      operationId: auth_resetPassword
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ResetPasswordRequest"
-            examples:
-              reset:
-                value:
-                  token: "a3f9b2..."
-                  password: "new-secure-password"
-      responses:
-        "200":
-          description: Password updated successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                required:
-                  - message
               examples:
                 success:
-                  value:
-                    message: "Password updated"
-        "400":
-          description: Invalid or expired reset token
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                expired:
-                  value:
-                    statusCode: 400
-                    error: "Bad Request"
-                    message: "This reset link is invalid or has expired."
+                  value: {}
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -2498,27 +2439,6 @@ components:
           type: string
       required:
         - access
-    ForgotPasswordRequest:
-      type: object
-      description: Email address to send a password reset to.
-      properties:
-        email:
-          type: string
-          format: email
-      required:
-        - email
-    ResetPasswordRequest:
-      type: object
-      description: Reset token and new password.
-      properties:
-        token:
-          type: string
-        password:
-          type: string
-          minLength: 8
-      required:
-        - token
-        - password
     AuthMeResponse:
       type: object
       description: Current user response.

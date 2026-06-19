@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import Link from 'next/link';
 import type { Route } from 'next';
 import { Folder, FolderOpen, Plus, Search, X } from 'lucide-react';
@@ -28,7 +29,7 @@ export default function BundlesPage() {
   useEffect(() => {
     setIsLoading(true);
     const url = debouncedQ ? `/api/bundles?q=${encodeURIComponent(debouncedQ)}` : '/api/bundles';
-    fetch(url, { credentials: 'include' })
+    apiFetch(url, { credentials: 'include' })
       .then(r => r.ok ? r.json() : { bundles: [] })
       .then((d: { bundles: BundleListItem[] }) => setBundles(d.bundles ?? []))
       .catch(() => {})
@@ -39,7 +40,7 @@ export default function BundlesPage() {
     // Optimistically update the star state, then refetch for correct starredAt ordering.
     setBundles(prev => prev.map(b => b.id === id ? { ...b, starred } : b));
     const url = debouncedQ ? `/api/bundles?q=${encodeURIComponent(debouncedQ)}` : '/api/bundles';
-    fetch(url, { credentials: 'include' })
+    apiFetch(url, { credentials: 'include' })
       .then(r => r.ok ? r.json() : null)
       .then((d: { bundles: BundleListItem[] } | null) => { if (d) setBundles(d.bundles ?? []); })
       .catch(() => {});

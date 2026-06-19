@@ -1,5 +1,7 @@
 // apps/web/lib/api-client.ts
 
+import { apiFetch } from './apiFetch'
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? ''
 
 type InitUploadResp = { id: string; putUrl: string }
@@ -11,7 +13,7 @@ export async function initUpload (
   title?: string,
   autoTagOnUpload?: boolean,
 ): Promise<InitUploadResp> {
-  const res = await fetch(`${API_BASE}/api/media`, {
+  const res = await apiFetch(`${API_BASE}/api/media`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
@@ -38,7 +40,7 @@ export async function initUpload (
 }
 
 export async function getMedia (id: string) {
-  const res = await fetch(`${API_BASE}/api/media/${id}`, {
+  const res = await apiFetch(`${API_BASE}/api/media/${id}`, {
     method: 'GET',
     credentials: 'include'
   })
@@ -47,7 +49,7 @@ export async function getMedia (id: string) {
 }
 
 export async function finalizeUpload (id: string) {
-  const res = await fetch(`${API_BASE}/api/media/${id}/finalize`, {
+  const res = await apiFetch(`${API_BASE}/api/media/${id}/finalize`, {
     method: 'POST',
     credentials: 'include'
   })
@@ -55,7 +57,7 @@ export async function finalizeUpload (id: string) {
 }
 
 export async function unpackMedia (id: string): Promise<{ bundleId: string }> {
-  const res = await fetch(`${API_BASE}/api/media/${id}/unpack`, {
+  const res = await apiFetch(`${API_BASE}/api/media/${id}/unpack`, {
     method: 'POST',
     credentials: 'include',
   })

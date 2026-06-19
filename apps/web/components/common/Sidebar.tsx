@@ -1,6 +1,7 @@
 //File: apps/web/components/common/Sidebar.tsx
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import { useSplitDrag } from '@/hooks/useSplitDrag';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -162,7 +163,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
     setDeletingTag(tag);
     setOptimisticallyDeletedTags(prev => new Set([...prev, tag]));
     try {
-      const res = await fetch(`/api/tags/${encodeURIComponent(tag)}`, {
+      const res = await apiFetch(`/api/tags/${encodeURIComponent(tag)}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -201,7 +202,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
     if (!trimmed || trimmed === renamingTag) { cancelRename(); return; }
     setIsRenamingSaving(true);
     try {
-      const res = await fetch(`/api/tags/${encodeURIComponent(renamingTag)}`, {
+      const res = await apiFetch(`/api/tags/${encodeURIComponent(renamingTag)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         credentials: 'include',
@@ -225,7 +226,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
     bundlesAbortRef.current = controller;
     setIsFetchingBundles(true);
     try {
-      const res = await fetch('/api/bundles', { credentials: 'include', signal: controller.signal });
+      const res = await apiFetch('/api/bundles', { credentials: 'include', signal: controller.signal });
       if (!res.ok || bundlesAbortRef.current !== controller) return;
       const data = await res.json() as { bundles?: { id: string; name: string; itemCount: number; starred: boolean }[] };
       if (!data.bundles || bundlesAbortRef.current !== controller) return;
@@ -269,7 +270,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
     setIsFetchingMoreTags(true);
     try {
       const offset = tagOffsetRef.current;
-      const res = await fetch(`/api/tags?limit=${PAGE_SIZE}&offset=${offset}`, { credentials: 'include' });
+      const res = await apiFetch(`/api/tags?limit=${PAGE_SIZE}&offset=${offset}`, { credentials: 'include' });
       if (!res.ok) { hasMoreRef.current = false; setHasMoreTags(false); return; }
       const data = await res.json() as { tags: Array<{ name: string; count: number; color: string | null }> };
       const newTags = data.tags.map(t => ({ id: t.name, name: t.name, count: t.count, color: t.color }));

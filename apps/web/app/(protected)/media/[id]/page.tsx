@@ -1,6 +1,7 @@
 "use client";
 
 import React, { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import Link from "next/link";
 import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -319,7 +320,7 @@ const handleDelete = (e: React.MouseEvent) => {
     setErrorMessage(null);
 
     try {
-      const res = await fetch(`/api/media/${id}`, { method: "DELETE", credentials: "include" });
+      const res = await apiFetch(`/api/media/${id}`, { method: "DELETE", credentials: "include" });
       if (!res.ok) {
         const msg = await readErrorMessage(res, "Failed to delete media.");
         setErrorMessage(msg);
@@ -344,7 +345,7 @@ const handleDelete = (e: React.MouseEvent) => {
     setIsUnpacking(true);
     setErrorMessage(null);
     try {
-      const res = await fetch(`/api/media/${id}/unpack`, { method: "POST", credentials: "include" });
+      const res = await apiFetch(`/api/media/${id}/unpack`, { method: "POST", credentials: "include" });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setErrorMessage(data?.error ?? "Failed to unpack archive.");
@@ -366,7 +367,7 @@ const handleDelete = (e: React.MouseEvent) => {
     if (busy) return;
     setErrorMessage(null);
     try {
-      const res = await fetch(`/api/media/${id}/thumbnail/regenerate`, { method: "POST", credentials: "include" });
+      const res = await apiFetch(`/api/media/${id}/thumbnail/regenerate`, { method: "POST", credentials: "include" });
       if (!res.ok) {
         const msg = await readErrorMessage(res, "Failed to queue thumbnail regeneration.");
         setErrorMessage(msg);

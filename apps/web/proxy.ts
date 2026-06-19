@@ -13,8 +13,11 @@ const PUBLIC_PREFIXES = [
 export function proxy (req: NextRequest) {
   const { pathname } = req.nextUrl
 
-  // Check for access token cookie
-  const token = req.cookies.get('access_token')?.value ?? ''
+  // Gate on the refresh token, not the access token: the access token is
+  // short-lived (15m) and lapses during normal use, but a returning user with a
+  // valid 7d refresh cookie should be let in — the client silently renews the
+  // access token. Real token validity is enforced by the API on every request.
+  const token = req.cookies.get('refresh_token')?.value ?? ''
 
   // Always allow landing page
   if (pathname === '/') return NextResponse.next()

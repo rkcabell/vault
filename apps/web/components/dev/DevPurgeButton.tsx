@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import { Button } from "@/components/ui/Button";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 
@@ -28,7 +29,7 @@ export default function DevPurgeButton({ onSuccess, onError }: Props) {
   const doPurge = async () => {
     setIsPurging(true);
     try {
-      const res = await fetch("/api/media", {
+      const res = await apiFetch("/api/media", {
         method: "DELETE",
         credentials: "include",
       });

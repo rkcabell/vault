@@ -14,8 +14,17 @@ export class UserRepository {
   async findByEmail (email: string) {
     return this.prisma.user.findUnique({
       where: { email },
-      select: { id: true, email: true, passwordHash: true, name: true, username: true },
+      select: { id: true, email: true, passwordHash: true, name: true, username: true, tokenVersion: true },
     });
+  }
+
+  /** Current tokenVersion for a user, or null if the user no longer exists. */
+  async getTokenVersion (id: string): Promise<number | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { tokenVersion: true },
+    });
+    return user ? user.tokenVersion : null;
   }
 
   async findById (id: string) {
@@ -29,27 +38,6 @@ export class UserRepository {
     return this.prisma.user.create({
       data,
       select: { id: true, email: true },
-    });
-  }
-
-  async setResetToken (userId: string, token: string, expiry: Date) {
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: { resetToken: token, resetTokenExpiry: expiry },
-    });
-  }
-
-  async findByResetToken (token: string) {
-    return this.prisma.user.findFirst({
-      where: { resetToken: token, resetTokenExpiry: { gt: new Date() } },
-      select: { id: true, email: true },
-    });
-  }
-
-  async clearResetToken (userId: string, newPasswordHash: string) {
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash: newPasswordHash, resetToken: null, resetTokenExpiry: null },
     });
   }
 }

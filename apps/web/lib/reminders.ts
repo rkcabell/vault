@@ -1,5 +1,6 @@
 "use client";
 
+import { apiFetch } from "@/lib/apiFetch";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   ReminderStatus,
@@ -116,7 +117,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("content-type", "application/json");
   }
 
-  const response = await fetch(path, {
+  const response = await apiFetch(path, {
     ...init,
     credentials: "include",
     headers,

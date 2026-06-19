@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
@@ -129,7 +130,7 @@ export function ManageTagsCard() {
     if (!silent) setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/tags?limit=${MAX_FETCH}`, { credentials: "include" });
+      const res = await apiFetch(`/api/tags?limit=${MAX_FETCH}`, { credentials: "include" });
       if (!res.ok) {
         const data = await res.json().catch(() => null) as { message?: string; error?: string } | null;
         setError(data?.message ?? data?.error ?? "Unable to load tags.");
@@ -167,7 +168,7 @@ export function ManageTagsCard() {
     setIsDeleting(name);
     setError(null);
     try {
-      const res = await fetch(`/api/tags/${encodeURIComponent(name)}`, {
+      const res = await apiFetch(`/api/tags/${encodeURIComponent(name)}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -201,7 +202,7 @@ export function ManageTagsCard() {
     if (!trimmed || trimmed === renamingTag) { cancelRename(); return; }
     setIsRenaming(true);
     try {
-      const res = await fetch(`/api/tags/${encodeURIComponent(renamingTag)}`, {
+      const res = await apiFetch(`/api/tags/${encodeURIComponent(renamingTag)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         credentials: "include",
@@ -229,7 +230,7 @@ export function ManageTagsCard() {
 
   const persistTagColor = async (tagName: string, color: string | null) => {
     try {
-      const res = await fetch(`/api/tags/${encodeURIComponent(tagName)}`, {
+      const res = await apiFetch(`/api/tags/${encodeURIComponent(tagName)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         credentials: "include",
@@ -278,7 +279,7 @@ export function ManageTagsCard() {
     setIsDeletingEmpty(true);
     setError(null);
     try {
-      const res = await fetch("/api/tags/orphaned", {
+      const res = await apiFetch("/api/tags/orphaned", {
         method: "DELETE",
         credentials: "include",
       });

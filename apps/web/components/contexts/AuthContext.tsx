@@ -11,6 +11,11 @@ import {
 } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppInit, resetAppInit } from '@/hooks/useAppInit';
+import { apiFetch, refreshSession } from '@/lib/apiFetch';
+
+// Proactively renew before the 15m access token lapses. 10m < 15m leaves margin
+// and keeps a logged-in tab's eviction window (after a password reset) to ~10m.
+const RENEW_INTERVAL_MS = 10 * 60 * 1000;
 
 interface User {
   id: string;
@@ -58,7 +63,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // authenticated causes AuthGuard to unmount the page, resetting all state.
     setStatus(prev => prev === 'authenticated' ? 'authenticated' : 'loading');
     try {
-      const response = await fetch('/api/auth/me', { credentials: 'include' });
+      // apiFetch transparently renews an expired access token before retrying,
+      // so a window-focus re-validation after the 15m TTL lapses no longer 401s
+      // and evicts an otherwise-valid session.
+      const response = await apiFetch('/api/auth/me');
 
       if (response.ok) {
         const userData = await response.json();
@@ -123,6 +131,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
   }, [status, refresh]);
+
+  // Proactively renew the short-lived access token while authenticated so an
+  // active session never lapses. A failed renewal means the session was evicted
+  // (tokenVersion bump) or expired → log out. (Backgrounded tabs throttle this
+  // timer; the focus handler above covers the return-from-background case.)
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+    const id = setInterval(() => {
+      void refreshSession().then(ok => {
+        if (!ok) void logout();
+      });
+    }, RENEW_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [status, logout]);
 
   const replaceUser = useCallback((nextUser: User | null) => {
     setUserState(nextUser ? { ...nextUser } : null);

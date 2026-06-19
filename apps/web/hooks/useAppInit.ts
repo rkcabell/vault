@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 import { hydratePreferences, type Preferences } from "./usePreferences";
 import { seedRemindersSummary, seedOverviewReminders } from "../lib/reminders";
 import type { RemindersSummary, ReminderOverviewRow } from "@vault/types";
@@ -41,7 +42,7 @@ function _initOnce() {
   if (_initialized) return;
   _initialized = true;
 
-  fetch("/api/init", { credentials: "include" })
+  apiFetch("/api/init", { credentials: "include" })
     .then(r => {
       if (r.ok) return r.json() as Promise<AppInitData>;
       if (r.status === 401) _unauthenticated = true;
