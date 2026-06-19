@@ -3,10 +3,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, X } from "lucide-react";
 import { validatePassword } from "@vault/types";
 import { useAuth } from "@/components/contexts/AuthContext";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/Dialog";
 import styles from "./authpage.module.css";
 
 export default function AuthPage() {
@@ -21,6 +22,7 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
+  const [showForgotModal, setShowForgotModal] = useState(false);
   const isRegister = mode === "register";
 
   const validate = () => {
@@ -185,9 +187,14 @@ export default function AuthPage() {
               : isRegister && <p className={styles.fieldHint}>Must be at least 8 characters.</p>
             }
             {!isRegister && (
-              <p className={styles.fieldHint}>
-                Lost your password? Ask your Vault admin to reset it.
-              </p>
+              <button
+                type="button"
+                className={styles.forgotPassword}
+                onClick={() => setShowForgotModal(true)}
+                disabled={loading}
+              >
+                Forgot password?
+              </button>
             )}
           </div>
 
@@ -210,6 +217,44 @@ export default function AuthPage() {
           </button>
         </form>
       </div>
+
+      <Dialog open={showForgotModal} onOpenChange={setShowForgotModal}>
+        <DialogContent>
+          <DialogHeader>
+            <div className="flex items-start justify-between gap-4">
+              <DialogTitle>Reset Password</DialogTitle>
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(false)}
+                className="mt-0.5 text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <DialogDescription>
+              Open admin terminal to reset password
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            <div>
+              <p className="font-medium mb-1.5">Local / dev</p>
+              <pre className="bg-muted rounded-md px-3 py-2 text-xs overflow-x-auto whitespace-pre-wrap break-all">
+                {`cd apps/api\npnpm reset-password --email you@example.com`}
+              </pre>
+            </div>
+            <div>
+              <p className="font-medium mb-1.5">Docker</p>
+              <pre className="bg-muted rounded-md px-3 py-2 text-xs overflow-x-auto whitespace-pre-wrap break-all">
+                {`docker compose exec -it api pnpm reset-password --email you@example.com`}
+              </pre>
+            </div>
+            <p className="text-muted-foreground">
+              You will be logged out of all sessions
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

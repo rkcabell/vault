@@ -117,14 +117,13 @@ export function ExtractionControls (props: {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
 
-  const LANGUAGE_DISPLAY: Record<string, string> = {
-    eng: 'English',
-    spa: 'Spanish',
-    fra: 'French',
-    deu: 'German',
-  }
-
   const advancedSummary = useMemo(() => {
+    const LANGUAGE_DISPLAY: Record<string, string> = {
+      eng: 'English',
+      spa: 'Spanish',
+      fra: 'French',
+      deu: 'German',
+    }
     const languageLabel =
       language === 'auto' ? 'Auto-detect language' : `Language: ${LANGUAGE_DISPLAY[language] ?? language.toUpperCase()}`
     return `${languageLabel} | ${rotation} deg rotation`

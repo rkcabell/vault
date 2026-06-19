@@ -2,9 +2,10 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { Path2D, DOMMatrix, ImageData } from "@napi-rs/canvas";
+import type * as Canvas from "@napi-rs/canvas";
 import { loadPdfJs, getStandardFontDataUrl } from "../pdf/loadPdfJs.js";
 
-let _canvas: typeof import("@napi-rs/canvas") | null = null;
+let _canvas: typeof Canvas | null = null;
 async function getCanvas() {
   return (_canvas ??= await import("@napi-rs/canvas"));
 }
