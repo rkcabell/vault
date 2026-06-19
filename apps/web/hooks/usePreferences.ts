@@ -16,6 +16,7 @@ const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
   lowMemoryMode: "prefs:lowMemoryMode",
   autoUnpackArchives: "prefs:autoUnpackArchives",
   hideUnpackedItems: "prefs:hideUnpackedItems",
+  ignoreHiddenFiles: "prefs:ignoreHiddenFiles",
   soonWindowDays: "prefs:soonWindowDays",
   themePreference: "prefs:themePreference",
   yellowHighlight: "prefs:yellowHighlight",
