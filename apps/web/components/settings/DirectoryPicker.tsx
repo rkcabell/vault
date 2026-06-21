@@ -33,10 +33,12 @@ export function DirectoryPicker({
   initialPath,
   onSelect,
   onClose,
+  title = "Select folder",
 }: {
   initialPath?: string;
   onSelect: (path: string) => void;
   onClose: () => void;
+  title?: string;
 }) {
   const [listing, setListing] = useState<DirListing | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,7 +106,7 @@ export function DirectoryPicker({
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h3 className="text-sm font-semibold">Select storage folder</h3>
+          <h3 className="text-sm font-semibold">{title}</h3>
           <button onClick={onClose} aria-label="Close" className="text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />
           </button>

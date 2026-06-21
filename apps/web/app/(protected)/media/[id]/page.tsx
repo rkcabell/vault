@@ -15,6 +15,7 @@ import { MessageCard } from "@/components/ui/MessageCard";
 import { TAGS_UPDATED_EVENT, emitTagsUpdated } from "@/lib/tags";
 import { emitBundlesUpdated } from "@/lib/bundles";
 import { useMediaDetail } from "@/hooks/media/useMediaDetail";
+import { useServerStatus } from "@/hooks/useServerStatus";
 import { MediaPreviewCard } from "@/components/media/MediaPreviewCard";
 import { MediaInfoCard } from "@/components/media/MediaInfoCard";
 import { MediaTextPanel } from "@/components/media/MediaTextPanel";
@@ -40,6 +41,7 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
     setMedia,
     document,
     metadata,
+    localPath,
     thumbnailUrl,
     downloadUrl,
     setErrorMessage,
@@ -49,6 +51,10 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
     updateTitle,
     updateTags,
   } = useMediaDetail(id);
+
+  const { capabilities } = useServerStatus();
+  // Fail open until the capability fetch resolves, matching the hook's default.
+  const localExplorer = capabilities?.localExplorer ?? true;
 
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -363,6 +369,20 @@ const handleDelete = (e: React.MouseEvent) => {
     }
   };
 
+  const handleRevealInExplorer = async () => {
+    if (busy) return;
+    setErrorMessage(null);
+    try {
+      const res = await apiFetch(`/api/media/${id}/reveal`, { method: "POST", credentials: "include" });
+      if (!res.ok) {
+        const msg = await readErrorMessage(res, "Could not open file explorer.");
+        setErrorMessage(msg);
+      }
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Could not open file explorer.");
+    }
+  };
+
   const handleRegenerateThumbnail = async () => {
     if (busy) return;
     setErrorMessage(null);
@@ -536,8 +556,12 @@ const handleDelete = (e: React.MouseEvent) => {
                   onDelete={handleDelete}
                   onRegenerateThumbnail={handleRegenerateThumbnail}
                   onUnpackToBundle={handleUnpackToBundle}
+                  onRevealInExplorer={handleRevealInExplorer}
                   mimeType={media.mimeType}
                   linkedBundleId={media.linkedBundleId ?? null}
+                  localPath={localPath}
+                  storageKey={media.storageKey}
+                  localExplorer={localExplorer}
                 />
               </PanelCard>
               {media.memberBundles && media.memberBundles.length > 0 && (

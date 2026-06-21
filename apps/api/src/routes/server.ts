@@ -123,6 +123,9 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
       storageEndpoint: driver === "s3" ? app.config.S3_PUBLIC_ENDPOINT ?? null : null,
       storagePath:    driver === "fs" ? app.config.STORAGE_FS_PATH ?? null : null,
       minioConsoleUrl,
+      // Whether the server can open a native file manager on the host. Drives
+      // the "Open in File Explorer" button visibility on the media detail page.
+      localExplorer:  app.config.LOCAL_EXPLORER,
     };
   });
 

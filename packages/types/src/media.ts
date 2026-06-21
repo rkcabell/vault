@@ -87,6 +87,7 @@ export const MediaDetailSchema = z.object({
   mimeType: z.string(),
   sizeBytes: z.number().nullable(),
   storageKey: z.string(),
+  sourcePath: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   tags: z.array(z.string()),
@@ -198,6 +199,9 @@ export const MediaDetailResponseSchema = z.object({
   document: MediaDocumentSchema, // already nullable
   metadata: MediaMetadataSchema.nullable(),
   permissions: MediaPermissionsSchema.nullable(),
+  // Local filesystem path for "Open in File Explorer". Non-null for in-place
+  // indexed items (sourcePath) and fs-driver uploads. Null for S3-stored files.
+  localPath: z.string().nullable(),
 });
 export type MediaDetailResponse = z.infer<typeof MediaDetailResponseSchema>;
 

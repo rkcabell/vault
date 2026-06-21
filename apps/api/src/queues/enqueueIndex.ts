@@ -29,6 +29,19 @@ export const INDEX_QUEUE = process.env.INDEX_QUEUE ?? "index_queue";
 export async function enqueueIndex (queue: Queue<IndexJobData>, job: IndexJobData): Promise<string> {
   // One in-flight scan per (user, root): the jobId dedupes repeated submits.
   const jobId = `index-${job.userId}-${Buffer.from(job.rootPath).toString("base64url")}`;
+
+  // BullMQ keeps the job key in Redis for the full retention window even after
+  // completion or failure (removeOnComplete/Fail: { age }). Within that window,
+  // queue.add with the same jobId is a no-op — the worker never re-runs. Remove
+  // terminal-state jobs explicitly so the user can re-trigger a scan.
+  const existing = await queue.getJob(jobId);
+  if (existing) {
+    const state = await existing.getState();
+    if (state === "completed" || state === "failed") {
+      await existing.remove().catch(() => {});
+    }
+  }
+
   await queue.add("index", job, {
     jobId,
     attempts: 1, // a partial scan is resumable by re-running; don't auto-retry a long walk

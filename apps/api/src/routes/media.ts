@@ -1,6 +1,9 @@
 // apps/api/src/routes/media.ts
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { execFile, spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { requireAuth } from "../utils/authGuard.js";
 import { MEDIA_SORT_OPTIONS } from "../services/media/mediaQueryService.js";
 import { getUploadSizeError } from "../lib/media/uploadLimits.js";
@@ -11,6 +14,41 @@ import { ARCHIVE_MIME_TYPES } from "../lib/media/archiveTypes.js";
 import { enqueueUnpack, type UnpackJob, UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import type { PrismaClient } from "@prisma/client";
+import { isUnderAllowedRoot } from "../lib/media/indexRoots.js";
+
+type MinLogger = { warn: (obj: object, msg: string) => void };
+
+function revealInExplorer (p: string, log: MinLogger) {
+  if (process.platform === "win32") {
+    // explorer.exe is quirky about /select: it needs the literal command line
+    //   explorer.exe /select,"<path>"
+    // with quotes around the PATH ONLY. Two traps to avoid:
+    //   1. `cmd /c start` splits on the comma in `/select,` → broken flag.
+    //   2. Node's default arg quoting wraps the WHOLE `/select,<path>` token in
+    //      quotes when the path has spaces → explorer ignores /select and opens
+    //      the default folder (looks like the "wrong folder" opened).
+    // windowsVerbatimArguments passes our string through unaltered so we place
+    // the quotes exactly where explorer wants them. Windows filenames can't
+    // contain `"`, so the quoting can't be broken out of — no injection risk.
+    const winPath = p.replace(/\//g, "\\");
+    const child = spawn("explorer.exe", [`/select,"${winPath}"`], {
+      windowsVerbatimArguments: true,
+      detached: true,
+      stdio: "ignore",
+    });
+    // 'error' fires only on spawn failure; explorer's nonzero exit is not surfaced.
+    child.on("error", err => log.warn({ err, path: p }, "reveal in explorer failed"));
+    child.unref();
+  } else if (process.platform === "darwin") {
+    execFile("open", ["-R", p], err => {
+      if (err) log.warn({ err, path: p }, "reveal in explorer failed");
+    });
+  } else {
+    execFile("xdg-open", [path.dirname(p)], err => {
+      if (err) log.warn({ err, path: p }, "reveal in explorer failed");
+    });
+  }
+}
 
 async function autoUnpackIfEnabled(
   ids: string[],
@@ -578,12 +616,72 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     const userId = req.userId!;
     const { id } = paramsSchema.parse(req.params);
 
-    const media = await readService.getMediaDetail(userId, id);
+    const detail = await readService.getMediaDetail(userId, id);
+    if (!detail) return reply.notFound();
 
-    if (!media) return reply.notFound();
+    // Compute the local filesystem path for "Open in File Explorer".
+    // In-place indexed items have sourcePath; fs-stored uploads live at
+    // STORAGE_FS_PATH/storageKey. S3 items have no local path.
+    let localPath: string | null = null;
+    if (detail.media.sourcePath) {
+      localPath = detail.media.sourcePath;
+    } else if (app.config.STORAGE_DRIVER === "fs") {
+      localPath = path.join(app.config.STORAGE_FS_PATH, detail.media.storageKey);
+    }
 
-    return reply.send(media);
+    return reply.send({ ...detail, localPath });
   });
+
+  // POST /media/:id/reveal - open the file in the OS file manager.
+  // Works for in-place indexed items (sourcePath) and fs-stored uploads
+  // (STORAGE_FS_PATH + storageKey). S3 items have no local path to open.
+  app.post<{ Params: { id: string } }>(
+    "/:id/reveal",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+
+      // Refuse on deployments where the server can't reach the user's desktop
+      // (remote/container/multi-user). The UI hides the button in this case too.
+      if (!app.config.LOCAL_EXPLORER) {
+        return reply.forbidden("File Explorer reveal is disabled on this server.");
+      }
+
+      const media = await app.prisma.media.findFirst({
+        where: { id, userId },
+        select: { sourcePath: true, storageKey: true },
+      });
+      if (!media) return reply.notFound();
+
+      let revealPath: string;
+      if (media.sourcePath) {
+        // In-place indexed: re-validate against current allow-list.
+        const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+        const allowedRoots = prefs?.indexAllowedRoots ?? [];
+        if (!isUnderAllowedRoot(media.sourcePath, allowedRoots)) {
+          return reply.forbidden("Source path is no longer within an allowed root.");
+        }
+        revealPath = media.sourcePath;
+      } else if (app.config.STORAGE_DRIVER === "fs") {
+        // Vault-managed filesystem upload: construct the storage path.
+        revealPath = path.join(app.config.STORAGE_FS_PATH, media.storageKey);
+      } else {
+        return reply.badRequest("File is stored in S3 and has no local path.");
+      }
+
+      // Fail loudly if the file is gone — otherwise Explorer silently falls back
+      // to opening the default folder, which looks like the wrong file opened.
+      try {
+        await stat(revealPath);
+      } catch {
+        return reply.notFound("File no longer exists at its recorded location.");
+      }
+
+      revealInExplorer(revealPath, req.log);
+      return reply.send({ ok: true });
+    },
+  );
 
   // POST /media/:id/thumbnail/regenerate - force-requeue thumbnail generation
   app.post<{ Params: { id: string } }>(
@@ -593,7 +691,12 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       const userId = req.userId!;
       const { id } = paramsSchema.parse(req.params);
 
-      const result = await actionsService.regenerateThumbnail(userId, id);
+      // Snapshot the allow-list so the worker can re-validate an in-place
+      // source path (mirrors the index flow; env-based roots are empty now).
+      const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+      const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
+      const result = await actionsService.regenerateThumbnail(userId, id, allowedRoots);
       if (!result) return reply.notFound();
 
       return reply.send(result);

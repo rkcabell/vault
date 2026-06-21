@@ -535,6 +535,7 @@ export class MediaRepository {
         mimeType: true,
         sizeBytes: true,
         storageKey: true,
+        sourcePath: true,
         createdAt: true,
         updatedAt: true,
         tags: true,

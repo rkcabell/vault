@@ -527,11 +527,16 @@ test("POST /:id/unpack: unauthenticated returns 401", async () => {
 // ── GET /:id — media detail ────────────────────────────────────────────────────
 
 test("GET /:id: returns media detail", async () => {
-  const detail = { id: ID, title: "photo.jpg", mimeType: "image/jpeg" };
+  const detail = {
+    media: { id: ID, title: "photo.jpg", mimeType: "image/jpeg", sourcePath: null, storageKey: "orig/key" },
+    document: null,
+    metadata: null,
+    permissions: { canEdit: true, canDelete: true, canDownload: true, canOcr: true },
+  };
   const app = await buildApp({ readService: { getMediaDetail: async () => detail } });
   const res = await app.inject({ method: "GET", url: `/${ID}`, headers: AUTH });
   assert.equal(res.statusCode, 200);
-  assert.equal(res.json().id, ID);
+  assert.equal(res.json().media.id, ID);
 });
 
 test("GET /:id: not found returns 404", async () => {

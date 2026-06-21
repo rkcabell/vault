@@ -336,17 +336,30 @@ export default function UploadPage() {
               Vault generates thumbnails and text search for files where they sit — no copy is made and
               the source folder is never modified.
             </p>
+
             {indexRoots.length > 0 && (
-              <p className="mb-4 break-all text-xs text-muted-foreground">
-                Allowed roots: <span className="font-mono">{indexRoots.join(", ")}</span>
-              </p>
+              <div className="mb-4 space-y-1">
+                <p className="text-xs text-muted-foreground">Allowed roots — click to select:</p>
+                {indexRoots.map(root => (
+                  <button
+                    key={root}
+                    onClick={() => setIndexPath(root)}
+                    disabled={isIndexing}
+                    className={`block w-full rounded border px-3 py-1.5 text-left font-mono text-sm transition-colors hover:bg-accent ${
+                      indexPath === root ? "border-primary bg-primary/10" : "border-border"
+                    }`}
+                  >
+                    {root}
+                  </button>
+                ))}
+              </div>
             )}
 
             <div className="flex flex-wrap items-center gap-3">
               <Button variant="outline" onClick={() => setShowPicker(true)} disabled={isIndexing}>
-                {indexPath ? "Change folder…" : "Choose folder…"}
+                {indexPath ? "Change folder…" : "Choose subfolder…"}
               </Button>
-              {indexPath && (
+              {indexPath && !indexRoots.includes(indexPath) && (
                 <span className="break-all font-mono text-sm">{indexPath}</span>
               )}
             </div>
@@ -382,6 +395,7 @@ export default function UploadPage() {
 
         {showPicker && (
           <DirectoryPicker
+            title="Select folder to index"
             initialPath={indexPath ?? indexRoots[0]}
             onSelect={path => {
               setIndexPath(path);

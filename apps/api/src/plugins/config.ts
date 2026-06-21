@@ -41,6 +41,12 @@ const EnvSchema = z
     // may walk and read originals from without copying them. Empty/unset = the
     // in-place indexing feature is disabled. See lib/media/indexRoots.ts.
     INDEX_ALLOWED_ROOTS: z.string().optional(),
+
+    // Whether the server may open a native file manager (Explorer/Finder) on the
+    // host. Only valid when the browser and server share a machine (local dev /
+    // single-user desktop). Set false for remote, containerized, or multi-user
+    // deployments so the server-side reveal is refused and the button is hidden.
+    LOCAL_EXPLORER: z.coerce.boolean().default(true),
   })
   .superRefine((val, ctx) => {
     if (val.STORAGE_DRIVER === "s3") {

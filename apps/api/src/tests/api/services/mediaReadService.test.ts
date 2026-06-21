@@ -131,7 +131,7 @@ test("getMediaDetail: document is null when media has no document", async () => 
   const svc = makeService({
     findDetail: async () => ({
       id: "m1", mimeType: "image/jpeg", textState: "PENDING",
-      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [],
+      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -145,7 +145,7 @@ test("getMediaDetail: hasThumb is true when thumbnailKey is set", async () => {
   const svc = makeService({
     findDetail: async () => ({
       id: "m1", mimeType: "image/jpeg", textState: "READY",
-      thumbnailKey: "thumbs/m1.webp", document: null, extractedMetadata: null, bundleItems: [],
+      thumbnailKey: "thumbs/m1.webp", document: null, extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -159,7 +159,7 @@ test("getMediaDetail: hasText is true when document has text", async () => {
       id: "m1", mimeType: "text/plain", textState: "READY",
       thumbnailKey: null,
       document: { rawText: "Some document content", textSource: "NATIVE", pages: null },
-      extractedMetadata: null, bundleItems: [],
+      extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -172,7 +172,7 @@ test("getMediaDetail: permissions are always fully granted", async () => {
   const svc = makeService({
     findDetail: async () => ({
       id: "m1", mimeType: "image/jpeg", textState: "PENDING",
-      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [],
+      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -192,7 +192,7 @@ test("getMediaDetail: segments document text using pages when available", async 
       id: "m1", mimeType: "application/pdf", textState: "READY",
       thumbnailKey: null,
       document: { rawText: "Page one content\n\nPage two content", textSource: "NATIVE", pages },
-      extractedMetadata: null, bundleItems: [],
+      extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -205,7 +205,7 @@ test("getMediaDetail: passes through jobMeta fields as null when no ocrQueue", a
   const svc = makeService({
     findDetail: async () => ({
       id: "m1", mimeType: "image/jpeg", textState: "ERROR",
-      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [],
+      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 

@@ -61,7 +61,7 @@ model Media {
   sourcePath      String?
   filename        String
   mimeType        String
-  sizeBytes       Int
+  sizeBytes       Float
   title           String
   tags            String[]
   createdAt       DateTime         @default(now())

@@ -64,9 +64,11 @@ function makeQueue (overrides: {
 }
 
 function makeThumbQueue (overrides: {
+  getJob?: (_id: string) => Promise<unknown>;
   add?: (_name: string, _data: unknown, _opts?: unknown) => Promise<void>;
 } = {}) {
   return {
+    getJob: overrides.getJob ?? (async () => null),
     add: overrides.add ?? (async () => {}),
   } as unknown as Parameters<typeof createMediaActionsService>[0]["thumbQueue"];
 }
@@ -344,10 +346,31 @@ test("regenerateThumbnail: resets thumb state and enqueues a thumb job", async (
   const result = await svc.regenerateThumbnail("u", "media-1");
   assert.equal(thumbReset, true);
   assert.equal(thumbJobs.length, 1);
-  const job = thumbJobs[0] as { mediaId: string; storageKey: string };
+  const job = thumbJobs[0] as { mediaId: string; storageKey: string; sourcePath?: string };
   assert.equal(job.mediaId, "media-1");
   assert.equal(job.storageKey, "orig/key");
+  // Managed item (no sourcePath) must not carry a source path.
+  assert.equal(job.sourcePath, undefined);
   assert.deepEqual(result, { ok: true });
+});
+
+test("regenerateThumbnail: in-place item carries sourcePath and allowedRoots", async () => {
+  const thumbJobs: unknown[] = [];
+
+  const svc = makeService(
+    {
+      findMediaKeys: async () => ({ storageKey: "external/u/m/photo.jpg", sourcePath: "C:\\nas\\photo.jpg" }),
+      resetThumbState: async () => {},
+    },
+    {},
+    {},
+    { add: async (_name: string, data: unknown) => { thumbJobs.push(data); } },
+  );
+
+  await svc.regenerateThumbnail("u", "media-1", ["C:\\nas"]);
+  const job = thumbJobs[0] as { sourcePath?: string; allowedRoots?: string[] };
+  assert.equal(job.sourcePath, "C:\\nas\\photo.jpg");
+  assert.deepEqual(job.allowedRoots, ["C:\\nas"]);
 });
 
 // ── getBulkDownloadItems ──────────────────────────────────────────────────────

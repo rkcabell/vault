@@ -282,7 +282,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     await archive.finalize();
   };
 
-  const regenerateThumbnail = async (userId: string, id: string) => {
+  const regenerateThumbnail = async (userId: string, id: string, allowedRoots: string[] = []) => {
     const media = await deps.repository.findMediaKeys(userId, id);
     if (!media) return null;
 
@@ -297,6 +297,12 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
         storageKey: media.storageKey,
         outKey: computeThumbKey(id),
         size: 512,
+        // In-place indexed items read their original from disk. Carry the path
+        // and the caller's current allow-list snapshot so the worker can
+        // re-validate it — the worker's env-based allowedRoots are empty now
+        // that the list lives in user preferences, so without this the source
+        // read is rejected and regeneration fails with SOURCE_NOT_READY.
+        ...(media.sourcePath ? { sourcePath: media.sourcePath, allowedRoots } : {}),
       },
       { jobId: `thumb-regen-${id}-${Date.now()}`, attempts: 3, backoff: { type: "exponential", delay: 2000 }, removeOnFail: true, removeOnComplete: true },
     );
