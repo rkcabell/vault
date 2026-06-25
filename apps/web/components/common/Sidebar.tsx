@@ -5,11 +5,12 @@ import { apiFetch } from '@/lib/apiFetch';
 import { useSplitDrag } from '@/hooks/useSplitDrag';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronDown, ChevronRight, Tag, Folder, Loader2, Plus, MoreVertical, Pencil, Trash, Star } from 'lucide-react';
+import { ChevronDown, ChevronRight, Tag, Folder, Loader2, Search, X, MoreVertical, Pencil, Trash, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/ui/Badge';
 import type { Route } from "next";
-import { emitTagsUpdated } from '@/lib/tags';
+import { emitTagsUpdated, partitionTagsByOrigin } from '@/lib/tags';
+import type { TagOrigin } from '@vault/types';
 import { BUNDLES_UPDATED_EVENT } from '@/lib/bundles';
 import { ConfirmPopover } from '@/components/ui/ConfirmPopover';
 import {
@@ -24,6 +25,7 @@ export interface TagItem {
   name: string;
   count?: number;
   color?: string | null;
+  origin?: TagOrigin;
 }
 
 interface BundleNavItem {
@@ -122,6 +124,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
   const bundlesAbortRef = useRef<AbortController | null>(null);
   const [isFetchingBundles, setIsFetchingBundles] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(true);
+  const [tagSearch, setTagSearch] = useState('');
   const { ratio: tagsSplitRatio, isDragging: isDraggingSplit, containerRef: splitContainerRef, onPointerDown: startSplitDrag, onKeyDown: splitKeyDown } = useSplitDrag({
     storageKey: 'vault.sidebar.tagsSplitRatio.v2',
     defaultRatio: 0.40,
@@ -272,8 +275,8 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
       const offset = tagOffsetRef.current;
       const res = await apiFetch(`/api/tags?limit=${PAGE_SIZE}&offset=${offset}`, { credentials: 'include' });
       if (!res.ok) { hasMoreRef.current = false; setHasMoreTags(false); return; }
-      const data = await res.json() as { tags: Array<{ name: string; count: number; color: string | null }> };
-      const newTags = data.tags.map(t => ({ id: t.name, name: t.name, count: t.count, color: t.color }));
+      const data = await res.json() as { tags: Array<{ name: string; count: number; color: string | null; origin?: TagOrigin }> };
+      const newTags = data.tags.map(t => ({ id: t.name, name: t.name, count: t.count, color: t.color, origin: t.origin }));
       tagOffsetRef.current += newTags.length;
       const more = newTags.length === PAGE_SIZE;
       hasMoreRef.current = more;
@@ -286,6 +289,9 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
   }, []); // stable — all mutable state accessed via refs
 
   // IntersectionObserver: fire when sentinel scrolls into the tags container.
+  // Re-runs when the sentinel mounts/unmounts (hasMoreTags) and after the first
+  // tags arrive (displayedTags.length) — the sentinel doesn't exist on first
+  // mount (tags seed asynchronously), so without these deps it was never observed.
   useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
@@ -295,7 +301,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [fetchMoreTags]);
+  }, [fetchMoreTags, hasMoreTags, displayedTags.length]);
 
   if (isLoading) {
     return (
@@ -332,18 +338,27 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                 isOpen={tagsOpen}
                 onOpenChange={setTagsOpen}
               >
-                <div className="flex min-h-0 flex-1 flex-col space-y-2">
-              <button
-                type="button"
-                disabled
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md border border-dashed border-muted-foreground/40 px-3 py-2 text-sm text-muted-foreground',
-                  'cursor-not-allowed opacity-50'
+                <div className="flex min-h-0 flex-1 flex-col space-y-2 min-w-0">
+              <div className="relative w-full min-w-0">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search tags…"
+                  value={tagSearch}
+                  onChange={e => setTagSearch(e.target.value)}
+                  className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-7 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                />
+                {tagSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setTagSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label="Clear tag search"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 )}
-              >
-                <Plus className="h-4 w-4" />
-                Add new tag
-              </button>
+              </div>
 
               {!tags ? (
                 tagsError ? (
@@ -360,14 +375,25 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                 <div className="px-3 py-2 text-sm text-muted-foreground">
                   No tags yet
                 </div>
+              ) : displayedTags.filter(t => !optimisticallyDeletedTags.has(t.name) && (!tagSearch || t.name.toLowerCase().includes(tagSearch.toLowerCase()))).length === 0 ? (
+                <div className="px-3 py-2 text-sm text-muted-foreground">
+                  No matching tags
+                </div>
               ) : (
                 <div
                   ref={tagsScrollRef}
                   className="vault-scrollbar min-h-0 flex-1 overflow-y-auto space-y-1 pr-0.5"
                 >
-                  {displayedTags.filter(t => !optimisticallyDeletedTags.has(t.name)).map((tag) => {
+                  {partitionTagsByOrigin(
+                    displayedTags.filter(t =>
+                      !optimisticallyDeletedTags.has(t.name) &&
+                      (!tagSearch || t.name.toLowerCase().includes(tagSearch.toLowerCase()))
+                    ),
+                    t => t.origin === 'AUTO',
+                  ).map((tag) => {
                     const isRenaming = renamingTag === tag.name;
                     const selected = isTagSelected(tag.name);
+                    const isAuto = tag.origin === 'AUTO';
                     return (
                       <div
                         key={tag.id}
@@ -402,7 +428,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                             {!selected && tag.color && (
                               <span className="shrink-0 h-2 w-2 rounded-full" style={{ background: tag.color }} />
                             )}
-                            <span className="truncate">{tag.name}</span>
+                            <span className={cn('truncate pr-px', isAuto && !selected && 'italic opacity-70')}>{tag.name}</span>
                             {tag.count !== undefined && (
                               <Badge variant="secondary" className="ml-auto shrink-0 h-5 px-1.5 text-xs">
                                 {tag.count}

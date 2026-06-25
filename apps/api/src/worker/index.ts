@@ -1,6 +1,7 @@
-// File: apps/api/src/worker/index.ts
 import "dotenv/config";
 
+import path from "node:path";
+import { access } from "node:fs/promises";
 import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 
@@ -8,6 +9,14 @@ import { prisma } from "@vault/db";
 import { createOcrProcessor, type OcrJobData } from "./ocrWorker.js";
 import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumbWorker.js";
 import { createUnpackProcessor } from "./unpackWorker.js";
+import { createIndexProcessor } from "./indexWorker.js";
+import { createDeleteProcessor } from "./deleteWorker.js";
+import { createIndexWatcher } from "./indexWatcher.js";
+import { createMediaActionsService } from "../services/media/mediaActionsService.js";
+import { isUnderAllowedRoot } from "../lib/media/indexRoots.js";
+import { readIndexAbortEpoch } from "../lib/media/indexAbort.js";
+import { readDeleteAbortEpoch } from "../lib/media/deleteAbort.js";
+import { enqueueIndex } from "../queues/enqueueIndex.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
 import { MediaMetadataRepository } from "../repositories/mediaMetadataRepository.js";
@@ -18,9 +27,13 @@ import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
 import { TextJobError } from "../lib/text/processTextJob.js";
 import { markStalledJobs } from "../services/stallDetectionService.js";
-import { createWorkerStorage, workerBucket } from "./storageFromEnv.js";
+import { createWorkerStorage, workerBucket, workerAllowedRoots } from "./storageFromEnv.js";
 import type { UnpackJob } from "../queues/enqueueUnpack.js";
 import { UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
+import type { IndexJobData } from "../queues/enqueueIndex.js";
+import { INDEX_QUEUE } from "../queues/enqueueIndex.js";
+import type { DeleteJobData } from "../queues/enqueueDelete.js";
+import { DELETE_QUEUE } from "../queues/enqueueDelete.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const BUCKET = workerBucket();
@@ -28,6 +41,7 @@ const BUCKET = workerBucket();
 const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
 const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
 const _UNPACK_QUEUE = UNPACK_QUEUE;
+const _INDEX_QUEUE = INDEX_QUEUE;
 const OCR_LOCK_DURATION_MS = parseEnvNumber("OCR_LOCK_DURATION_MS", 30 * 60 * 1000);
 const OCR_LOCK_RENEW_MS = parseEnvNumber(
   "OCR_LOCK_RENEW_MS",
@@ -35,6 +49,20 @@ const OCR_LOCK_RENEW_MS = parseEnvNumber(
 );
 const OCR_STALLED_INTERVAL_MS = parseEnvNumber("OCR_STALLED_INTERVAL_MS", 60 * 1000);
 const STALL_CHECK_INTERVAL_MS = parseEnvNumber("STALL_CHECK_INTERVAL_MS", 10 * 60 * 1000);
+
+// Live in-place indexing: native inotify doesn't propagate across Docker Desktop
+// bind mounts, WSL2 /mnt mounts, or network shares — set INDEX_WATCH_POLLING=true
+// there. The reconciliation scan is the authoritative backstop regardless.
+const INDEX_WATCH_POLLING = process.env.INDEX_WATCH_POLLING === "true";
+const INDEX_WATCH_INTERVAL = parseEnvNumber("INDEX_WATCH_INTERVAL", 2000);
+// Master switch for automatic in-place indexing (live watcher + reconcile loop).
+// Default on; set INDEX_AUTO=false to index only on explicit manual scans.
+const INDEX_AUTO = process.env.INDEX_AUTO !== "false";
+const INDEX_RECONCILE_INTERVAL_MS = parseEnvNumber("INDEX_RECONCILE_INTERVAL_MS", 60 * 60 * 1000);
+// Full reconcile of every allowed root at boot. Off by default: in dev (tsx
+// watch) every restart would re-enqueue a whole-root rescan, burying targeted
+// scans. The hourly interval reconcile is the steady-state catch-up.
+const INDEX_RECONCILE_ON_BOOT = process.env.INDEX_RECONCILE_ON_BOOT === "true";
 
 async function main () {
   const logger = createLogger("worker");
@@ -63,6 +91,10 @@ async function main () {
 
   const ocrQueue = new Queue<OcrJobData>(OCR_QUEUE, { connection });
   const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, { connection });
+  const indexQueue = new Queue<IndexJobData>(_INDEX_QUEUE, { connection });
+  const deleteQueue = new Queue<DeleteJobData>(DELETE_QUEUE, { connection });
+
+  const allowedRoots = workerAllowedRoots();
 
   const ocrWorker = new Worker<OcrJobData>(
     OCR_QUEUE,
@@ -71,6 +103,7 @@ async function main () {
       documentRepository,
       storage: s3Adapter,
       bucket: BUCKET,
+      allowedRoots,
       enqueueOcr: async (data, opts) => ocrQueue.add("ocr", data, opts),
       logger: ocrLogger,
       queueName: OCR_QUEUE,
@@ -93,6 +126,7 @@ async function main () {
       preferencesService,
       storage: s3Adapter,
       bucket: BUCKET,
+      allowedRoots,
       logger: thumbLogger,
       queueName: THUMB_QUEUE,
       publishJobUpdate,
@@ -116,9 +150,134 @@ async function main () {
     { connection, concurrency: 2 },
   );
 
+  const indexLogger = logger.child({ queue: _INDEX_QUEUE, jobName: "index" });
+
+  const indexWorker = new Worker<IndexJobData>(
+    _INDEX_QUEUE,
+    createIndexProcessor({
+      mediaRepository,
+      thumbQueue,
+      ocrQueue,
+      logger: indexLogger,
+      // Read the abort epoch off the publish client (a plain GET); the dev abort
+      // endpoint bumps it so an in-flight walk stops adding jobs.
+      readAbortEpoch: () => readIndexAbortEpoch(publisher),
+    }),
+    {
+      connection,
+      concurrency: 1, // one walk at a time; per-file work fans out to thumb/ocr
+      // maxStalledCount 0: a walk left "active" by a mid-scan worker death must
+      // fail, not respawn — the default re-run restarts a full-root walk nobody
+      // asked for, which exploded the queues on every restart. Re-scan to resume.
+      maxStalledCount: 0,
+    },
+  );
+
+  const deleteLogger = logger.child({ queue: DELETE_QUEUE, jobName: "delete" });
+
+  const deleteWorker = new Worker<DeleteJobData>(
+    DELETE_QUEUE,
+    createDeleteProcessor({
+      mediaRepository,
+      bundleRepository,
+      s3Adapter,
+      bucket: BUCKET,
+      logger: deleteLogger,
+      // Read the abort epoch off the publish client (a plain GET); the delete
+      // abort endpoint bumps it so an in-flight delete stops between chunks.
+      readAbortEpoch: () => readDeleteAbortEpoch(publisher),
+    }),
+    {
+      connection,
+      concurrency: 1, // one bulk delete at a time; the per-chunk work is set-based
+      // A delete whose worker dies mid-run leaves the job "active". A partial
+      // delete is resumable by re-running, so a stalled job must fail, not respawn.
+      maxStalledCount: 0,
+    },
+  );
+
   ocrWorker.on("ready", () => ocrLogger.info({ queue: OCR_QUEUE }, "worker ready"));
   thumbWorker.on("ready", () => thumbLogger.info({ queue: THUMB_QUEUE }, "worker ready"));
   unpackWorker.on("ready", () => unpackLogger.info({ queue: _UNPACK_QUEUE }, "worker ready"));
+  indexWorker.on("ready", () => indexLogger.info({ queue: _INDEX_QUEUE }, "worker ready"));
+  deleteWorker.on("ready", () => deleteLogger.info({ queue: DELETE_QUEUE }, "worker ready"));
+
+  // Live in-place indexing: a single chokidar watcher across all users' allowed
+  // roots. mediaActionsService gives the watcher a delete path that also cleans
+  // thumbnails/S3 and queue jobs; it never deletes an in-place source.
+  const watchLogger = logger.child({ component: "index-watcher" });
+  const mediaActions = createMediaActionsService({
+    repository: mediaRepository,
+    bundleRepository,
+    s3Adapter,
+    bucket: BUCKET,
+    ocrQueue,
+    thumbQueue,
+  });
+  const indexWatcher = createIndexWatcher(
+    {
+      mediaRepository,
+      thumbQueue,
+      ocrQueue,
+      deleteMedia: (userId, id) => mediaActions.deleteMedia(userId, id),
+      regenerateThumbnail: (userId, id, roots) => mediaActions.regenerateThumbnail(userId, id, roots),
+      logger: watchLogger,
+    },
+    () => preferencesService.listIndexConfigs(),
+    { polling: INDEX_WATCH_POLLING, interval: INDEX_WATCH_INTERVAL },
+  );
+  // Automatic indexing (live watcher + reconcile) is gated behind INDEX_AUTO so a
+  // dev machine can index only on explicit manual scans. The watcher object is
+  // created above regardless (cheap — chokidar only starts on .start()).
+  if (INDEX_AUTO) {
+    await indexWatcher.start().catch(err => watchLogger.error({ err }, "index watcher failed to start"));
+  } else {
+    watchLogger.warn({}, "automatic indexing disabled (INDEX_AUTO=false): no watcher, no reconcile — manual scans still run");
+  }
+
+  // Reconciliation backstop: catches anything the watcher missed (inotify is
+  // unreliable on bind mounts / network shares). Re-enqueues scans per allowed
+  // root (dedupe makes re-runs cheap — only new files create rows) and prunes
+  // rows whose in-place source no longer exists on disk.
+  const reconcileLogger = logger.child({ component: "index-reconcile" });
+  const runReconcile = async () => {
+    const configs = await preferencesService.listIndexConfigs();
+    for (const config of configs) {
+      for (const root of config.allowedRoots) {
+        await enqueueIndex(indexQueue, {
+          userId: config.userId,
+          rootPath: path.resolve(root),
+          recursive: true,
+          ignoreHidden: config.ignoreHidden,
+          allowedRoots: config.allowedRoots,
+          blacklistExtensions: config.blacklistExtensions,
+          excludeFolders: config.excludeFolders,
+          skipNonContent: config.skipNonContent,
+        }).catch(err => reconcileLogger.warn({ err, root }, "reconcile enqueue failed"));
+      }
+      const rows = await mediaRepository.listSourcePaths(config.userId);
+      for (const { id, sourcePath } of rows) {
+        // Only prune sources under a currently-allowed root; leave items whose
+        // root was removed from config untouched (the user may re-add it).
+        if (!isUnderAllowedRoot(sourcePath, config.allowedRoots)) continue;
+        const exists = await access(sourcePath).then(() => true).catch(() => false);
+        if (!exists) {
+          await mediaActions.deleteMedia(config.userId, id)
+            .catch(err => reconcileLogger.warn({ err, id }, "reconcile prune failed"));
+        }
+      }
+    }
+  };
+  const runReconcileSafe = () =>
+    runReconcile().catch(err => reconcileLogger.error({ err }, "reconciliation failed"));
+  // Only schedule reconcile when automatic indexing is enabled. Within that, the
+  // boot run stays separately gated by INDEX_RECONCILE_ON_BOOT.
+  let reconcileInterval: NodeJS.Timeout | undefined;
+  if (INDEX_AUTO) {
+    if (INDEX_RECONCILE_ON_BOOT) void runReconcileSafe();
+    else reconcileLogger.info({}, "reconcile-on-boot disabled (set INDEX_RECONCILE_ON_BOOT=true to enable)");
+    reconcileInterval = setInterval(runReconcileSafe, INDEX_RECONCILE_INTERVAL_MS);
+  }
 
   // Run stall detection once on startup (catches records left over from a previous crash),
   // then on a recurring interval.
@@ -277,13 +436,35 @@ async function main () {
     unpackLogger.error({ jobName: "unpack", queue: _UNPACK_QUEUE, err }, "worker error"),
   );
 
-  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE] }, "worker started");
+  indexWorker.on("failed", (job, err) =>
+    indexLogger.error(
+      { jobName: "index", queue: _INDEX_QUEUE, jobId: job?.id ?? "unknown", userId: job?.data?.userId ?? null, err },
+      "index job failed",
+    ),
+  );
+  indexWorker.on("error", err =>
+    indexLogger.error({ jobName: "index", queue: _INDEX_QUEUE, err }, "worker error"),
+  );
+
+  deleteWorker.on("failed", (job, err) =>
+    deleteLogger.error(
+      { jobName: "delete", queue: DELETE_QUEUE, jobId: job?.id ?? "unknown", userId: job?.data?.userId ?? null, err },
+      "delete job failed",
+    ),
+  );
+  deleteWorker.on("error", err =>
+    deleteLogger.error({ jobName: "delete", queue: DELETE_QUEUE, err }, "worker error"),
+  );
+
+  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE, _INDEX_QUEUE, DELETE_QUEUE] }, "worker started");
 
   const shutdown = async () => {
     logger.info("worker shutting down...");
     clearInterval(stallInterval);
-    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close()]);
-    await Promise.allSettled([ocrQueue.close(), thumbQueue.close()]);
+    if (reconcileInterval) clearInterval(reconcileInterval);
+    await indexWatcher.close().catch(err => watchLogger.warn({ err }, "index watcher close failed"));
+    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close(), indexWorker.close(), deleteWorker.close()]);
+    await Promise.allSettled([ocrQueue.close(), thumbQueue.close(), indexQueue.close(), deleteQueue.close()]);
     await publisher.quit();
   };
 

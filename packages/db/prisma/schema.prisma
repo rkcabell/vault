@@ -34,13 +34,17 @@ model User {
 }
 
 model Tag {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
   name      String
   color     String?
-  count     Int      @default(0)
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // USER = the user deliberately applied this tag; AUTO = the system applied it
+  // (MIME-type tag on upload/index, bundle/extension tags on unpack). User intent
+  // wins: a user-applied tag is promoted to USER and never auto-demoted.
+  origin    TagOrigin @default(USER)
+  count     Int       @default(0)
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, name])
   @@index([userId, count(sort: Desc)])
@@ -54,9 +58,14 @@ model Media {
   textState       MediaWorkerState @default(PENDING)
   sourceState     MediaWorkerState @default(PENDING)
   storageKey      String
+  // Absolute path to the original file when it is indexed in place on a mounted
+  // drive/NAS (see INDEX_ALLOWED_ROOTS). Null = the file lives in Vault-managed
+  // storage at `storageKey` (normal upload). For in-place rows Vault reads the
+  // source read-only and never writes to or deletes from this path.
+  sourcePath      String?
   filename        String
   mimeType        String
-  sizeBytes       Int
+  sizeBytes       Float
   title           String
   tags            String[]
   createdAt       DateTime         @default(now())
@@ -76,6 +85,7 @@ model Media {
   reminders       Reminder[]
   bundleItems     BundleItem[]
 
+  @@unique([userId, sourcePath])
   @@index([tags], type: Gin)
   @@index([userId, contentHash])
   @@index([userId, createdAt(sort: Desc)])
@@ -135,6 +145,12 @@ enum MediaWorkerState {
   READY
   FAILED
   ERROR
+  UNSUPPORTED
+}
+
+enum TagOrigin {
+  USER
+  AUTO
 }
 
 model MediaExtractedMetadata {

@@ -3,6 +3,16 @@ import { type Preferences, DEFAULT_PREFERENCES } from "@vault/types";
 
 const CACHE_TTL_MS = 60_000;
 
+/** The subset of a user's preferences the index watcher needs to watch + filter. */
+export interface IndexConfig {
+  userId: string;
+  allowedRoots: string[];
+  excludeFolders: string[];
+  blacklistExtensions: string[];
+  ignoreHidden: boolean;
+  skipNonContent: boolean;
+}
+
 interface CacheEntry {
   value: Preferences;
   expiresAt: number;
@@ -21,6 +31,29 @@ export class PreferencesService {
     const value = { ...DEFAULT_PREFERENCES, ...(raw as Partial<Preferences> ?? {}) };
     this.cache.set(userId, { value, expiresAt: Date.now() + CACHE_TTL_MS });
     return value;
+  }
+
+  /**
+   * The in-place indexing config for every user that has at least one allowed
+   * root. The live watcher polls this to know which directories to watch and how
+   * to filter them. Bypasses the per-user cache — it reads all users at once.
+   */
+  async listIndexConfigs (): Promise<IndexConfig[]> {
+    const rows = await this.repo.listAll();
+    const configs: IndexConfig[] = [];
+    for (const row of rows) {
+      const prefs = { ...DEFAULT_PREFERENCES, ...((row.preferences as Partial<Preferences>) ?? {}) };
+      if (prefs.indexAllowedRoots.length === 0) continue;
+      configs.push({
+        userId: row.id,
+        allowedRoots: prefs.indexAllowedRoots,
+        excludeFolders: prefs.indexExcludeFolders,
+        blacklistExtensions: prefs.indexBlacklistExtensions,
+        ignoreHidden: prefs.ignoreHiddenFiles,
+        skipNonContent: prefs.indexSkipNonContent,
+      });
+    }
+    return configs;
   }
 
   async updatePreferences (userId: string, patch: Partial<Preferences>): Promise<Preferences> {

@@ -75,3 +75,14 @@ test("buildMimeTypeTag: tif extension normalizes to tiff label", () => {
 test("buildMimeTypeTag: jpeg extension normalizes to jpg label", () => {
   assert.equal(buildMimeTypeTag(null, "photo.jpeg"), "jpg");
 });
+
+test("buildMimeTypeTag: extension-less filename returns unknown (not the whole name)", () => {
+  assert.equal(buildMimeTypeTag("application/octet-stream", "(adobe)"), "unknown");
+  assert.equal(buildMimeTypeTag("application/octet-stream", "README"), "unknown");
+  assert.equal(buildMimeTypeTag(null, "nodotfile"), "unknown");
+});
+
+test("buildMimeTypeTag: extension with invalid tag chars is sanitized", () => {
+  assert.equal(buildMimeTypeTag("application/octet-stream", "file.(adobe)"), "adobe");
+  assert.equal(buildMimeTypeTag(null, "archive.tar(2)"), "tar2");
+});

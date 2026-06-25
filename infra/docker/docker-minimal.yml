@@ -1,10 +1,16 @@
 services:
   postgres:
     image: postgres:16
+    # Low-memory dev profile (this box also runs Immich). max_connections must
+    # still cover every Prisma pool that talks to this DB at once: the API
+    # (connection_limit=10) + the worker (10) + any Prisma MCP servers / Studio
+    # + leftover connections from tsx-watch restarts. 10 was far too low — a
+    # single indexing burst exhausted it ("too many clients already"), which
+    # surfaced as failed scans (scanned 0) and empty library/sidebar on refresh.
     command: >
       postgres
-      -c shared_buffers=32MB
-      -c max_connections=10
+      -c shared_buffers=128MB
+      -c max_connections=100
       -c work_mem=2MB
       -c maintenance_work_mem=32MB
       -c synchronous_commit=off

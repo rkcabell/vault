@@ -9,7 +9,8 @@ export default async function ExplorePage() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight">Explore</h1>
         <p className="text-sm text-muted-foreground">
-          Storage by file — each tile&apos;s area is proportional to its size.
+          Storage by file — the largest files shown exactly, plus a representative
+          sample of smaller files (hatched). Tile area tracks real storage.
         </p>
       </div>
 

@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Input } from "@/components/ui/Input";
 import { TagChip } from "@/components/ui/TagChip";
-import { normalizeTags, TagValidationError, emitTagsUpdated } from "@/lib/tags";
+import { normalizeTags, TagValidationError, emitTagsUpdated, orderTagsByOrigin } from "@/lib/tags";
 
 type TagEditorProps = {
   tags: string[];
+  /** Subset of `tags` the system applied; rendered muted and after user tags. */
+  autoTags?: string[];
   onSave: (tags: string[], signal: AbortSignal) => Promise<void>;
   disabled?: boolean;
 };
@@ -17,7 +19,7 @@ function splitInput(value: string): string[] {
     .filter(Boolean);
 }
 
-export function TagEditor({ tags, onSave, disabled }: TagEditorProps) {
+export function TagEditor({ tags, autoTags = [], onSave, disabled }: TagEditorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [tagInput, setTagInput] = useState("");
@@ -91,12 +93,20 @@ export function TagEditor({ tags, onSave, disabled }: TagEditorProps) {
     await applyTags(next);
   };
 
+  const autoSet = new Set(autoTags);
+  const orderedTags = orderTagsByOrigin(localTags, t => autoSet.has(t));
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
-        {localTags.length === 0 && <span className="text-sm text-muted-foreground">No tags yet</span>}
-        {localTags.map(tag => (
-          <TagChip key={tag} onRemove={() => void removeTag(tag)} onClick={() => void removeTag(tag)}>
+        {orderedTags.length === 0 && <span className="text-sm text-muted-foreground">No tags yet</span>}
+        {orderedTags.map(tag => (
+          <TagChip
+            key={tag}
+            variant={autoSet.has(tag) ? "auto" : "user"}
+            onRemove={() => void removeTag(tag)}
+            onClick={() => void removeTag(tag)}
+          >
             {tag}
           </TagChip>
         ))}

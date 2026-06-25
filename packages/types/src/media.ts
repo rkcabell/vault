@@ -4,7 +4,7 @@ import { z } from "zod";
 // Worker states
 // ---------------------------------------------------------------------------
 
-export const MediaWorkerStateSchema = z.enum(["PENDING", "READY", "ERROR", "FAILED"]);
+export const MediaWorkerStateSchema = z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]);
 export type MediaWorkerState = z.infer<typeof MediaWorkerStateSchema>;
 
 // ---------------------------------------------------------------------------
@@ -42,13 +42,48 @@ export const MediaStorageItemSchema = z.object({
   filename: z.string(),
   mimeType: z.string(),
   sizeBytes: z.number(),
+  // Treemap fields (present when served by the sampled storage endpoint).
+  // weightBytes drives tile area: == sizeBytes for exact (top-N) tiles, inflated
+  // for sampled tail tiles so a bucket's sample matches its true byte footprint.
+  weightBytes: z.number().optional(),
+  // True for representative tail-sample tiles (drawn distinctly).
+  sampled: z.boolean().optional(),
+  // How many real files a sampled tile stands in for (1 for exact tiles).
+  representsCount: z.number().optional(),
 });
 export type MediaStorageItem = z.infer<typeof MediaStorageItemSchema>;
 
 export const MediaStorageResponseSchema = z.object({
   items: z.array(MediaStorageItemSchema),
+  totalFiles: z.number().optional(),
+  totalBytes: z.number().optional(),
 });
 export type MediaStorageResponse = z.infer<typeof MediaStorageResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Storage by file type  (GET /media/storage/categories) — per-category totals
+// (file count + total bytes) for the overview "storage by type" graph.
+// ---------------------------------------------------------------------------
+
+export const StorageBucketSchema = z.enum([
+  "pdf", "image", "document", "spreadsheet", "presentation",
+  "video", "audio", "archive", "code", "other",
+]);
+export type StorageBucket = z.infer<typeof StorageBucketSchema>;
+
+export const MediaCategorySliceSchema = z.object({
+  bucket: StorageBucketSchema,
+  count: z.number(),
+  bytes: z.number(),
+});
+export type MediaCategorySlice = z.infer<typeof MediaCategorySliceSchema>;
+
+export const MediaCategoryBreakdownSchema = z.object({
+  categories: z.array(MediaCategorySliceSchema),
+  totalFiles: z.number(),
+  totalBytes: z.number(),
+});
+export type MediaCategoryBreakdown = z.infer<typeof MediaCategoryBreakdownSchema>;
 
 // ---------------------------------------------------------------------------
 // Media detail  (GET /media/:id)
@@ -87,6 +122,7 @@ export const MediaDetailSchema = z.object({
   mimeType: z.string(),
   sizeBytes: z.number().nullable(),
   storageKey: z.string(),
+  sourcePath: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   tags: z.array(z.string()),
@@ -198,6 +234,12 @@ export const MediaDetailResponseSchema = z.object({
   document: MediaDocumentSchema, // already nullable
   metadata: MediaMetadataSchema.nullable(),
   permissions: MediaPermissionsSchema.nullable(),
+  // Subset of media.tags the system applied (origin AUTO). The frontend sorts
+  // and styles user-made tags ahead of these.
+  autoTags: z.array(z.string()),
+  // Local filesystem path for "Open in File Explorer". Non-null for in-place
+  // indexed items (sourcePath) and fs-driver uploads. Null for S3-stored files.
+  localPath: z.string().nullable(),
 });
 export type MediaDetailResponse = z.infer<typeof MediaDetailResponseSchema>;
 

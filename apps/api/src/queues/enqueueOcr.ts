@@ -5,6 +5,7 @@ type OcrBulkItem = {
   mediaId: string;
   userId: string;
   storageKey: string;
+  allowedRoots?: string[];
 };
 
 const UPLOAD_OCR_JOB_OPTIONS: JobsOptions = {
@@ -25,6 +26,7 @@ export async function enqueueOcrBulk (queue: Queue<OcrJobData>, items: OcrBulkIt
         mediaId: item.mediaId,
         userId: item.userId,
         storageKey: item.storageKey,
+        ...(item.allowedRoots?.length ? { allowedRoots: item.allowedRoots } : {}),
       },
       opts: { ...UPLOAD_OCR_JOB_OPTIONS, jobId: `ocr-${item.mediaId}` },
     })),

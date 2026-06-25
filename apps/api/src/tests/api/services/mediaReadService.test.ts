@@ -14,10 +14,12 @@ const logger = {
 function makeRepo (overrides: {
   findDocumentForUser?: (_userId: string, _id: string) => Promise<unknown>;
   findDetail?: (_userId: string, _id: string) => Promise<unknown>;
+  listAutoTagNames?: (_userId: string, _tagNames: string[]) => Promise<string[]>;
 } = {}) {
   return {
     findDocumentForUser: overrides.findDocumentForUser ?? (async () => null),
     findDetail: overrides.findDetail ?? (async () => null),
+    listAutoTagNames: overrides.listAutoTagNames ?? (async () => []),
   } as unknown as Parameters<typeof createMediaReadService>[0]["repository"];
 }
 
@@ -131,7 +133,7 @@ test("getMediaDetail: document is null when media has no document", async () => 
   const svc = makeService({
     findDetail: async () => ({
       id: "m1", mimeType: "image/jpeg", textState: "PENDING",
-      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [],
+      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -145,7 +147,7 @@ test("getMediaDetail: hasThumb is true when thumbnailKey is set", async () => {
   const svc = makeService({
     findDetail: async () => ({
       id: "m1", mimeType: "image/jpeg", textState: "READY",
-      thumbnailKey: "thumbs/m1.webp", document: null, extractedMetadata: null, bundleItems: [],
+      thumbnailKey: "thumbs/m1.webp", document: null, extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -159,7 +161,7 @@ test("getMediaDetail: hasText is true when document has text", async () => {
       id: "m1", mimeType: "text/plain", textState: "READY",
       thumbnailKey: null,
       document: { rawText: "Some document content", textSource: "NATIVE", pages: null },
-      extractedMetadata: null, bundleItems: [],
+      extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -168,11 +170,29 @@ test("getMediaDetail: hasText is true when document has text", async () => {
   assert.ok((result?.document?.textTotalLength ?? 0) > 0);
 });
 
+test("getMediaDetail: returns autoTags from the repository for the item's tags", async () => {
+  let receivedTags: string[] | undefined;
+  const svc = makeService({
+    findDetail: async () => ({
+      id: "m1", mimeType: "image/jpeg", textState: "PENDING", tags: ["jpg", "vacation"],
+      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [], reminders: [],
+    }),
+    listAutoTagNames: async (_userId: string, tagNames: string[]) => {
+      receivedTags = tagNames;
+      return ["jpg"];
+    },
+  });
+
+  const result = await svc.getMediaDetail("u", "m1");
+  assert.deepEqual(result?.autoTags, ["jpg"]);
+  assert.deepEqual(receivedTags, ["jpg", "vacation"], "queried against the item's tags");
+});
+
 test("getMediaDetail: permissions are always fully granted", async () => {
   const svc = makeService({
     findDetail: async () => ({
       id: "m1", mimeType: "image/jpeg", textState: "PENDING",
-      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [],
+      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -192,7 +212,7 @@ test("getMediaDetail: segments document text using pages when available", async 
       id: "m1", mimeType: "application/pdf", textState: "READY",
       thumbnailKey: null,
       document: { rawText: "Page one content\n\nPage two content", textSource: "NATIVE", pages },
-      extractedMetadata: null, bundleItems: [],
+      extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 
@@ -205,7 +225,7 @@ test("getMediaDetail: passes through jobMeta fields as null when no ocrQueue", a
   const svc = makeService({
     findDetail: async () => ({
       id: "m1", mimeType: "image/jpeg", textState: "ERROR",
-      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [],
+      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [], reminders: [],
     }),
   });
 

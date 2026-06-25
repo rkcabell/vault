@@ -13,6 +13,7 @@ import {
   type ThumbJob,
 } from "../../queues/enqueueThumbnail.js";
 import { enqueueOcrBulk } from "../../queues/enqueueOcr.js";
+import { ocrSupported, thumbnailSupported, exceedsThumbnailSize } from "../../lib/media/processingSupport.js";
 
 /** Presigned PUT URL lifetime (10 minutes). Should comfortably cover client upload of large files. */
 const MAX_PRESIGNED_SECONDS = 600;
@@ -62,23 +63,28 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
     const storageKey = makeStorageKey(userId, id, body.filename);
     const mimeType = normalizeMimeType(body.mimeType, body.filename);
     const mimeTag = normalizeTags(buildMimeTypeTag(mimeType, body.filename))[0]!;
-    const uniqueTags = Array.from(
-      new Set(body.autoTagOnUpload !== false ? [...(body.tags ?? []), mimeTag] : (body.tags ?? [])),
-    );
+    const userTags = body.tags ?? [];
+    const includeMime = body.autoTagOnUpload !== false;
+    const uniqueTags = Array.from(new Set(includeMime ? [...userTags, mimeTag] : userTags));
+    // The MIME tag is auto unless the user also typed it (then user intent wins).
+    const autoTags = includeMime && !userTags.includes(mimeTag) ? [mimeTag] : [];
 
-    const media = await deps.repository.createMedia({
-      id,
-      userId,
-      thumbState: "PENDING",
-      textState: "PENDING",
-      sourceState: "PENDING",
-      storageKey,
-      filename: body.filename,
-      mimeType,
-      sizeBytes: body.sizeBytes,
-      title: body.title,
-      tags: uniqueTags,
-    });
+    const media = await deps.repository.createMedia(
+      {
+        id,
+        userId,
+        thumbState: "PENDING",
+        textState: "PENDING",
+        sourceState: "PENDING",
+        storageKey,
+        filename: body.filename,
+        mimeType,
+        sizeBytes: body.sizeBytes,
+        title: body.title,
+        tags: uniqueTags,
+      },
+      { autoTags },
+    );
 
     const uploadUrl = await deps.s3Adapter.presignPut({
       bucket: deps.bucket,
@@ -96,14 +102,17 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
    * Title is derived from filename when not provided by the caller.
    */
   const initBatchUploads = async (userId: string, items: BatchUploadItem[]) => {
+    const autoTagsByItem: string[][] = [];
     const mediaItems = items.map(item => {
       const id = crypto.randomUUID();
       const storageKey = makeStorageKey(userId, id, item.filename);
       const mimeType = normalizeMimeType(item.mimeType, item.filename);
       const mimeTag = normalizeTags(buildMimeTypeTag(mimeType, item.filename))[0]!;
-      const itemTags = Array.from(
-        new Set(item.autoTagOnUpload !== false ? [...(item.tags ?? []), mimeTag] : (item.tags ?? [])),
-      );
+      const userTags = item.tags ?? [];
+      const includeMime = item.autoTagOnUpload !== false;
+      const itemTags = Array.from(new Set(includeMime ? [...userTags, mimeTag] : userTags));
+      // The MIME tag is auto unless the user also typed it (then user intent wins).
+      autoTagsByItem.push(includeMime && !userTags.includes(mimeTag) ? [mimeTag] : []);
       return {
         id,
         userId,
@@ -119,7 +128,7 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
       };
     });
 
-    await deps.repository.createBatch(mediaItems);
+    await deps.repository.createBatch(mediaItems, { autoTagsByItem });
 
     // Presign in chunks of 20 to avoid saturating the S3 client connection pool
     // when batch-uploading large numbers of files.
@@ -163,18 +172,20 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
       return { ok: true, count: 0 };
     }
 
-    const ocrSupported = (mimeType: string) => {
-      const m = mimeType.toLowerCase();
-      return m === "" || m.startsWith("image/") || m.includes("pdf");
-    };
-
     const ocrItems = mediaItems.filter(item => ocrSupported(item.mimeType));
-    const unsupportedItems = mediaItems.filter(item => !ocrSupported(item.mimeType));
+    const ocrUnsupported = mediaItems.filter(item => !ocrSupported(item.mimeType));
+    // Thumbnails: a file must be a supported type AND small enough to load into
+    // memory. Too-large files are marked UNSUPPORTED here instead of enqueueing a job
+    // the worker can only fail (it can't buffer a >2 GiB source).
+    const thumbUnsupported = mediaItems.filter(item => !thumbnailSupported(item.mimeType));
+    const thumbnailable = mediaItems.filter(item => thumbnailSupported(item.mimeType));
+    const thumbTooLarge = thumbnailable.filter(item => exceedsThumbnailSize(item.sizeBytes));
+    const thumbItems = thumbnailable.filter(item => !exceedsThumbnailSize(item.sizeBytes));
 
     await Promise.all([
-      enqueueThumbBulk(
+      thumbItems.length > 0 && enqueueThumbBulk(
         deps.thumbQueue,
-        mediaItems.map(item => ({
+        thumbItems.map(item => ({
           mediaId: item.id,
           userId,
           storageKey: item.storageKey,
@@ -189,8 +200,14 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
           storageKey: item.storageKey,
         })),
       ),
-      unsupportedItems.length > 0 && deps.repository.markTextUnsupported(
-        unsupportedItems.map(item => item.id),
+      ocrUnsupported.length > 0 && deps.repository.markTextUnsupported(
+        ocrUnsupported.map(item => item.id),
+      ),
+      thumbUnsupported.length > 0 && deps.repository.markThumbUnsupported(
+        thumbUnsupported.map(item => item.id),
+      ),
+      thumbTooLarge.length > 0 && deps.repository.markThumbTooLarge(
+        thumbTooLarge.map(item => item.id),
       ),
     ]);
 

@@ -1,6 +1,8 @@
-// apps/api/src/routes/media.ts
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { execFile, spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { requireAuth } from "../utils/authGuard.js";
 import { MEDIA_SORT_OPTIONS } from "../services/media/mediaQueryService.js";
 import { getUploadSizeError } from "../lib/media/uploadLimits.js";
@@ -11,6 +13,41 @@ import { ARCHIVE_MIME_TYPES } from "../lib/media/archiveTypes.js";
 import { enqueueUnpack, type UnpackJob, UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import type { PrismaClient } from "@prisma/client";
+import { isUnderAllowedRoot } from "../lib/media/indexRoots.js";
+
+type MinLogger = { warn: (obj: object, msg: string) => void };
+
+function revealInExplorer (p: string, log: MinLogger) {
+  if (process.platform === "win32") {
+    // explorer.exe is quirky about /select: it needs the literal command line
+    //   explorer.exe /select,"<path>"
+    // with quotes around the PATH ONLY. Two traps to avoid:
+    //   1. `cmd /c start` splits on the comma in `/select,` → broken flag.
+    //   2. Node's default arg quoting wraps the WHOLE `/select,<path>` token in
+    //      quotes when the path has spaces → explorer ignores /select and opens
+    //      the default folder (looks like the "wrong folder" opened).
+    // windowsVerbatimArguments passes our string through unaltered so we place
+    // the quotes exactly where explorer wants them. Windows filenames can't
+    // contain `"`, so the quoting can't be broken out of — no injection risk.
+    const winPath = p.replace(/\//g, "\\");
+    const child = spawn("explorer.exe", [`/select,"${winPath}"`], {
+      windowsVerbatimArguments: true,
+      detached: true,
+      stdio: "ignore",
+    });
+    // 'error' fires only on spawn failure; explorer's nonzero exit is not surfaced.
+    child.on("error", err => log.warn({ err, path: p }, "reveal in explorer failed"));
+    child.unref();
+  } else if (process.platform === "darwin") {
+    execFile("open", ["-R", p], err => {
+      if (err) log.warn({ err, path: p }, "reveal in explorer failed");
+    });
+  } else {
+    execFile("xdg-open", [path.dirname(p)], err => {
+      if (err) log.warn({ err, path: p }, "reveal in explorer failed");
+    });
+  }
+}
 
 async function autoUnpackIfEnabled(
   ids: string[],
@@ -46,7 +83,7 @@ const FALLBACK_WEBP_BASE64 =
 const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
 
 export const mediaRoutes: FastifyPluginAsync = async app => {
-  const { uploadService, queryService, readService, actionsService } = app.mediaServices;
+  const { uploadService, queryService, readService, actionsService, indexService, deleteService } = app.mediaServices;
   let unpackQueue: Queue<UnpackJob> | null = null;
   const getUnpackQueue = () => {
     if (!unpackQueue) {
@@ -184,8 +221,8 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       tag: z.string().trim().optional(),
       tags: z.unknown().optional(),
       excludeTags: z.string().trim().optional(),
-      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
-      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
+      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
+      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
       mimeType: z.string().trim().optional(),
       sort: z.enum(SORT_OPTIONS).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -234,17 +271,35 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
   });
 
 
-  // GET /media/storage - per-file sizes for the whole vault (storage treemap)
+  // GET /media/storage - data for the storage treemap. Returns the largest
+  // files exactly plus a stratified, byte-weighted sample of the long tail so
+  // the payload/DOM stay small at tens of thousands of files. top/sample are
+  // tunable via query for experimentation.
+  const StorageQuery = z.object({
+    top:    z.coerce.number().int().min(1).max(2000).optional(),
+    sample: z.coerce.number().int().min(0).max(2000).optional(),
+  });
   app.get("/storage", { preHandler: [requireAuth] }, async req => {
     const userId = req.userId!;
-    const items = await queryService.listAllSizes(userId);
-    return { items };
+    const { top, sample } = StorageQuery.parse(req.query);
+    const { tiles, totalFiles, totalBytes } = await queryService.listAllSizes(userId, {
+      topN: top,
+      sampleN: sample,
+    });
+    return { items: tiles, totalFiles, totalBytes };
   });
 
 
   // GET /media/stats - aggregate doc count / storage / type breakdown (overview)
   app.get("/stats", { preHandler: [requireAuth] }, async req => {
     return queryService.getStats(req.userId!);
+  });
+
+
+  // GET /media/storage/categories - per-file-type storage totals (count + bytes)
+  // for the overview "storage by type" graph.
+  app.get("/storage/categories", { preHandler: [requireAuth] }, async req => {
+    return queryService.getCategoryBreakdown(req.userId!);
   });
 
 
@@ -284,37 +339,59 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     });
   });
 
-  // DELETE /media - delete all media matching filter params (same query format as GET /media)
+  // POST /media/abort - dev escape hatch: hard-stop all background processing by
+  // obliterating the index/thumb/ocr/unpack queues (clears the enqueue backlog
+  // and any in-flight index walk that a restart alone won't stop).
+  app.post("/abort", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const result = await actionsService.abortProcessing();
+    req.log.warn({ userId, cleared: result.cleared }, "processing queues aborted (dev)");
+    return reply.send(result);
+  });
+
+  // DELETE /media - enqueue a background bulk delete and return 202 immediately.
+  // The actual set-based delete + thumbnail unlinks run in the delete worker, so a
+  // huge selection never blocks the request or starves the Prisma pool.
+  //   - body { ids: [...] }  → delete those hand-picked items (multi-select).
+  //   - filter query params  → delete everything matching (same format as GET /media);
+  //                            an empty filter deletes every item the user owns.
   app.delete("/", { preHandler: [requireAuth] }, async (req, reply) => {
     const userId = req.userId!;
-    const rawQuery = req.query as Record<string, unknown>;
+
+    const Body = z.object({ ids: z.array(z.string().min(1)).optional() }).optional();
+    const ids = Body.parse(req.body ?? undefined)?.ids;
+
+    if (ids && ids.length > 0) {
+      const { jobId } = await deleteService.startDelete(userId, { ids });
+      req.log.info({ userId, jobId, idCount: ids.length }, "bulk delete enqueued (ids)");
+      return reply.code(202).send({ jobId });
+    }
+
     const Query = z.object({
       q: z.string().trim().optional(),
       tags: z.unknown().optional(),
       excludeTags: z.string().trim().optional(),
-      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
-      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
+      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
+      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
       excludeUnpacked: z.coerce.boolean().optional(),
     });
-    const { q, tags, excludeTags: excludeTagsRaw, thumbState, textState, excludeUnpacked } = Query.parse(rawQuery);
+    const { q, tags, excludeTags: excludeTagsRaw, thumbState, textState, excludeUnpacked } = Query.parse(req.query as Record<string, unknown>);
 
     const tagFilters = typeof tags === "string" ? tags.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
     const excludeTagFilters = excludeTagsRaw ? excludeTagsRaw.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
 
-    const hasFilters = q || tagFilters.length > 0 || excludeTagFilters.length > 0 || thumbState || textState || excludeUnpacked;
-    const result = hasFilters
-      ? await actionsService.deleteAllMedia(userId, {
-          queryText: q,
-          tags: tagFilters,
-          excludeTags: excludeTagFilters,
-          thumbState,
-          textState,
-          excludeUnpacked,
-        })
-      : await actionsService.deleteAllMediaBulk(userId);
-
-    req.log.info({ userId, count: result.count }, "bulk delete all media");
-    return reply.send(result);
+    const { jobId } = await deleteService.startDelete(userId, {
+      filters: {
+        queryText: q,
+        tags: tagFilters,
+        excludeTags: excludeTagFilters,
+        thumbState,
+        textState,
+        excludeUnpacked,
+      },
+    });
+    req.log.info({ userId, jobId }, "bulk delete enqueued (filter)");
+    return reply.code(202).send({ jobId });
   });
 
   // DELETE /media/:id - delete my media
@@ -379,11 +456,14 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
       if (items.length === 0) return reply.notFound();
 
+      const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+      const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
       reply.raw.setHeader("Content-Type", "application/zip");
       reply.raw.setHeader("Content-Disposition", 'attachment; filename="vault-download.zip"');
       reply.hijack();
 
-      await actionsService.streamBulkArchive(items, reply.raw, req.log);
+      await actionsService.streamBulkArchive(items, reply.raw, req.log, allowedRoots);
     },
   );
 
@@ -402,6 +482,133 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       return reply.send(url);
     },
   );
+
+  // GET /media/:id/source - stream an in-place indexed original from disk.
+  // Managed items have no source here (they use the presigned /download URL).
+  app.get<{ Params: { id: string } }>(
+    "/:id/source",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+
+      const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+      const allowedRoots = prefs?.indexAllowedRoots ?? [];
+      const result = await readService.getSourceStream(userId, id, allowedRoots);
+      if (!result) return reply.notFound();
+
+      if (result.contentLength != null) reply.header("content-length", String(result.contentLength));
+      reply.type(result.mimeType);
+      reply.header(
+        "content-disposition",
+        `inline; filename="${result.filename.replace(/["\\]/g, "_")}"`,
+      );
+      reply.header("cache-control", "private, max-age=3600");
+      return reply.send(result.body);
+    },
+  );
+
+  // GET /media/index/roots - configured in-place indexing roots (empty = disabled)
+  app.get("/index/roots", { preHandler: [requireAuth] }, async (req) => {
+    const userId = req.userId!;
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const roots = prefs?.indexAllowedRoots ?? [];
+    return { enabled: roots.length > 0, roots };
+  });
+
+  // POST /media/index - scan a server-side folder and index its files in place
+  app.post("/index", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const body = z
+      .object({
+        path: z.string().min(1),
+        recursive: z.boolean().optional(),
+      })
+      .parse(req.body);
+
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const allowedRoots = prefs?.indexAllowedRoots ?? [];
+    const ignoreHidden = prefs?.ignoreHiddenFiles ?? true;
+    const blacklistExtensions = prefs?.indexBlacklistExtensions ?? [];
+    const excludeFolders = prefs?.indexExcludeFolders ?? [];
+    const skipNonContent = prefs?.indexSkipNonContent ?? true;
+
+    const result = await indexService.startIndex(userId, {
+      path: body.path,
+      recursive: body.recursive ?? true,
+      ignoreHidden,
+      blacklistExtensions,
+      excludeFolders,
+      skipNonContent,
+    }, allowedRoots);
+
+    if (!result.ok) {
+      switch (result.reason) {
+        case "disabled":
+          return reply.badRequest("In-place indexing is disabled — add at least one allowed folder in Settings.");
+        case "not_allowed":
+          return reply.forbidden("That folder is not within an allowed indexing root.");
+        case "not_found":
+          return reply.notFound("Folder not found.");
+        case "not_dir":
+          return reply.badRequest("That path is not a directory.");
+      }
+    }
+
+    req.log.info({ userId, path: body.path, jobId: result.jobId }, "index scan requested");
+    return reply.send({ jobId: result.jobId });
+  });
+
+  // GET /media/index/status?jobId=... - poll scan progress
+  app.get("/index/status", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const { jobId } = z.object({ jobId: z.string().min(1) }).parse(req.query);
+
+    const status = await indexService.getStatus(userId, jobId);
+    if (!status) return reply.notFound();
+    return reply.send(status);
+  });
+
+  // GET /media/index/active - the user's in-flight scan, so the UI can re-attach
+  // after a reload. Returns { status: null } when nothing is running.
+  app.get("/index/active", { preHandler: [requireAuth] }, async req => {
+    const status = await indexService.getActive(req.userId!);
+    return { status };
+  });
+
+  // POST /media/index/stop - stop the index walker without touching the worker
+  // queues. Already-discovered files keep processing (thumbnails, OCR); only
+  // the directory walk stops adding new files.
+  app.post("/index/stop", { preHandler: [requireAuth] }, async (req, reply) => {
+    req.log.info({ userId: req.userId }, "index walk stop requested");
+    await actionsService.stopIndexWalk();
+    return reply.send({ ok: true });
+  });
+
+  // GET /media/delete/status?jobId=... - poll bulk-delete progress
+  app.get("/delete/status", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const { jobId } = z.object({ jobId: z.string().min(1) }).parse(req.query);
+
+    const status = await deleteService.getStatus(userId, jobId);
+    if (!status) return reply.notFound();
+    return reply.send(status);
+  });
+
+  // GET /media/delete/active - the user's in-flight bulk delete, so the UI can
+  // re-attach after a reload. Returns { status: null } when nothing is running.
+  app.get("/delete/active", { preHandler: [requireAuth] }, async req => {
+    const status = await deleteService.getActive(req.userId!);
+    return { status };
+  });
+
+  // POST /media/delete/abort - stop in-flight bulk deletes (epoch bump).
+  app.post("/delete/abort", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const result = await deleteService.abort();
+    req.log.warn({ userId, ...result }, "bulk delete aborted");
+    return reply.send(result ?? { epoch: null });
+  });
 
   // GET /media/:id/text - chunked extracted text
   app.get<{ Params: { id: string } }>(
@@ -439,11 +646,17 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         })
         .parse(req.body ?? {});
 
+      // Snapshot the allow-list so the worker can re-validate an in-place
+      // source path (mirrors the index + thumbnail flows; env-based roots are
+      // empty now that the list lives in user preferences).
+      const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+      const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
       const result = await actionsService.enqueueTextExtraction(userId, id, {
         language: body.language,
         rotation: body.rotation,
         forceOcr: body.forceOcr ?? false,
-      });
+      }, allowedRoots);
 
       if (!result) return reply.notFound();
 
@@ -495,12 +708,81 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     const userId = req.userId!;
     const { id } = paramsSchema.parse(req.params);
 
-    const media = await readService.getMediaDetail(userId, id);
+    const detail = await readService.getMediaDetail(userId, id);
+    if (!detail) return reply.notFound();
 
-    if (!media) return reply.notFound();
+    // Viewing an item is a strong signal it matters: bump its still-pending
+    // thumbnail ahead of any backlog (e.g. after indexing a folder). Fire and
+    // forget — a queue hiccup must never block serving the detail page.
+    if (detail.media.thumbState === "PENDING") {
+      void actionsService.prioritizeThumbnail(id).catch(err => {
+        req.log.warn({ err, mediaId: id }, "[media] thumbnail prioritization failed");
+      });
+    }
 
-    return reply.send(media);
+    // Compute the local filesystem path for "Open in File Explorer".
+    // In-place indexed items have sourcePath; fs-stored uploads live at
+    // STORAGE_FS_PATH/storageKey. S3 items have no local path.
+    let localPath: string | null = null;
+    if (detail.media.sourcePath) {
+      localPath = detail.media.sourcePath;
+    } else if (app.config.STORAGE_DRIVER === "fs") {
+      localPath = path.join(app.config.STORAGE_FS_PATH, detail.media.storageKey);
+    }
+
+    return reply.send({ ...detail, localPath });
   });
+
+  // POST /media/:id/reveal - open the file in the OS file manager.
+  // Works for in-place indexed items (sourcePath) and fs-stored uploads
+  // (STORAGE_FS_PATH + storageKey). S3 items have no local path to open.
+  app.post<{ Params: { id: string } }>(
+    "/:id/reveal",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = req.userId!;
+      const { id } = paramsSchema.parse(req.params);
+
+      // Refuse on deployments where the server can't reach the user's desktop
+      // (remote/container/multi-user). The UI hides the button in this case too.
+      if (!app.config.LOCAL_EXPLORER) {
+        return reply.forbidden("File Explorer reveal is disabled on this server.");
+      }
+
+      const media = await app.prisma.media.findFirst({
+        where: { id, userId },
+        select: { sourcePath: true, storageKey: true },
+      });
+      if (!media) return reply.notFound();
+
+      let revealPath: string;
+      if (media.sourcePath) {
+        // In-place indexed: re-validate against current allow-list.
+        const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+        const allowedRoots = prefs?.indexAllowedRoots ?? [];
+        if (!isUnderAllowedRoot(media.sourcePath, allowedRoots)) {
+          return reply.forbidden("Source path is no longer within an allowed root.");
+        }
+        revealPath = media.sourcePath;
+      } else if (app.config.STORAGE_DRIVER === "fs") {
+        // Vault-managed filesystem upload: construct the storage path.
+        revealPath = path.join(app.config.STORAGE_FS_PATH, media.storageKey);
+      } else {
+        return reply.badRequest("File is stored in S3 and has no local path.");
+      }
+
+      // Fail loudly if the file is gone — otherwise Explorer silently falls back
+      // to opening the default folder, which looks like the wrong file opened.
+      try {
+        await stat(revealPath);
+      } catch {
+        return reply.notFound("File no longer exists at its recorded location.");
+      }
+
+      revealInExplorer(revealPath, req.log);
+      return reply.send({ ok: true });
+    },
+  );
 
   // POST /media/:id/thumbnail/regenerate - force-requeue thumbnail generation
   app.post<{ Params: { id: string } }>(
@@ -510,12 +792,54 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       const userId = req.userId!;
       const { id } = paramsSchema.parse(req.params);
 
-      const result = await actionsService.regenerateThumbnail(userId, id);
+      // Snapshot the allow-list so the worker can re-validate an in-place
+      // source path (mirrors the index flow; env-based roots are empty now).
+      const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+      const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
+      const result = await actionsService.regenerateThumbnail(userId, id, allowedRoots);
       if (!result) return reply.notFound();
 
       return reply.send(result);
     },
   );
+
+  // Batch re-queue: collection-level paths kept distinct from the /:id/* routes
+  // so Fastify doesn't treat "batch" as an :id. Both take { ids: string[] }.
+  const batchBodySchema = z.object({ ids: z.array(z.string().min(1)).min(1).max(500) });
+
+  const parseBatchBody = (body: unknown): string[] => {
+    const parsed = batchBodySchema.safeParse(body ?? {});
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(parsed.error.errors[0]?.message ?? "Invalid request body");
+    }
+    return parsed.data.ids;
+  };
+
+  // POST /media/batch/thumbnail - re-queue thumbnail generation for many items
+  app.post("/batch/thumbnail", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const ids = parseBatchBody(req.body);
+
+    // Snapshot the allow-list once for the whole batch (see single-item route).
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
+    const result = await actionsService.regenerateThumbnailsBatch(userId, ids, allowedRoots);
+    return reply.send(result);
+  });
+
+  // POST /media/batch/text - re-run text extraction for many items
+  app.post("/batch/text", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const ids = parseBatchBody(req.body);
+
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
+    const result = await actionsService.enqueueTextExtractionBatch(userId, ids, allowedRoots);
+    return reply.send(result);
+  });
 
   // GET /media/:id/thumbnail - stream thumbnail bytes or fallback
   app.get("/:id/thumbnail", { preHandler: [requireAuth] }, async (req, reply) => {

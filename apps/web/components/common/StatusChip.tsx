@@ -5,6 +5,7 @@ export function StatusChip({ status }: { status: string }) {
   const isPending = normalized === "PENDING";
   const isReady = normalized === "READY";
   const isError = normalized === "ERROR";
+  const isUnsupported = normalized === "UNSUPPORTED";
   const color =
     isReady
       ? "bg-green-100 text-green-700 border-green-300"
@@ -20,7 +21,9 @@ export function StatusChip({ status }: { status: string }) {
         ? "Pending"
         : isError
           ? "Error"
-          : status;
+          : isUnsupported
+            ? "Unsupported"
+            : status;
   return (
     <span className={`inline-block rounded border px-2 py-0.5 text-xs ${color}`}>
       {label}

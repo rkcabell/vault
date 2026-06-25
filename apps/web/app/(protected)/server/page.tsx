@@ -216,7 +216,7 @@ export default function ServerPage() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground">Memory (RSS)</div>
+                  <div className="text-xs text-muted-foreground">Memory Usage</div>
                   <div className="text-sm font-medium mt-0.5">
                     {memoryMB !== null ? `${memoryMB} MB` : "—"}
                   </div>

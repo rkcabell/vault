@@ -9,6 +9,11 @@ import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
+// Mark the run as a test environment so app code can disable dev-only behavior
+// (e.g. the pino file transport in logger.ts, whose worker thread can't resolve
+// fileTransport.mjs under the tsx loader).
+process.env.NODE_ENV ??= "test";
+
 function findTests(dir) {
   const results = [];
   let entries;

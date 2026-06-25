@@ -18,6 +18,15 @@
 #     volumes:
 #       - /mnt/nas/vault:/data/vault
 # and delete the `vault-data` entry from the top-level `volumes:` block.
+#
+# In-place indexing (INDEX_ALLOWED_ROOTS in .env.docker): to index files where
+# they already sit without copying, mount each allowed root (ideally read-only)
+# into api AND the worker container(s), e.g.:
+#     volumes:
+#       - /mnt/nas/photos:/mnt/nas/photos:ro
+# The index_queue (like unpack_queue) is processed by the combined worker entry
+# (`pnpm -F api run worker`), not by the dedicated jobs-ocr / jobs-thumb workers —
+# add a `jobs` service running that command if you enable indexing here.
 services:
   postgres:
     image: postgres:16

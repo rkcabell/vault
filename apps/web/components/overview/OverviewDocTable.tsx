@@ -13,12 +13,12 @@ function fmtRelative(iso: string): string {
   return rtf.format(-Math.round(diffSec / 86400), "day");
 }
 
-// FAILED = format not supported / retries exhausted (not actionable, not an error)
-// ERROR  = retriable failure (actionable)
+// Real failures: thumb FAILED (render error) or text ERROR (extraction error) — both
+// actionable. UNSUPPORTED = wrong type / too large, a neutral terminal skip.
 function StatusIcon({ thumbState, textState }: { thumbState: MediaListItem["thumbState"]; textState: MediaListItem["textState"] }) {
   const isPending    = thumbState === "PENDING" || textState === "PENDING";
-  const isError      = textState === "ERROR" || thumbState === "ERROR";
-  const isUnsupported = !isPending && !isError && (textState === "FAILED" || thumbState === "FAILED");
+  const isError      = textState === "ERROR" || thumbState === "FAILED";
+  const isUnsupported = textState === "UNSUPPORTED" || thumbState === "UNSUPPORTED";
 
   if (isPending)     return <span title="Processing" className="text-xs" style={{ color: "var(--reminder-today)" }}>…</span>;
   if (isError)       return <span title="Processing error" className="text-xs" style={{ color: "var(--reminder-overdue)" }}>✕</span>;
@@ -27,8 +27,8 @@ function StatusIcon({ thumbState, textState }: { thumbState: MediaListItem["thum
 }
 
 function rowClass(item: MediaListItem): string {
-  // Only highlight ERROR (retriable), not FAILED (unsupported format)
-  if (item.textState === "ERROR" || item.thumbState === "ERROR") {
+  // Only highlight real failures (thumb FAILED / text ERROR), not UNSUPPORTED skips.
+  if (item.textState === "ERROR" || item.thumbState === "FAILED") {
     return "overview-doc-table__row overview-doc-table__row--inbox-error";
   }
   if (item.thumbState === "PENDING" || item.textState === "PENDING") {

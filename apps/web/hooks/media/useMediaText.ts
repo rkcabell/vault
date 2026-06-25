@@ -44,8 +44,10 @@ export function useMediaText (args: {
   }, [copyMessage])
 
   useEffect(() => {
-    // gate on text state
-    if (mediaTextState === 'ERROR' || mediaTextState === 'FAILED') {
+    // gate on text state. ERROR = real failure; UNSUPPORTED = terminal skip (wrong
+    // type / too large). Both clear any stale text; MediaTextPanel styles UNSUPPORTED
+    // neutrally (not as an error) off the raw mediaTextState.
+    if (mediaTextState === 'ERROR' || mediaTextState === 'UNSUPPORTED') {
       setTextState('failed')
       setSegments([])
       setTextTotalLength(0)

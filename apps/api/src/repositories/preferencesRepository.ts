@@ -11,6 +11,12 @@ export class PreferencesRepository {
     return row?.preferences ?? null;
   }
 
+  /** Raw preferences for every user — used by the index watcher to discover
+   *  which roots to watch across all accounts (single-user in practice). */
+  async listAll () {
+    return this.prisma.user.findMany({ select: { id: true, preferences: true } });
+  }
+
   async updatePreferences (userId: string, patch: Record<string, unknown>) {
     const row = await this.prisma.user.findUnique({
       where: { id: userId },

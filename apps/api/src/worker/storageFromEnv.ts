@@ -1,6 +1,7 @@
 import { createS3Adapter } from "../adapters/s3Adapter.js";
 import { createFsAdapter } from "../adapters/storage/fsAdapter.js";
 import { s3 } from "../plugins/s3Client.js";
+import { parseAllowedRoots } from "../lib/media/indexRoots.js";
 import type { StorageAdapter } from "../adapters/storage/types.js";
 
 /**
@@ -22,4 +23,13 @@ export function createWorkerStorage (): StorageAdapter {
 /** Key namespace / S3 bucket. The fs adapter ignores it, so it has a default. */
 export function workerBucket (): string {
   return process.env.S3_BUCKET ?? "vault-media";
+}
+
+/**
+ * Parsed INDEX_ALLOWED_ROOTS for a standalone worker — the allow-list that
+ * gates reading in-place indexed sources from disk. Mirrors the API's
+ * `config.indexAllowedRoots`. Empty when the feature is disabled.
+ */
+export function workerAllowedRoots (): string[] {
+  return parseAllowedRoots(process.env.INDEX_ALLOWED_ROOTS);
 }

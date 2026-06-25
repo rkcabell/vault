@@ -15,6 +15,9 @@ const badgeVariants = cva(
         destructive:
           'border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80',
         outline: 'text-foreground',
+        // Origin-aware tones for tag badges: user-made reads bolder, auto muted.
+        user: 'border-transparent bg-primary/20 text-primary hover:bg-primary/30',
+        auto: 'border-transparent bg-muted text-muted-foreground hover:bg-muted/70',
       },
     },
     defaultVariants: {

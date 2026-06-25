@@ -3,7 +3,7 @@
 
 import { useRef } from 'react';
 import { Button } from '@/components/ui/Button';
-import { Trash2, Tag, FolderPlus, Download } from 'lucide-react';
+import { Trash2, Tag, FolderPlus, Download, RefreshCw, FileText } from 'lucide-react';
 
 interface BulkActionBarProps {
   count: number;
@@ -12,12 +12,15 @@ interface BulkActionBarProps {
   onAddToBundle: () => void;
   onClear: () => void;
   onDownload: () => void;
+  onRegenerateThumbnail: () => void;
+  onExtractText: () => void;
   onCancel: () => void;
   onSelectAll: () => void;
   isDownloading?: boolean;
+  isRequeueing?: boolean;
 }
 
-export function BulkActionBar({ count, onDelete, onTag, onAddToBundle, onClear, onDownload, onCancel, onSelectAll, isDownloading }: BulkActionBarProps) {
+export function BulkActionBar({ count, onDelete, onTag, onAddToBundle, onClear, onDownload, onRegenerateThumbnail, onExtractText, onCancel, onSelectAll, isDownloading, isRequeueing }: BulkActionBarProps) {
   const deleteRef = useRef<HTMLButtonElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const hasSelection = count > 0;
@@ -73,6 +76,24 @@ export function BulkActionBar({ count, onDelete, onTag, onAddToBundle, onClear, 
             <Button size="sm" variant="outline" onClick={onDownload} disabled={isDownloading}>
               <Download className="mr-2 h-4 w-4" />
               {isDownloading ? "Zipping…" : "Download"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onRegenerateThumbnail}
+              disabled={isRequeueing}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Regenerate thumbnail
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onExtractText}
+              disabled={isRequeueing}
+            >
+              <FileText className="mr-2 h-4 w-4" />
+              Extract text
             </Button>
             <Button ref={deleteRef} size="sm" variant="destructive" onClick={handleDeleteClick}>
               <Trash2 className="mr-2 h-4 w-4" />

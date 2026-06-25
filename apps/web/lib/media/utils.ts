@@ -2,14 +2,17 @@ import type { TextSource } from "./types";
 import type { MediaWorkerState } from "@vault/types";
 
 export function describeInboxStatus(thumbState: MediaWorkerState, textState: MediaWorkerState): string {
-  const thumbFailed = thumbState === "ERROR" || thumbState === "FAILED";
-  const textFailed  = textState  === "ERROR" || textState  === "FAILED";
+  // Real failures only: thumb FAILED (render error), text ERROR (extraction error).
+  const thumbFailed = thumbState === "FAILED" || thumbState === "ERROR";
+  const textFailed  = textState  === "ERROR";
+  const unsupported = thumbState === "UNSUPPORTED" || textState === "UNSUPPORTED";
   const thumbPending = thumbState === "PENDING";
   const textPending  = textState  === "PENDING";
 
   if (thumbFailed && textFailed) return "Thumbnail + text extraction failed";
   if (thumbFailed) return "Thumbnail generation failed";
   if (textFailed)  return "Text extraction failed";
+  if (unsupported) return "Not supported for this file type";
   if (thumbPending && textPending) return "Processing…";
   if (thumbPending) return "Generating thumbnail…";
   if (textPending)  return "Extracting text…";

@@ -14,9 +14,12 @@ const logger = {
 // ── mock builders ─────────────────────────────────────────────────────────────
 
 function makeRepo (overrides: {
-  createMedia?: (_data: unknown) => Promise<{ id: string; storageKey: string }>;
+  createMedia?: (_data: unknown, _opts?: { autoTags?: string[] }) => Promise<{ id: string; storageKey: string }>;
   createBatch?: (_items: unknown[]) => Promise<void>;
-  markSourcesReady?: (_userId: string, _ids: string[]) => Promise<{ id: string; storageKey: string; mimeType: string }[]>;
+  markSourcesReady?: (_userId: string, _ids: string[]) => Promise<{ id: string; storageKey: string; mimeType: string; sizeBytes?: number }[]>;
+  markTextUnsupported?: (_ids: string[]) => Promise<void>;
+  markThumbUnsupported?: (_ids: string[]) => Promise<void>;
+  markThumbTooLarge?: (_ids: string[]) => Promise<void>;
 } = {}): Deps["repository"] {
   return {
     createMedia: overrides.createMedia ?? (async (data: unknown) => {
@@ -25,6 +28,9 @@ function makeRepo (overrides: {
     }),
     createBatch: overrides.createBatch ?? (async () => {}),
     markSourcesReady: overrides.markSourcesReady ?? (async () => []),
+    markTextUnsupported: overrides.markTextUnsupported ?? (async () => {}),
+    markThumbUnsupported: overrides.markThumbUnsupported ?? (async () => {}),
+    markThumbTooLarge: overrides.markThumbTooLarge ?? (async () => {}),
   } as unknown as Deps["repository"];
 }
 
@@ -111,6 +117,50 @@ test("initUpload: adds a MIME type tag derived from mimeType", async () => {
 
   assert.ok(tags[0]?.includes("vacation"));
   assert.ok(tags[0]?.includes("jpg"));
+});
+
+test("initUpload: marks the MIME tag as auto but not user-supplied tags", async () => {
+  let captured: { tags?: string[]; autoTags?: string[] } = {};
+  const svc = makeService({
+    createMedia: async (data: unknown, opts?: { autoTags?: string[] }) => {
+      const d = data as { id: string; storageKey: string; tags: string[] };
+      captured = { tags: d.tags, autoTags: opts?.autoTags };
+      return { id: d.id, storageKey: d.storageKey };
+    },
+  });
+
+  await svc.initUpload("u", {
+    filename: "photo.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 0,
+    title: "Photo",
+    tags: ["vacation"],
+  });
+
+  assert.deepEqual(captured.autoTags, ["jpg"], "MIME tag is auto");
+  assert.ok(captured.tags?.includes("vacation"));
+  assert.ok(!captured.autoTags?.includes("vacation"), "user tag is not auto");
+});
+
+test("initUpload: a user-typed tag matching the MIME tag is not treated as auto", async () => {
+  let captured: { autoTags?: string[] } = {};
+  const svc = makeService({
+    createMedia: async (data: unknown, opts?: { autoTags?: string[] }) => {
+      const d = data as { id: string; storageKey: string };
+      captured = { autoTags: opts?.autoTags };
+      return { id: d.id, storageKey: d.storageKey };
+    },
+  });
+
+  await svc.initUpload("u", {
+    filename: "photo.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 0,
+    title: "Photo",
+    tags: ["jpg"],
+  });
+
+  assert.deepEqual(captured.autoTags, [], "user intent wins; jpg is not auto");
 });
 
 test("initUpload: deduplicates tags", async () => {
@@ -277,4 +327,64 @@ test("finalizeBatch: enqueues thumb and OCR jobs for each ready item", async () 
 
   assert.equal(thumbBulks[0]?.length, 2);
   assert.equal(ocrBulks[0]?.length, 2);
+});
+
+test("finalizeBatch: only enqueues thumb/OCR for compatible types, marks the rest FAILED", async () => {
+  const thumbBulks: { data: { mediaId: string } }[][] = [];
+  const ocrBulks: { data: { mediaId: string } }[][] = [];
+  let textUnsupported: string[] | null = null;
+  let thumbUnsupported: string[] | null = null;
+
+  const svc = createMediaUploadService({
+    repository: makeRepo({
+      markSourcesReady: async () => [
+        { id: "img", storageKey: "k/img", mimeType: "image/jpeg" }, // thumb + ocr
+        { id: "vid", storageKey: "k/vid", mimeType: "video/mp4" },  // thumb only
+        { id: "txt", storageKey: "k/txt", mimeType: "text/plain" }, // neither
+      ],
+      markTextUnsupported: async (ids: string[]) => { textUnsupported = ids; },
+      markThumbUnsupported: async (ids: string[]) => { thumbUnsupported = ids; },
+    }),
+    s3Adapter: makeS3(),
+    bucket: "test-bucket",
+    thumbQueue: { addBulk: async (jobs: unknown[]) => { thumbBulks.push(jobs as { data: { mediaId: string } }[]); } } as unknown as Deps["thumbQueue"],
+    ocrQueue: { addBulk: async (jobs: unknown[]) => { ocrBulks.push(jobs as { data: { mediaId: string } }[]); } } as unknown as Deps["ocrQueue"],
+    logger,
+  });
+
+  await svc.finalizeBatch("u", ["img", "vid", "txt"]);
+
+  // Thumb: image + video (not txt). Text extraction: image (OCR) + txt (direct read).
+  assert.deepEqual(thumbBulks[0]?.map(j => j.data.mediaId).sort(), ["img", "vid"]);
+  assert.deepEqual(ocrBulks[0]?.map(j => j.data.mediaId).sort(), ["img", "txt"]);
+  // Text-unsupported: video only. Thumb-unsupported: txt only.
+  assert.deepEqual((textUnsupported as string[] | null)?.sort(), ["vid"]);
+  assert.deepEqual(thumbUnsupported as string[] | null, ["txt"]);
+});
+
+test("finalizeBatch: does NOT enqueue a thumb for an oversize file, marks it too-large", async () => {
+  const GIB = 1024 * 1024 * 1024;
+  const thumbBulks: { data: { mediaId: string } }[][] = [];
+  let thumbTooLarge: string[] | null = null;
+
+  const svc = createMediaUploadService({
+    repository: makeRepo({
+      markSourcesReady: async () => [
+        { id: "small", storageKey: "k/small", mimeType: "video/mp4", sizeBytes: 100 * 1024 * 1024 },
+        { id: "huge", storageKey: "k/huge", mimeType: "video/mp4", sizeBytes: 3 * GIB }, // > 2 GiB
+      ],
+      markThumbTooLarge: async (ids: string[]) => { thumbTooLarge = ids; },
+    }),
+    s3Adapter: makeS3(),
+    bucket: "test-bucket",
+    thumbQueue: { addBulk: async (jobs: unknown[]) => { thumbBulks.push(jobs as { data: { mediaId: string } }[]); } } as unknown as Deps["thumbQueue"],
+    ocrQueue: { addBulk: async () => {} } as unknown as Deps["ocrQueue"],
+    logger,
+  });
+
+  await svc.finalizeBatch("u", ["small", "huge"]);
+
+  // Only the small file is queued for a thumbnail; the huge one is skipped + marked.
+  assert.deepEqual(thumbBulks[0]?.map(j => j.data.mediaId), ["small"]);
+  assert.deepEqual(thumbTooLarge as string[] | null, ["huge"]);
 });

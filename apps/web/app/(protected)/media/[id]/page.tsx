@@ -15,6 +15,7 @@ import { MessageCard } from "@/components/ui/MessageCard";
 import { TAGS_UPDATED_EVENT, emitTagsUpdated } from "@/lib/tags";
 import { emitBundlesUpdated } from "@/lib/bundles";
 import { useMediaDetail } from "@/hooks/media/useMediaDetail";
+import { useServerStatus } from "@/hooks/useServerStatus";
 import { MediaPreviewCard } from "@/components/media/MediaPreviewCard";
 import { MediaInfoCard } from "@/components/media/MediaInfoCard";
 import { MediaTextPanel } from "@/components/media/MediaTextPanel";
@@ -40,6 +41,8 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
     setMedia,
     document,
     metadata,
+    autoTags,
+    localPath,
     thumbnailUrl,
     downloadUrl,
     setErrorMessage,
@@ -49,6 +52,10 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
     updateTitle,
     updateTags,
   } = useMediaDetail(id);
+
+  const { capabilities } = useServerStatus();
+  // Fail open until the capability fetch resolves, matching the hook's default.
+  const localExplorer = capabilities?.localExplorer ?? true;
 
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -363,6 +370,20 @@ const handleDelete = (e: React.MouseEvent) => {
     }
   };
 
+  const handleRevealInExplorer = async () => {
+    if (busy) return;
+    setErrorMessage(null);
+    try {
+      const res = await apiFetch(`/api/media/${id}/reveal`, { method: "POST", credentials: "include" });
+      if (!res.ok) {
+        const msg = await readErrorMessage(res, "Could not open file explorer.");
+        setErrorMessage(msg);
+      }
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Could not open file explorer.");
+    }
+  };
+
   const handleRegenerateThumbnail = async () => {
     if (busy) return;
     setErrorMessage(null);
@@ -373,7 +394,12 @@ const handleDelete = (e: React.MouseEvent) => {
         setErrorMessage(msg);
         return;
       }
-      setMedia(prev => prev ? { ...prev, thumbState: "PENDING" } : prev);
+      const body = await res.json() as { ok: boolean; queued?: boolean };
+      if (body.queued === false) {
+        setMedia(prev => prev ? { ...prev, thumbState: "FAILED" } : prev);
+      } else {
+        setMedia(prev => prev ? { ...prev, thumbState: "PENDING" } : prev);
+      }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Failed to queue thumbnail regeneration.");
     }
@@ -506,7 +532,6 @@ const handleDelete = (e: React.MouseEvent) => {
                   id={id}
                   textState={media.textState}
                   textError={media.textError}
-                  mimeType={media.mimeType}
                   document={document}
                   highlightTerms={highlightTerms}
                   refreshKey={0}
@@ -536,8 +561,12 @@ const handleDelete = (e: React.MouseEvent) => {
                   onDelete={handleDelete}
                   onRegenerateThumbnail={handleRegenerateThumbnail}
                   onUnpackToBundle={handleUnpackToBundle}
+                  onRevealInExplorer={handleRevealInExplorer}
                   mimeType={media.mimeType}
                   linkedBundleId={media.linkedBundleId ?? null}
+                  localPath={localPath}
+                  storageKey={media.storageKey}
+                  localExplorer={localExplorer}
                 />
               </PanelCard>
               {media.memberBundles && media.memberBundles.length > 0 && (
@@ -561,6 +590,7 @@ const handleDelete = (e: React.MouseEvent) => {
               <PanelCard title="Tags" storageKey="mediaDetails:tags">
                 <TagEditor
                   tags={media.tags ?? []}
+                  autoTags={autoTags}
                   onSave={updateTags}
                   disabled={busy}
                 />
@@ -569,6 +599,7 @@ const handleDelete = (e: React.MouseEvent) => {
                 <MediaMetadataCard
                   media={media}
                   metadata={metadata}
+                  localPath={localPath}
                   onSaveTitle={updateTitle}
                   busy={busy}
                 />

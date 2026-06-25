@@ -21,10 +21,11 @@ type Section = {
 export function MediaMetadataCard (props: {
   media: MediaDetail
   metadata?: MediaMetadata | null
+  localPath?: string | null
   onSaveTitle: (title: string) => Promise<void>
   busy: boolean
 }) {
-  const { media, metadata, onSaveTitle, busy } = props
+  const { media, metadata, localPath, onSaveTitle, busy } = props
   const title = media.title || media.filename || 'Media details'
 
   const [isEditingTitle, setIsEditingTitle] = useState(false)
@@ -123,6 +124,7 @@ export function MediaMetadataCard (props: {
 
   addRow(generalRows, 'ID', media.id, 'break-all')
   addRow(generalRows, 'Filename', media.filename, 'break-all')
+  addRow(generalRows, 'Path', localPath, 'break-all')
   addRow(generalRows, 'Size', sizeLabel)
   addRow(generalRows, 'Type', media.mimeType, 'break-all')
   const ext = media.filename?.includes('.') ? media.filename.split('.').pop()?.toUpperCase() : null

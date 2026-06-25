@@ -1,7 +1,10 @@
 import type { MediaWorkerState } from "./types";
 
-export type MediaOverallState = "PENDING" | "READY" | "ERROR";
+export type MediaOverallState = "PENDING" | "READY" | "ERROR" | "UNSUPPORTED";
 
+// Precedence: a real failure (thumb FAILED / text ERROR) outranks anything; then
+// still-processing PENDING; then UNSUPPORTED (a neutral terminal skip, not an error);
+// otherwise READY.
 export function deriveOverallState(
   thumbState?: MediaWorkerState | null,
   textState?: MediaWorkerState | null,
@@ -18,5 +21,6 @@ export function deriveOverallState(
     return "ERROR";
   }
   if (normalizedThumb === "PENDING" || normalizedText === "PENDING") return "PENDING";
+  if (normalizedThumb === "UNSUPPORTED" || normalizedText === "UNSUPPORTED") return "UNSUPPORTED";
   return "READY";
 }

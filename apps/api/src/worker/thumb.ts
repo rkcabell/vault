@@ -7,7 +7,7 @@ import { Worker } from "bullmq";
 import IORedis from "ioredis";
 
 import { prisma } from "@vault/db";
-import { createWorkerStorage, workerBucket } from "./storageFromEnv.js";
+import { createWorkerStorage, workerBucket, workerAllowedRoots } from "./storageFromEnv.js";
 import { readLowMemoryPreference } from "./workerPrefs.js";
 import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumbWorker.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
@@ -51,6 +51,7 @@ async function main() {
       metadataRepository,
       storage,
       bucket: BUCKET,
+      allowedRoots: workerAllowedRoots(),
       logger: thumbLogger,
       queueName: THUMB_QUEUE,
       publishJobUpdate,

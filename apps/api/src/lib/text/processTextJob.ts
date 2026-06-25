@@ -1,9 +1,10 @@
-// File: apps/api/src/lib/text/processTextJob.ts
 import { extractPdfText, type PdfTextPage } from "@/services/pdf/extractPdfText.js";
 import { ocrWithOcrmypdf } from "@/services/ocr/ocrWithOcrmypdf.js";
 import { readObjectBuffer } from "../../adapters/storage/getObjectBuffer.js";
+import { readSourceBuffer } from "../../adapters/storage/openSource.js";
 import type { StorageAdapter } from "../../adapters/storage/types.js";
 import { looksLikeHeic } from "../../lib/fileSignatures.js";
+import { isPlainTextMime, MAX_TEXT_CHARS } from "../media/processingSupport.js";
 
 export type TextSource = "NATIVE" | "OCR";
 export type TextJobErrorCode = "SOURCE_NOT_READY" | "TIMEOUT";
@@ -38,9 +39,12 @@ export type ProcessTextJobDeps = {
 };
 
 /**
- * Download a file from S3 and extract its text content.
+ * Read a file (from managed storage or an in-place source on disk) and extract
+ * its text content.
  *
- * Two paths:
+ * Three paths, checked in order:
+ * - **Plain text** (`text/*` mime): decode the bytes directly, capped at
+ *   MAX_TEXT_CHARS. Wins even when forceOcr is set.
  * - **Native** (`isPdf && !forceOcr`): uses pdf.js to extract embedded text.
  *   Returns `needsOcr: true` when the PDF appears to be a scanned image with
  *   no embedded text layer.
@@ -53,7 +57,8 @@ export type ProcessTextJobDeps = {
  * killed promptly when the job times out. An AbortError is re-thrown as
  * `TextJobError("TIMEOUT")` for structured handling upstream.
  *
- * `deps` can be overridden in tests to stub S3, ocrmypdf, and blank detection.
+ * `deps` can be overridden in tests to stub the source read, ocrmypdf, and
+ * blank detection.
  */
 export async function processTextJob (
   args: {
@@ -66,24 +71,48 @@ export async function processTextJob (
     rotation?: string | null;
     onProgress?: (progress: { current: number; total?: number | null }) => void;
     abortSignal?: AbortSignal;
+    /** Absolute external path for in-place indexed items; null/undefined = managed. */
+    sourcePath?: string | null;
+    /** Configured allow-list, required to read an in-place source. */
+    allowedRoots?: string[];
   },
   deps: ProcessTextJobDeps = {},
 ): Promise<ProcessTextResult> {
-  const { storage, bucket, key, mimeType, forceOcr, language, rotation, onProgress, abortSignal } = args;
+  const { storage, bucket, key, mimeType, forceOcr, language, rotation, onProgress, abortSignal, sourcePath } = args;
+  const allowedRoots = args.allowedRoots ?? [];
   const getBuffer = deps.getObjectBuffer ?? readObjectBuffer;
   const runOcrmypdf = deps.ocrWithOcrmypdf ?? ocrWithOcrmypdf;
   const checkBlankImage = deps.isBlankImage ?? isBlankImage;
   const log = deps.logger;
 
+  // Read the original from its real location: in-place items read read-only
+  // from disk; managed items go through the (test-overridable) storage adapter.
+  const loadSource = (): Promise<Buffer | null> =>
+    sourcePath
+      ? readSourceBuffer({ storage, bucket, storageKey: key, sourcePath, allowedRoots })
+      : getBuffer(storage, bucket, key);
+
   const isPdf = mimeType ? mimeType.toLowerCase().includes("pdf") : false;
   const ctx = { key, mimeType, forceOcr: forceOcr ?? false };
 
+  // Plain-text path: text/* files are already text — read and decode directly,
+  // no OCR or pdf.js. Checked first so it wins even when forceOcr is set. Stored
+  // text is capped (tsvector safety); the caller skips files over MAX_TEXT_BYTES.
+  if (isPlainTextMime(mimeType ?? "")) {
+    log?.info(ctx, "[text] plain-text read start");
+    const buf = await loadSource();
+    if (!buf) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
+    const rawText = decodeUtf8(buf).slice(0, MAX_TEXT_CHARS);
+    log?.info({ ...ctx, chars: rawText.length }, "[text] plain-text read done");
+    return { textSource: "NATIVE", rawText, pages: null, needsOcr: false };
+  }
+
   // Native extraction path
   if (isPdf && !forceOcr) {
-    log?.info(ctx, "[text] s3 download start");
+    log?.info(ctx, "[text] source read start");
     const t0 = Date.now();
-    const pdfBuffer = await getBuffer(storage, bucket, key);
-    log?.info({ ...ctx, bytes: pdfBuffer?.length ?? 0, ms: Date.now() - t0 }, "[text] s3 download done");
+    const pdfBuffer = await loadSource();
+    log?.info({ ...ctx, bytes: pdfBuffer?.length ?? 0, ms: Date.now() - t0 }, "[text] source read done");
     if (!pdfBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 
     log?.info(ctx, "[text] pdf.js extract start");
@@ -99,10 +128,10 @@ export async function processTextJob (
     };
   }
 
-  log?.info(ctx, "[text] s3 download start (ocr path)");
+  log?.info(ctx, "[text] source read start (ocr path)");
   const t2 = Date.now();
-  const sourceBuffer = await getBuffer(storage, bucket, key);
-  log?.info({ ...ctx, bytes: sourceBuffer?.length ?? 0, ms: Date.now() - t2 }, "[text] s3 download done (ocr path)");
+  const sourceBuffer = await loadSource();
+  log?.info({ ...ctx, bytes: sourceBuffer?.length ?? 0, ms: Date.now() - t2 }, "[text] source read done (ocr path)");
   if (!sourceBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 
   // Blank image shortcut: for non-PDF images, check pixel statistics before
@@ -142,7 +171,8 @@ export async function processTextJob (
   try {
     extracted = await extractPdfText(ocrPdf);
   } catch {
-    // One retry for OCR text extraction only.
+    // Single blind retry — only buys us a transient pdf.js worker-init race; a
+    // deterministic failure throws again. TODO: gate on a transient signal.
     extracted = await extractPdfText(ocrPdf);
   }
   log?.info({ ...ctx, chars: extracted.fullText.length, ms: Date.now() - t4 }, "[text] pdf.js extract done (post-ocr)");
@@ -153,6 +183,12 @@ export async function processTextJob (
     pages: extracted.pages,
     needsOcr: false,
   };
+}
+
+/** Decode a buffer as UTF-8, stripping a leading byte-order mark if present. */
+function decodeUtf8 (buf: Buffer): string {
+  const text = buf.toString("utf8");
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 /** Detect both the Web AbortError name and the Node.js ABORT_ERR errno code. */

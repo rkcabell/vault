@@ -127,6 +127,9 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     const exportData = await repo.getBundleItemsForExport(id, userId);
     if (!exportData) return reply.notFound();
 
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
     const safeName = exportData.name.replace(/[/\\:*?"<>|]/g, "").trim() || "bundle";
     reply.raw.setHeader("Content-Type", "application/zip");
     reply.raw.setHeader("Content-Disposition", `attachment; filename="${safeName}.zip"`);
@@ -136,6 +139,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
       exportData.items,
       reply.raw,
       req.log,
+      allowedRoots,
     );
   });
 

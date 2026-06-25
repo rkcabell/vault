@@ -7,7 +7,7 @@ import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 
 import { prisma } from "@vault/db";
-import { createWorkerStorage, workerBucket } from "./storageFromEnv.js";
+import { createWorkerStorage, workerBucket, workerAllowedRoots } from "./storageFromEnv.js";
 import { readLowMemoryPreference } from "./workerPrefs.js";
 import { createOcrProcessor, type OcrJobData } from "./ocrWorker.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
@@ -61,6 +61,7 @@ async function main() {
       documentRepository,
       storage,
       bucket: BUCKET,
+      allowedRoots: workerAllowedRoots(),
       enqueueOcr: async (data, opts) => ocrQueue.add("ocr", data, opts),
       logger: ocrLogger,
       queueName: OCR_QUEUE,
