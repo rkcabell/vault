@@ -1297,6 +1297,63 @@ html:not(.dark).theme-garden a.overview-card:focus-visible {
   line-height: 1.2;
 }
 
+/* Category tiles aren't clickable (they summarise a type, not a single file). */
+.viz-treemap-cell--category {
+  cursor: default;
+}
+
+/* Category label: type name, a size "badge", and an optional file count —
+   stacked and centred. White text + soft shadow stays legible across the full
+   range of saturated tile colours. */
+.viz-cat-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px;
+  text-align: center;
+  pointer-events: none;
+  color: #fff;
+}
+
+.viz-cat-name {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.1;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+/* Size badge: a translucent dark pill so the number reads as a distinct chip. */
+.viz-cat-size {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.34);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  white-space: nowrap;
+  backdrop-filter: blur(1px);
+}
+
+.viz-cat-count {
+  font-size: 0.62rem;
+  font-weight: 500;
+  line-height: 1;
+  opacity: 0.92;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
 .viz-treemap-tooltip {
   position: fixed;
   pointer-events: none;
@@ -1450,6 +1507,18 @@ html:not(.dark).theme-garden a.overview-card:focus-visible {
 .viz-treemap-cell--selected {
   box-shadow: inset 0 0 0 3px #fff;
   z-index: 2;
+}
+
+/* Representative tail-sample tiles: a faint diagonal hatch marks them as
+   stand-ins for many smaller files rather than one exact file. */
+.viz-treemap-cell--sampled {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.14) 0,
+    rgba(255, 255, 255, 0.14) 2px,
+    transparent 2px,
+    transparent 6px
+  );
 }
 
 /* Detail bar under the grid — one compact row, Library-list density */

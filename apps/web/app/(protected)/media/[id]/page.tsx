@@ -41,6 +41,7 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
     setMedia,
     document,
     metadata,
+    autoTags,
     localPath,
     thumbnailUrl,
     downloadUrl,
@@ -393,7 +394,12 @@ const handleDelete = (e: React.MouseEvent) => {
         setErrorMessage(msg);
         return;
       }
-      setMedia(prev => prev ? { ...prev, thumbState: "PENDING" } : prev);
+      const body = await res.json() as { ok: boolean; queued?: boolean };
+      if (body.queued === false) {
+        setMedia(prev => prev ? { ...prev, thumbState: "FAILED" } : prev);
+      } else {
+        setMedia(prev => prev ? { ...prev, thumbState: "PENDING" } : prev);
+      }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Failed to queue thumbnail regeneration.");
     }
@@ -526,7 +532,6 @@ const handleDelete = (e: React.MouseEvent) => {
                   id={id}
                   textState={media.textState}
                   textError={media.textError}
-                  mimeType={media.mimeType}
                   document={document}
                   highlightTerms={highlightTerms}
                   refreshKey={0}
@@ -585,6 +590,7 @@ const handleDelete = (e: React.MouseEvent) => {
               <PanelCard title="Tags" storageKey="mediaDetails:tags">
                 <TagEditor
                   tags={media.tags ?? []}
+                  autoTags={autoTags}
                   onSave={updateTags}
                   disabled={busy}
                 />
@@ -593,6 +599,7 @@ const handleDelete = (e: React.MouseEvent) => {
                 <MediaMetadataCard
                   media={media}
                   metadata={metadata}
+                  localPath={localPath}
                   onSaveTitle={updateTitle}
                   busy={busy}
                 />

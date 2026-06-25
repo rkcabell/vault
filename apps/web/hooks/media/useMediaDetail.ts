@@ -17,6 +17,7 @@ export function useMediaDetail (id: string) {
   const [media, setMedia] = useState<MediaDetail | null>(null)
   const [document, setDocument] = useState<MediaDocument | null>(null)
   const [metadata, setMetadata] = useState<MediaMetadata | null>(null)
+  const [autoTags, setAutoTags] = useState<string[]>([])
   const [localPath, setLocalPath] = useState<string | null>(null)
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
@@ -44,6 +45,7 @@ export function useMediaDetail (id: string) {
         setThumbnailUrl(null)
         setDocument(null)
         setMetadata(null)
+        setAutoTags([])
       }
 
       try {
@@ -83,6 +85,7 @@ export function useMediaDetail (id: string) {
         setMedia(data.media)
         setDocument(data.document ?? null)
         setMetadata(data.metadata ?? null)
+        setAutoTags(data.autoTags ?? [])
         setLocalPath(data.localPath ?? null)
         setThumbnailUrl(
           data.media.thumbState === 'READY'
@@ -186,6 +189,7 @@ export function useMediaDetail (id: string) {
     setMedia,
     document,
     metadata,
+    autoTags,
     localPath,
     thumbnailUrl,
     downloadUrl,

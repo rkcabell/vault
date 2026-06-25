@@ -6,6 +6,7 @@ import { apiFetch } from "@/lib/apiFetch";
 import { ChevronLeft } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { Sidebar, type TagItem } from "./Sidebar";
+import type { TagOrigin } from "@vault/types";
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { TAGS_UPDATED_EVENT } from "@/lib/tags";
 import { ThemeApplier } from "./ThemeApplier";
@@ -39,7 +40,7 @@ export function AppShell({
   useEffect(() => {
     if (!initLoaded) return;
     if (initData) {
-      setSidebarTags(initData.tags.map(t => ({ id: t.name, name: t.name, count: t.count, color: t.color })));
+      setSidebarTags(initData.tags.map(t => ({ id: t.name, name: t.name, count: t.count, color: t.color, origin: t.origin })));
     } else {
       // Init failed — fall back to individual tag fetch (bundles self-fetch in Sidebar).
       void fetchSidebarTags().catch(() => {});
@@ -61,7 +62,7 @@ export function AppShell({
         throw new Error(`Unable to load tags (${res.status})`);
       }
       const data = (await res.json().catch(() => null)) as
-        | { tags?: { name: string; count: number; color: string | null }[] }
+        | { tags?: { name: string; count: number; color: string | null; origin?: TagOrigin }[] }
         | null;
       if (!data?.tags) {
         throw new Error("Unable to load tags.");
@@ -73,6 +74,7 @@ export function AppShell({
           name: t.name,
           count: t.count,
           color: t.color,
+          origin: t.origin,
         })),
       );
     } catch (err) {

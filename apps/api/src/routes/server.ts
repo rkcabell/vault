@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { access, mkdir, readFile, readdir, statfs, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,10 +8,27 @@ import { Queue } from "bullmq";
 import { requireAuth } from "../utils/authGuard.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import { readObjectBuffer } from "../adapters/storage/getObjectBuffer.js";
+import { normalizeExtensions } from "../lib/media/extensions.js";
 
-/** The .env file the API loaded (mirrors dotenv resolution in index.ts). */
+/**
+ * Find the .env the process is actually reading from. pnpm 10 pre-loads the
+ * workspace root .env into the environment before spawning scripts, so
+ * process.cwd() (.../apps/api) is NOT the right target — the root is.
+ * Walk up from cwd looking for pnpm-workspace.yaml (workspace root marker);
+ * if found and a .env exists there, use that. Otherwise fall back to cwd.
+ */
 function resolveEnvPath (): string {
-  return process.env.DOTENV_CONFIG_PATH ?? path.join(process.cwd(), ".env");
+  if (process.env.DOTENV_CONFIG_PATH) return process.env.DOTENV_CONFIG_PATH;
+  let dir = process.cwd();
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(path.join(dir, "pnpm-workspace.yaml"))) {
+      return path.join(dir, ".env");
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.join(process.cwd(), ".env");
 }
 
 /**
@@ -270,32 +288,80 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, restartRequired: true, driver, envPath };
   });
 
-  // Current in-place indexing allow-list, for pre-filling the settings form.
+  // Current in-place indexing allow-list + filetype blacklist, for pre-filling
+  // the settings form.
   app.get("/index-config", { preHandler: [requireAuth] }, async (req) => {
     const prefs = await app.preferencesService.getPreferences(req.userId!);
-    return { roots: prefs.indexAllowedRoots };
+    return {
+      roots: prefs.indexAllowedRoots,
+      blacklist: prefs.indexBlacklistExtensions,
+      excludeFolders: prefs.indexExcludeFolders,
+      skipNonContent: prefs.indexSkipNonContent,
+    };
   });
 
-  // Save the in-place indexing allow-list to user preferences. Takes effect
-  // immediately — no restart needed.
+  // Save the in-place indexing allow-list + filetype blacklist to user
+  // preferences. Takes effect immediately — no restart needed.
   app.patch("/index-config", { preHandler: [requireAuth] }, async (req, reply) => {
-    const body = (req.body ?? {}) as { roots?: unknown };
+    const body = (req.body ?? {}) as { roots?: unknown; blacklist?: unknown; excludeFolders?: unknown; skipNonContent?: unknown };
     if (!Array.isArray(body.roots)) return reply.badRequest("roots must be an array of absolute paths");
 
-    const roots: string[] = [];
-    for (const raw of body.roots) {
-      if (typeof raw !== "string") return reply.badRequest("each root must be a string");
-      const trimmed = raw.trim();
-      if (!trimmed) continue; // drop blanks
-      if (!(trimmed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(trimmed))) {
-        return reply.badRequest(`Not an absolute path: ${trimmed}`);
+    // Validate + dedupe a list of absolute paths (shared by roots + excludeFolders).
+    const toAbsolutePaths = (raw: unknown[], label: string): string[] | { error: string } => {
+      const out: string[] = [];
+      for (const item of raw) {
+        if (typeof item !== "string") return { error: `each ${label} must be a string` };
+        const trimmed = item.trim();
+        if (!trimmed) continue; // drop blanks
+        if (!(trimmed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(trimmed))) {
+          return { error: `Not an absolute path: ${trimmed}` };
+        }
+        out.push(trimmed);
       }
-      roots.push(trimmed);
-    }
-    const unique = Array.from(new Set(roots));
+      return Array.from(new Set(out));
+    };
 
-    await app.preferencesService.updatePreferences(req.userId!, { indexAllowedRoots: unique });
-    return { ok: true, roots: unique };
+    const rootsResult = toAbsolutePaths(body.roots, "root");
+    if (!Array.isArray(rootsResult)) return reply.badRequest(rootsResult.error);
+    const unique = rootsResult;
+
+    // blacklist is optional; when omitted the existing value is left untouched.
+    let blacklist: string[] | undefined;
+    if (body.blacklist !== undefined) {
+      if (!Array.isArray(body.blacklist)) return reply.badRequest("blacklist must be an array of extensions");
+      if (body.blacklist.some(e => typeof e !== "string")) return reply.badRequest("each extension must be a string");
+      blacklist = normalizeExtensions(body.blacklist as string[]);
+    }
+
+    // excludeFolders is optional; when omitted the existing value is left untouched.
+    let excludeFolders: string[] | undefined;
+    if (body.excludeFolders !== undefined) {
+      if (!Array.isArray(body.excludeFolders)) return reply.badRequest("excludeFolders must be an array of absolute paths");
+      const result = toAbsolutePaths(body.excludeFolders, "excluded folder");
+      if (!Array.isArray(result)) return reply.badRequest(result.error);
+      excludeFolders = result;
+    }
+
+    // skipNonContent is optional; when omitted the existing value is left untouched.
+    let skipNonContent: boolean | undefined;
+    if (body.skipNonContent !== undefined) {
+      if (typeof body.skipNonContent !== "boolean") return reply.badRequest("skipNonContent must be a boolean");
+      skipNonContent = body.skipNonContent;
+    }
+
+    await app.preferencesService.updatePreferences(req.userId!, {
+      indexAllowedRoots: unique,
+      ...(blacklist !== undefined ? { indexBlacklistExtensions: blacklist } : {}),
+      ...(excludeFolders !== undefined ? { indexExcludeFolders: excludeFolders } : {}),
+      ...(skipNonContent !== undefined ? { indexSkipNonContent: skipNonContent } : {}),
+    });
+    return {
+      ok: true,
+      roots: unique,
+      ...(blacklist !== undefined ? { blacklist } : {}),
+      ...(excludeFolders !== undefined ? { excludeFolders } : {}),
+      ...(skipNonContent !== undefined ? { skipNonContent } : {}),
+    };
   });
 
   // Browse server-side directories so the settings UI can pick STORAGE_FS_PATH

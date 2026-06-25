@@ -252,6 +252,16 @@ export class BundleRepository {
     });
   }
 
+  /** Bulk variant of clearCoverMedia: null out coverMediaId on any of this user's
+   *  bundles whose cover is among `mediaIds`. Used by the delete worker per chunk. */
+  async clearCoverMediaForIds (userId: string, mediaIds: string[]) {
+    if (mediaIds.length === 0) return;
+    await this.prisma.bundle.updateMany({
+      where: { userId, coverMediaId: { in: mediaIds } },
+      data: { coverMediaId: null },
+    });
+  }
+
   async removeItem (bundleId: string, userId: string, mediaId: string) {
     const bundle = await this.prisma.bundle.findFirst({
       where: { id: bundleId, userId },

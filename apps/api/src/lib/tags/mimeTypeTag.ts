@@ -1,3 +1,5 @@
+import { extOf } from "../media/extensions.js";
+
 const MIME_LABELS: Record<string, string> = {
   // Images
   "image/jpeg": "jpg",
@@ -98,17 +100,16 @@ const EXT_MIME_OVERRIDES: Record<string, string> = {
 export function normalizeMimeType(mimeType: string | undefined | null, filename?: string): string {
   const lower = mimeType?.trim().toLowerCase() ?? "";
   if (!lower || lower === "application/octet-stream") {
-    const ext = filename?.split(".").pop()?.toLowerCase() ?? "";
+    const ext = filename ? extOf(filename) : "";
     if (EXT_MIME_OVERRIDES[ext]) return EXT_MIME_OVERRIDES[ext];
   }
   return mimeType?.trim() ?? "application/octet-stream";
 }
 
 export function buildMimeTypeTag(mimeType: string | undefined | null, filename?: string): string {
-  // Only treat what follows the last dot as an extension if a dot is present —
-  // without this guard, a filename like "(adobe)" (no dot) would be returned
-  // verbatim as the "extension", producing a tag with invalid characters.
-  const ext = filename?.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
+  // extOf returns "" for no-extension names like "(adobe)", so they fall
+  // through to "unknown" rather than producing a tag with invalid characters.
+  const ext = filename ? extOf(filename) : "";
 
   // Look up by MIME type first
   const lower = mimeType?.trim().toLowerCase() ?? "";

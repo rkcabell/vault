@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type IORedis from "ioredis";
 import type { MediaRepository, MediaListFilters } from "../../repositories/mediaRepository.js";
+import { buildStorageTreemap, type BuildTreemapOpts } from "../../lib/media/storageTreemap.js";
+import { buildCategoryBreakdown } from "../../lib/media/categoryBreakdown.js";
 
 const SORT_OPTIONS = [
   "createdAt_desc",
@@ -18,8 +20,8 @@ type ListMediaInput = {
   queryText?: string | null;
   tags?: string[];
   excludeTags?: string[];
-  thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED";
-  textState?: "PENDING" | "READY" | "ERROR" | "FAILED";
+  thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
+  textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
   mimeTypePrefix?: string;
   excludeUnpacked?: boolean;
   sort?: typeof SORT_OPTIONS[number];
@@ -118,8 +120,13 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
   };
 
   /** Per-file sizes for the whole vault — powers the storage treemap. */
-  const listAllSizes = async (userId: string) => {
-    return deps.repository.listAllMediaSizes(userId);
+  // Returns a bounded, representative set of tiles for the storage treemap:
+  // the largest files exactly, plus a stratified byte-weighted sample of the
+  // long tail. Keeps the payload + client DOM small while staying proportional
+  // to real storage. See lib/media/storageTreemap.ts.
+  const listAllSizes = async (userId: string, opts?: BuildTreemapOpts) => {
+    const rows = await deps.repository.listAllMediaSizes(userId);
+    return buildStorageTreemap(rows, opts);
   };
 
   /** Aggregate counts/storage/type breakdown for the overview header + viz. */
@@ -127,5 +134,13 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
     return deps.repository.getMediaStats(userId);
   };
 
-  return { listMedia, listTopTags, listAllSizes, getStats };
+  /** Per-category storage totals (count + bytes) — powers the overview
+   *  "storage by file type" graph. Buckets the whole vault filename-aware,
+   *  consistent with the per-file treemap. See lib/media/categoryBreakdown.ts. */
+  const getCategoryBreakdown = async (userId: string) => {
+    const rows = await deps.repository.listAllMediaSizes(userId);
+    return buildCategoryBreakdown(rows);
+  };
+
+  return { listMedia, listTopTags, listAllSizes, getStats, getCategoryBreakdown };
 }

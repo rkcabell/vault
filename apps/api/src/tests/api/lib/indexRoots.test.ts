@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   parseAllowedRoots,
   isUnderAllowedRoot,
+  isExcludedFolder,
   assertUnderAllowedRoot,
   PathNotAllowedError,
 } from "@/lib/media/indexRoots.js";
@@ -44,4 +45,21 @@ test("assertUnderAllowedRoot throws PathNotAllowedError when outside", () => {
     () => assertUnderAllowedRoot(OTHER, [ROOT]),
     (err: unknown) => err instanceof PathNotAllowedError && (err as PathNotAllowedError).code === "PATH_NOT_ALLOWED",
   );
+});
+
+test("isExcludedFolder matches the folder itself and its descendants", () => {
+  const excluded = path.join(ROOT, "@eaDir");
+  assert.equal(isExcludedFolder(excluded, [excluded]), true);
+  assert.equal(isExcludedFolder(path.join(excluded, "thumb.jpg"), [excluded]), true);
+});
+
+test("isExcludedFolder leaves siblings and unrelated paths alone", () => {
+  const excluded = path.join(ROOT, "@eaDir");
+  assert.equal(isExcludedFolder(path.join(ROOT, "photos", "a.jpg"), [excluded]), false);
+  // a sibling whose name shares a prefix must not match (separator boundary)
+  assert.equal(isExcludedFolder(path.join(ROOT, "@eaDir-backup"), [excluded]), false);
+});
+
+test("isExcludedFolder excludes nothing for an empty list", () => {
+  assert.equal(isExcludedFolder(path.join(ROOT, "anything"), []), false);
 });

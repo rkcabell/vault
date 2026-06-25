@@ -1,13 +1,14 @@
 import Link from "next/link";
-import { listMediaSizes, fetchMediaStats, fetchWorkerCounts } from "@/lib/api.server";
+import { fetchCategoryBreakdown, fetchMediaStats, fetchWorkerCounts } from "@/lib/api.server";
 import { OverviewRemindersCard } from "@/components/reminders/OverviewRemindersCard";
+import { LibraryUpdateBanner } from "@/components/media/LibraryUpdateBanner";
 import { OverviewVizPanel } from "@/components/overview/OverviewVizPanel";
 import { OverviewHealthPoller } from "@/components/overview/OverviewHealthPoller";
 
 export default async function OverviewPage() {
-  const [stats, storageItems, workerCounts] = await Promise.all([
+  const [stats, categoryBreakdown, workerCounts] = await Promise.all([
     fetchMediaStats(),
-    listMediaSizes(),
+    fetchCategoryBreakdown(),
     fetchWorkerCounts(),
   ]);
 
@@ -43,8 +44,10 @@ export default async function OverviewPage() {
 
         <OverviewRemindersCard />
 
+        <LibraryUpdateBanner />
+
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_20rem]">
-          <OverviewVizPanel docs={storageItems} mediaStats={mediaStats} />
+          <OverviewVizPanel categories={categoryBreakdown.categories} mediaStats={mediaStats} />
 
           <section className="flex flex-col gap-3">
             <h2 className="text-lg font-semibold shrink-0">System Status</h2>

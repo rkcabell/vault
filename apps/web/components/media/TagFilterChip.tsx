@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import type { TagOrigin } from '@vault/types';
 
 export type TagFilterState = 'unselected' | 'include' | 'exclude';
 
@@ -8,10 +9,12 @@ interface TagFilterChipProps {
   onCycle: (tag: string) => void;
   color?: string | null;
   count?: number;
+  origin?: TagOrigin;
   className?: string;
 }
 
-export function TagFilterChip({ tag, state, onCycle, color, count, className }: TagFilterChipProps) {
+export function TagFilterChip({ tag, state, onCycle, color, count, origin, className }: TagFilterChipProps) {
+  const isAuto = origin === 'AUTO';
   return (
     <button
       type="button"
@@ -34,7 +37,7 @@ export function TagFilterChip({ tag, state, onCycle, color, count, className }: 
       )}
       {state === 'include' && <span className="shrink-0 text-[10px] font-bold leading-none">+</span>}
       {state === 'exclude' && <span className="shrink-0 text-[10px] font-bold leading-none">−</span>}
-      <span>{tag}</span>
+      <span className={cn(isAuto && state === 'unselected' && 'italic opacity-70')}>{tag}</span>
       {count !== undefined && (
         <span className="ml-0.5 opacity-60">{count}</span>
       )}

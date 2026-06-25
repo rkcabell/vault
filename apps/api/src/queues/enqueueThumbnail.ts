@@ -1,4 +1,3 @@
-//File: apps/api/src/queues/enqueueThumbnail.ts
 import type { Queue } from "bullmq";
 
 export type ThumbJob = {

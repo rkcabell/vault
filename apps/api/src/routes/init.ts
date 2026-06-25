@@ -46,7 +46,7 @@ export const initRoutes: FastifyPluginAsync = async app => {
           }
         : null,
       preferences,
-      tags: rawTags.tags.map(t => ({ name: t.tag, count: t.count, color: t.color })),
+      tags: rawTags.tags.map(t => ({ name: t.tag, count: t.count, color: t.color, origin: t.origin })),
       bundles,
       remindersSummary: { ...overviewResult.counts, totalActive, soonWindowDays: (preferences.soonWindowDays as number | undefined) ?? SOON_WINDOW_DAYS },
       overviewReminders: { items: overviewResult.items },

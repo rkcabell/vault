@@ -1,13 +1,17 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Search, X } from "lucide-react";
 import { apiFetch } from "@/lib/apiFetch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
-import { emitTagsUpdated, TAGS_UPDATED_EVENT } from "@/lib/tags";
+import { emitTagsUpdated, TAGS_UPDATED_EVENT, partitionTagsByOrigin } from "@/lib/tags";
+import type { TagOrigin } from "@vault/types";
 
-type TagRow = { name: string; count: number; color: string | null };
+type TagRow = { name: string; count: number; color: string | null; origin?: TagOrigin };
+
+type SortMode = "default" | "manual" | "auto";
 
 // 12 standard colors — 2 rows × 6
 const TAG_SWATCHES = [
@@ -124,6 +128,9 @@ export function ManageTagsCard() {
   const [renameValue, setRenameValue] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
   const [pendingColorChanges, setPendingColorChanges] = useState<Record<string, string>>({});
+  const [settingOrigin, setSettingOrigin] = useState<string | null>(null);
+  const [sortMode, setSortMode] = useState<SortMode>("default");
+  const [tagSearch, setTagSearch] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const load = async (silent = false) => {
@@ -156,8 +163,19 @@ export function ManageTagsCard() {
     if (renamingTag) renameInputRef.current?.focus();
   }, [renamingTag]);
 
-  const visibleTags = useMemo(() => tags.slice(0, visible), [tags, visible]);
-  const canShowMore = visible < Math.min(tags.length, MAX_FETCH);
+  const filteredTags = useMemo(() => {
+    const q = tagSearch.trim().toLowerCase();
+    return q ? tags.filter(t => t.name.includes(q)) : tags;
+  }, [tags, tagSearch]);
+
+  const sortedTags = useMemo(() => {
+    if (sortMode === "manual") return partitionTagsByOrigin(filteredTags, t => t.origin === "AUTO");
+    if (sortMode === "auto") return partitionTagsByOrigin(filteredTags, t => t.origin !== "AUTO");
+    return filteredTags;
+  }, [filteredTags, sortMode]);
+
+  const visibleTags = useMemo(() => sortedTags.slice(0, visible), [sortedTags, visible]);
+  const canShowMore = visible < Math.min(sortedTags.length, MAX_FETCH);
 
   const requestDelete = (tag: TagRow, e: React.MouseEvent) => {
     if (isDeleting) return;
@@ -274,6 +292,31 @@ export function ManageTagsCard() {
     await persistTagColor(tagName, null);
   };
 
+  const handleSetOrigin = async (name: string, origin: TagOrigin) => {
+    if (settingOrigin) return;
+    setSettingOrigin(name);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/tags/${encodeURIComponent(name)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ origin }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null) as { message?: string; error?: string } | null;
+        setError(data?.message ?? data?.error ?? "Unable to update tag type.");
+        return;
+      }
+      setTags(prev => prev.map(t => t.name === name ? { ...t, origin } : t));
+      emitTagsUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update tag type.");
+    } finally {
+      setSettingOrigin(null);
+    }
+  };
+
   const handleDeleteEmptyTags = async () => {
     if (isDeletingEmpty) return;
     setIsDeletingEmpty(true);
@@ -325,10 +368,46 @@ export function ManageTagsCard() {
       </CardHeader>
       <CardContent>
         {error && <div className="mb-3 text-sm text-destructive">{error}</div>}
+        {!isLoading && tags.length > 0 && (
+          <div className="mb-3 flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <input
+                value={tagSearch}
+                onChange={e => setTagSearch(e.target.value)}
+                placeholder="Search tags…"
+                className="w-full rounded-md border border-input bg-background pl-8 pr-8 py-1.5 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              {tagSearch && (
+                <button
+                  type="button"
+                  onClick={() => setTagSearch("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <label htmlFor="tag-sort" className="text-xs text-muted-foreground shrink-0">Sort</label>
+            <select
+              id="tag-sort"
+              value={sortMode}
+              onChange={e => setSortMode(e.target.value as SortMode)}
+              className="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <option value="default">Most used</option>
+              <option value="manual">Manual first</option>
+              <option value="auto">Auto first</option>
+            </select>
+          </div>
+        )}
         {isLoading ? (
           <div className="text-sm text-muted-foreground">Loading tags...</div>
-        ) : visibleTags.length === 0 ? (
-          <div className="text-sm text-muted-foreground">No tags yet.</div>
+        ) : sortedTags.length === 0 ? (
+          <div className="text-sm text-muted-foreground">
+            {tagSearch ? "No tags match your search." : "No tags yet."}
+          </div>
         ) : (
           <div className="space-y-1.5">
             {visibleTags.map(tag => (
@@ -367,6 +446,18 @@ export function ManageTagsCard() {
                   )}
                 </div>
                 <span className="text-xs text-muted-foreground shrink-0">{tag.count} items</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleSetOrigin(tag.name, tag.origin === "AUTO" ? "USER" : "AUTO")}
+                  disabled={settingOrigin === tag.name || renamingTag === tag.name}
+                >
+                  {settingOrigin === tag.name
+                    ? "Saving..."
+                    : tag.origin === "AUTO"
+                      ? "Auto tag"
+                      : "User tag"}
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"

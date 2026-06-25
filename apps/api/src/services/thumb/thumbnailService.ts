@@ -16,6 +16,7 @@ import { renderVideoThumbnail } from "./renderVideoThumbnail.js";
 import { renderHeicThumbnail } from "./renderHeicThumbnail.js";
 import { computeThumbKey, type ThumbJob } from "../../queues/enqueueThumbnail.js";
 import { extractMetadataFromBuffer } from "../media/metadata/extractMediaMetadata.js";
+import { exceedsThumbnailSize, THUMBNAIL_TOO_LARGE_REASON } from "../../lib/media/processingSupport.js";
 
 type PrefsLookup = { getPreferences: (userId: string) => Promise<{ extractMetadata?: boolean; detectDuplicates?: boolean }> };
 
@@ -150,6 +151,21 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
       await prismaMedia.setThumbReady(job.mediaId, outKey);
       deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "READY" });
     }
+    return;
+  }
+
+  // Skip files too large to load into memory. The worker reads the whole source
+  // into a Buffer (ffmpeg/sharp need it in memory too), which can't exceed Node's
+  // ~2 GiB Buffer limit — attempting it only burns a queue slot and fails. Mark
+  // FAILED with a clear reason so the UI shows a placeholder instead of a stuck
+  // PENDING. Permanent (the size won't change), so return rather than throw.
+  if (exceedsThumbnailSize(existing?.sizeBytes)) {
+    await prismaMedia.setThumbFailed(job.mediaId, THUMBNAIL_TOO_LARGE_REASON);
+    deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
+    logger.info(
+      { ...logContext, sizeBytes: existing?.sizeBytes, reason: THUMBNAIL_TOO_LARGE_REASON, durationMs: Date.now() - startedAt },
+      "thumbnail skipped: file too large",
+    );
     return;
   }
 

@@ -18,7 +18,7 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
     const { tags, total } = await repository.listTopTags(req.userId!, limit, offset);
 
     return {
-      tags: tags.map(t => ({ name: t.tag, count: t.count, color: t.color })),
+      tags: tags.map(t => ({ name: t.tag, count: t.count, color: t.color, origin: t.origin })),
       total,
       offset,
       limit,
@@ -30,6 +30,7 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
     const Body = z.object({
       name: z.string().min(1).optional(),
       color: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
+      origin: z.enum(["USER", "AUTO"]).optional(),
     });
 
     const { tag: rawTag } = Params.parse(req.params);
@@ -42,8 +43,8 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
       throw err;
     }
 
-    if (body.name === undefined && body.color === undefined) {
-      throw app.httpErrors.badRequest("Provide name or color to update.");
+    if (body.name === undefined && body.color === undefined && body.origin === undefined) {
+      throw app.httpErrors.badRequest("Provide name, color, or origin to update.");
     }
 
     let tag: string;
@@ -67,8 +68,14 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
       return { ok: true, tag, newName, affected };
     }
 
-    // color update (body.color is string | null here)
-    await repository.setTagColor(req.userId!, tag, body.color ?? null);
+    // color and/or origin update — each applied only when explicitly provided so
+    // an origin-only request doesn't clear the color (and vice versa).
+    if (body.color !== undefined) {
+      await repository.setTagColor(req.userId!, tag, body.color);
+    }
+    if (body.origin !== undefined) {
+      await repository.setTagOrigin(req.userId!, tag, body.origin);
+    }
     return { ok: true, tag };
   });
 

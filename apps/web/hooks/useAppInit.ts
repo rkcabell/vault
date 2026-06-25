@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { hydratePreferences, type Preferences } from "./usePreferences";
 import { seedRemindersSummary, seedOverviewReminders } from "../lib/reminders";
-import type { RemindersSummary, ReminderOverviewRow } from "@vault/types";
+import type { RemindersSummary, ReminderOverviewRow, TagOrigin } from "@vault/types";
 import type { BundleListItem } from "@vault/types";
 
 export type InitUser = {
@@ -15,7 +15,7 @@ export type InitUser = {
   avatarUrl?: string | null;
 };
 
-export type InitTag = { name: string; count: number; color: string | null };
+export type InitTag = { name: string; count: number; color: string | null; origin: TagOrigin };
 
 export type AppInitData = {
   user: InitUser | null;

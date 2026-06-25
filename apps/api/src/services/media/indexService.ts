@@ -20,6 +20,9 @@ export type StartIndexInput = {
   path: string;
   recursive: boolean;
   ignoreHidden: boolean;
+  blacklistExtensions: string[];
+  excludeFolders: string[];
+  skipNonContent: boolean;
 };
 
 export type StartIndexResult =
@@ -30,9 +33,11 @@ export type IndexStatus = {
   jobId: string;
   state: string;
   done: boolean;
+  aborted: boolean;
   scanned: number;
   indexed: number;
   skipped: number;
+  filtered: number;
 };
 
 /**
@@ -63,9 +68,32 @@ export function createIndexService (deps: IndexServiceDeps) {
       recursive: input.recursive,
       ignoreHidden: input.ignoreHidden,
       allowedRoots,
+      blacklistExtensions: input.blacklistExtensions,
+      excludeFolders: input.excludeFolders,
+      skipNonContent: input.skipNonContent,
     });
     deps.logger.info({ userId, rootPath: requested, jobId }, "index scan enqueued");
     return { ok: true, jobId };
+  };
+
+  // Map a BullMQ job to the wire status. Progress is updated during the walk;
+  // returnvalue holds the final counts once the job completes.
+  const toStatus = async (job: NonNullable<Awaited<ReturnType<typeof deps.indexQueue.getJob>>>): Promise<IndexStatus> => {
+    const state = await job.getState();
+    const live = (typeof job.progress === "object" ? job.progress : null) as IndexJobProgress | null;
+    const final = (job.returnvalue ?? null) as IndexJobProgress | null;
+    const counts = final ?? live ?? { scanned: 0, indexed: 0, skipped: 0, filtered: 0 };
+
+    return {
+      jobId: job.id ?? "",
+      state,
+      done: state === "completed",
+      aborted: counts.aborted ?? false,
+      scanned: counts.scanned,
+      indexed: counts.indexed,
+      skipped: counts.skipped,
+      filtered: counts.filtered ?? 0,
+    };
   };
 
   /**
@@ -76,22 +104,20 @@ export function createIndexService (deps: IndexServiceDeps) {
     if (!jobId.startsWith(`index-${userId}-`)) return null;
     const job = await deps.indexQueue.getJob(jobId);
     if (!job) return null;
-
-    const state = await job.getState();
-    // Progress is updated during the walk; returnvalue holds the final counts.
-    const live = (typeof job.progress === "object" ? job.progress : null) as IndexJobProgress | null;
-    const final = (job.returnvalue ?? null) as IndexJobProgress | null;
-    const counts = final ?? live ?? { scanned: 0, indexed: 0, skipped: 0 };
-
-    return {
-      jobId,
-      state,
-      done: state === "completed",
-      scanned: counts.scanned,
-      indexed: counts.indexed,
-      skipped: counts.skipped,
-    };
+    return toStatus(job);
   };
 
-  return { startIndex, getStatus, PathNotAllowedError };
+  /**
+   * Find this user's in-flight scan (if any) so the UI can re-attach after a
+   * reload without remembering the jobId. Scans only the non-terminal states;
+   * returns the first job whose id is owned by the user, else null.
+   */
+  const getActive = async (userId: string): Promise<IndexStatus | null> => {
+    const jobs = await deps.indexQueue.getJobs(["active", "waiting", "delayed"]);
+    const prefix = `index-${userId}-`;
+    const mine = jobs.find(j => (j.id ?? "").startsWith(prefix));
+    return mine ? toStatus(mine) : null;
+  };
+
+  return { startIndex, getStatus, getActive, PathNotAllowedError };
 }

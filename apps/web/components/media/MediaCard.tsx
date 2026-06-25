@@ -8,6 +8,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Archive, Ban, BookOpen, Check, CheckCircle2, Circle, Download, ExternalLink, File as FileIcon, FileText, Film, MoreVertical, Music, Pencil, Trash2, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ARCHIVE_MIME_TYPES, formatBytes } from '@/lib/media/utils';
+import { orderTagsByOrigin, isAutoTagFromStore } from '@/lib/tags';
 import { Button } from '@/ui/Button';
 import { Input } from '@/ui/Input';
 import { Badge } from '@/ui/Badge';
@@ -167,7 +168,10 @@ export function MediaCard({
   const q = searchParams.get("q") ?? searchParams.get("search");
   const mediaHref = (id ? `/media/${id}` : "/media") as Route;
   const hrefWithQuery =  id && q ? (`/media/${id}?q=${encodeURIComponent(q)}` as Route) : mediaHref;
-  const thumbError = media.thumbState === "ERROR" || media.thumbState === "FAILED";
+  // FAILED = real render failure, UNSUPPORTED = never thumbnailable — both show the
+  // media-type fallback icon instead of a broken/stuck image.
+  const thumbError =
+    media.thumbState === "ERROR" || media.thumbState === "FAILED" || media.thumbState === "UNSUPPORTED";
   const fallbackKind = getFallbackKind(media.mimeType);
   const thumbVersion = media.thumbState === "READY" ? "ready" : "pending";
   const thumbnailSrc = `/api/media/${media.id}/thumbnail?v=${thumbVersion}`;
@@ -656,8 +660,12 @@ export function MediaCard({
         {!isCompact && ((media.tags && media.tags.length > 0) || media.sizeBytes != null) && (
           <div className="flex items-center justify-between gap-1">
             <div className="flex flex-wrap gap-1">
-              {media.tags?.slice(0, 1).map((tag) => (
-                <Badge key={tag} variant="outline" className="text-xs max-w-[10rem]">
+              {orderTagsByOrigin(media.tags ?? [], isAutoTagFromStore).slice(0, 1).map((tag) => (
+                <Badge
+                  key={tag}
+                  variant={isAutoTagFromStore(tag) ? "auto" : "user"}
+                  className="text-xs max-w-[10rem]"
+                >
                   <span className="truncate">{tag}</span>
                 </Badge>
               ))}

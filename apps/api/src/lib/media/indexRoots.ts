@@ -44,6 +44,13 @@ export function isUnderAllowedRoot (target: string, allowedRoots: string[]): boo
   return allowedRoots.some(root => isWithin(root, resolved));
 }
 
+/** True for an excluded folder itself or anything beneath it. Empty list excludes nothing. */
+export function isExcludedFolder (target: string, excludeFolders: string[]): boolean {
+  if (excludeFolders.length === 0) return false;
+  const resolved = path.resolve(target);
+  return excludeFolders.some(folder => isWithin(path.resolve(folder), resolved));
+}
+
 /**
  * Assert `target` is inside an allowed root, returning the resolved absolute
  * path. Throws `PathNotAllowedError` otherwise. Guards against `..` traversal

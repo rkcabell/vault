@@ -46,7 +46,8 @@ export function MediaPreviewCard(props: {
   const [naturalDims, setNaturalDims] = useState<{ w: number; h: number } | null>(null);
   const [contentWidth, setContentWidth] = useState<number | null>(null);
   const cardContentRef = useRef<HTMLDivElement>(null);
-  const thumbError = thumbState === "ERROR" || thumbState === "FAILED";
+  const thumbError =
+    thumbState === "ERROR" || thumbState === "FAILED" || thumbState === "UNSUPPORTED";
   const mediaTypeIcon = getMediaTypeIcon(mimeType);
   const isFill = thumbHeight != null;
 

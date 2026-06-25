@@ -11,15 +11,13 @@ import { Card } from "@/components/ui/Card";
 import { DirectoryPicker } from "@/components/settings/DirectoryPicker";
 
 import { useUpload } from "@/components/contexts/UploadContext";
+import { useIndexProgress } from "@/components/contexts/IndexProgressContext";
 import { usePreferences } from "@/hooks/usePreferences";
 import { toast } from "@/components/ui/Toaster";
 import { emitTagsUpdated } from "@/lib/tags";
 import { getFileSizeError } from "@/lib/media/uploadLimits";
 import { formatBytes } from "@/lib/media/utils";
-import {
-  getIndexRoots, startIndex, getIndexStatus,
-  type IndexStatus,
-} from "@/lib/media/indexing";
+import { getIndexRoots } from "@/lib/media/indexing";
 import {
   batchInit, batchFinalize, getPendingFiles, notifyUploadStart, notifyUploadSuccess,
   notifyUploadFailures, chunkArray, uploadBatch, applyFailures, exitToLibrary,
@@ -62,8 +60,12 @@ export default function UploadPage() {
   const [showPicker, setShowPicker] = useState(false);
   const [indexPath, setIndexPath] = useState<string | null>(null);
   const [recursive, setRecursive] = useState(true);
-  const [isIndexing, setIsIndexing] = useState(false);
-  const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
+
+  // Scan progress is tracked globally so it survives navigation/reload; completion
+  // toasts + sidebar refreshes are handled by the provider.
+  const { status: indexStatus, start: startIndexScan, stop: stopIndexScan } = useIndexProgress();
+  const isIndexing = isStarting || (!!indexStatus && !indexStatus.done && indexStatus.state !== "failed");
 
   useEffect(() => {
     void getIndexRoots().then(r => {
@@ -73,34 +75,14 @@ export default function UploadPage() {
   }, []);
 
   const handleStartIndex = async () => {
-    if (!indexPath) return;
-    setIsIndexing(true);
-    setIndexStatus(null);
+    if (!indexPath || isIndexing) return;
+    setIsStarting(true);
     try {
-      const { jobId } = await startIndex(indexPath, recursive);
-      let last: IndexStatus | null = null;
-      // Poll until the scan job completes or fails.
-      for (;;) {
-        await new Promise(r => setTimeout(r, 1500));
-        const status = await getIndexStatus(jobId);
-        if (status) {
-          last = status;
-          setIndexStatus(status);
-          if (status.done || status.state === "failed") break;
-        }
-      }
-      if (last?.state === "failed") {
-        toast("Indexing failed. Check the server logs.", { variant: "error" });
-      } else if (last) {
-        emitTagsUpdated();
-        toast(`Indexed ${last.indexed} file${last.indexed === 1 ? "" : "s"} (${last.skipped} skipped).`, {
-          variant: "success",
-        });
-      }
+      await startIndexScan(indexPath, recursive);
     } catch (err) {
       toast(err instanceof Error ? err.message : "Indexing failed.", { variant: "error" });
     } finally {
-      setIsIndexing(false);
+      setIsStarting(false);
     }
   };
 
@@ -380,11 +362,26 @@ export default function UploadPage() {
                   <Button onClick={handleStartIndex} disabled={isIndexing}>
                     {isIndexing ? "Indexing…" : "Start indexing"}
                   </Button>
+                  {isIndexing && (
+                    <Button variant="outline" onClick={() => void stopIndexScan()}>
+                      Stop
+                    </Button>
+                  )}
                   {indexStatus && (
-                    <span className="text-sm text-muted-foreground">
-                      Scanned {indexStatus.scanned} · indexed {indexStatus.indexed} · skipped{" "}
-                      {indexStatus.skipped}
-                      {indexStatus.done ? " · done" : "…"}
+                    <span
+                      className={`text-sm ${
+                        indexStatus.state === "failed" ? "text-destructive" : "text-muted-foreground"
+                      }`}
+                    >
+                      Scanned {indexStatus.scanned} · indexed {indexStatus.indexed} · filtered{" "}
+                      {indexStatus.filtered}
+                      {indexStatus.state === "failed"
+                        ? " · failed"
+                        : indexStatus.aborted
+                          ? " · aborted"
+                          : indexStatus.done
+                            ? " · done"
+                            : "…"}
                     </span>
                   )}
                 </div>

@@ -1,13 +1,14 @@
-// File: MediaRepository.ts
-import { Prisma, type PrismaClient } from "@prisma/client";
+import path from "node:path";
+import { Prisma, type PrismaClient, type TagOrigin } from "@prisma/client";
+import { THUMBNAIL_TOO_LARGE_REASON, THUMBNAIL_UNSUPPORTED_REASON } from "../lib/media/processingSupport.js";
 
 export type MediaListFilters = {
   userId: string;
   queryText?: string | null;
   tags?: string[];
   excludeTags?: string[];
-  thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED";
-  textState?: "PENDING" | "READY" | "ERROR" | "FAILED";
+  thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
+  textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
   mimeTypePrefix?: string;
   orderBy: Prisma.MediaOrderByWithRelationInput[];
   take: number;
@@ -15,11 +16,37 @@ export type MediaListFilters = {
   excludeUnpacked?: boolean;
 };
 
+/** The columns the delete worker needs to remove a media item (DB row + storage). */
+export type MediaDeletionRow = {
+  id: string;
+  storageKey: string;
+  thumbnailKey: string | null;
+  sourcePath: string | null;
+};
+
+/**
+ * Filter on a worker state via plain equality. Non-retriable "won't process"
+ * items now carry the dedicated UNSUPPORTED state, so the "error" filters
+ * (thumbState=FAILED / textState=ERROR) exclude them automatically — no sentinel
+ * string or mimeType heuristic needed.
+ */
+function thumbStateWhereOrm (thumbState?: string): Prisma.MediaWhereInput {
+  if (!thumbState) return {};
+  return { thumbState: thumbState as Prisma.EnumMediaWorkerStateFilter };
+}
+
+function textStateWhereOrm (textState?: string): Prisma.MediaWhereInput {
+  if (!textState) return {};
+  return { textState: textState as Prisma.EnumMediaWorkerStateFilter };
+}
+
 export class MediaRepository {
   constructor (private readonly prisma: PrismaClient) {}
 
-  /** Insert a new Media row and return its id, storageKey, and title. */
-  async createMedia (data: Prisma.MediaUncheckedCreateInput) {
+  /** Insert a new Media row and return its id, storageKey, and title.
+   *  `autoTags` names the subset of `data.tags` the system applied (e.g. the
+   *  MIME-type tag); those are recorded with origin AUTO, the rest as USER. */
+  async createMedia (data: Prisma.MediaUncheckedCreateInput, opts?: { autoTags?: string[] }) {
     const media = await this.prisma.media.create({
       data,
       select: { id: true, storageKey: true, title: true },
@@ -27,7 +54,7 @@ export class MediaRepository {
 
     // Sync Tag counts for initial tags.
     const tags = (data.tags as string[] | undefined) ?? [];
-    await this.upsertTags(data.userId as string, tags);
+    await this.upsertTags(data.userId as string, tags, opts?.autoTags);
 
     return media;
   }
@@ -38,19 +65,31 @@ export class MediaRepository {
    * tolerate a race on the (userId, sourcePath) unique index without failing
    * the whole batch.
    */
-  async createBatch (items: Prisma.MediaCreateManyInput[], opts?: { skipDuplicates?: boolean }) {
+  async createBatch (
+    items: Prisma.MediaCreateManyInput[],
+    opts?: { skipDuplicates?: boolean; autoTagsByItem?: string[][] },
+  ) {
     await this.prisma.media.createMany({ data: items, skipDuplicates: opts?.skipDuplicates ?? false });
 
-    // Sync Tag counts: aggregate tags per userId across all items.
+    // Sync Tag counts: aggregate tags per userId across all items. A name is
+    // treated as USER if it was user-supplied on any item; otherwise AUTO. User
+    // intent wins, matching upsertTags' promotion rule.
     const tagsByUser = new Map<string, string[]>();
-    for (const item of items) {
+    const userNamesByUser = new Map<string, Set<string>>();
+    items.forEach((item, i) => {
       const uid = item.userId as string;
       const tags = (item.tags as string[] | undefined) ?? [];
+      const autoForItem = new Set(opts?.autoTagsByItem?.[i] ?? []);
       if (!tagsByUser.has(uid)) tagsByUser.set(uid, []);
       tagsByUser.get(uid)!.push(...tags);
-    }
+      if (!userNamesByUser.has(uid)) userNamesByUser.set(uid, new Set());
+      const userNames = userNamesByUser.get(uid)!;
+      for (const t of tags) if (!autoForItem.has(t)) userNames.add(t);
+    });
     for (const [uid, tags] of tagsByUser) {
-      await this.upsertTags(uid, tags);
+      const userNames = userNamesByUser.get(uid) ?? new Set<string>();
+      const autoNames = tags.filter(t => !userNames.has(t));
+      await this.upsertTags(uid, tags, autoNames);
     }
   }
 
@@ -59,11 +98,11 @@ export class MediaRepository {
     // and the returned rows (id + storageKey) are used by finalizeBatch to enqueue
     // OCR and thumbnail jobs. Switching to updateMany would silently drop those
     // values and break job enqueueing without a type error.
-    return this.prisma.$queryRaw<{ id: string; storageKey: string; mimeType: string }[]>`
+    return this.prisma.$queryRaw<{ id: string; storageKey: string; mimeType: string; sizeBytes: number }[]>`
       UPDATE "Media"
       SET "sourceState" = 'READY'
       WHERE "userId" = ${userId} AND "id" IN (${Prisma.join(ids)})
-      RETURNING "id", "storageKey", "mimeType"
+      RETURNING "id", "storageKey", "mimeType", "sizeBytes"
     `;
   }
 
@@ -109,8 +148,8 @@ export class MediaRepository {
         ...(excludeTags?.length
           ? { AND: excludeTags.map(t => ({ NOT: { tags: { has: t } } })) }
           : {}),
-        ...(thumbState ? { thumbState } : {}),
-        ...(textState ? { textState } : {}),
+        ...thumbStateWhereOrm(thumbState),
+        ...textStateWhereOrm(textState),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
         ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
       },
@@ -153,8 +192,17 @@ export class MediaRepository {
       params.push(`%${queryText}%`, queryText);
       p += 2;
     }
-    if (thumbState)     { conditions.push(`m."thumbState" = $${p++}`); params.push(thumbState); }
-    if (textState)      { conditions.push(`m."textState" = $${p++}`);  params.push(textState);  }
+    // Plain equality on each state. The dedicated UNSUPPORTED state means the
+    // "error" filters (thumbState=FAILED / textState=ERROR) already exclude
+    // never-processable items — no sentinel string or mimeType heuristic needed.
+    if (thumbState) {
+      conditions.push(`m."thumbState" = $${p++}`);
+      params.push(thumbState);
+    }
+    if (textState) {
+      conditions.push(`m."textState" = $${p++}`);
+      params.push(textState);
+    }
     if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
     if (excludeUnpacked) conditions.push(`m."isExtractedFromArchive" = false`);
 
@@ -237,8 +285,8 @@ export class MediaRepository {
         ...(excludeTags?.length
           ? { AND: excludeTags.map(t => ({ NOT: { tags: { has: t } } })) }
           : {}),
-        ...(thumbState ? { thumbState } : {}),
-        ...(textState ? { textState } : {}),
+        ...thumbStateWhereOrm(thumbState),
+        ...textStateWhereOrm(textState),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
         ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
       },
@@ -275,8 +323,8 @@ export class MediaRepository {
         ...(excludeTags?.length
           ? { AND: excludeTags.map(t => ({ NOT: { tags: { has: t } } })) }
           : {}),
-        ...(thumbState ? { thumbState } : {}),
-        ...(textState ? { textState } : {}),
+        ...thumbStateWhereOrm(thumbState),
+        ...textStateWhereOrm(textState),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
         ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
       },
@@ -292,11 +340,96 @@ export class MediaRepository {
     return result.map(r => r.id);
   }
 
+  // ---- Set-based bulk delete (used by the delete worker) -------------------
+
+  /** Columns the delete worker needs per row: the PK plus the storage keys it
+   *  must unlink. `sourcePath` is set on in-place indexed items — their original
+   *  lives on the user's drive and must never be removed, only the thumbnail. */
+  private static readonly DELETION_SELECT = {
+    id: true,
+    storageKey: true,
+    thumbnailKey: true,
+    sourcePath: true,
+  } as const;
+
+  /** Fetch up to `limit` rows matching the filter, for chunked deletion. Deleted
+   *  rows drop out of the filter, so the worker can call this repeatedly until it
+   *  returns empty — no keyset cursor needed and memory stays flat. */
+  async listMediaForDeletion (
+    filters: Omit<MediaListFilters, "orderBy" | "take" | "cursor">,
+    limit: number,
+  ): Promise<MediaDeletionRow[]> {
+    const { tags, excludeTags, queryText } = filters;
+    if (tags?.length || excludeTags?.length || queryText) {
+      const { conditions, params } = this._buildMediaFilterConditions(filters);
+      const sql = `SELECT m.id, m."storageKey", m."thumbnailKey", m."sourcePath" FROM "Media" m WHERE ${conditions.join(" AND ")} LIMIT $${params.length + 1}`;
+      return this.prisma.$queryRawUnsafe<MediaDeletionRow[]>(sql, ...params, limit);
+    }
+    const { userId, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    return this.prisma.media.findMany({
+      where: {
+        userId,
+        ...thumbStateWhereOrm(thumbState),
+        ...textStateWhereOrm(textState),
+        ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
+        ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
+      },
+      select: MediaRepository.DELETION_SELECT,
+      take: limit,
+    });
+  }
+
+  /** Count rows matching the filter — used once up front so the UI can show
+   *  "deleting X of N". Mirrors the routing of listMediaForDeletion. */
+  async countMediaForDeletion (
+    filters: Omit<MediaListFilters, "orderBy" | "take" | "cursor">,
+  ): Promise<number> {
+    const { tags, excludeTags, queryText } = filters;
+    if (tags?.length || excludeTags?.length || queryText) {
+      const { conditions, params } = this._buildMediaFilterConditions(filters);
+      const sql = `SELECT COUNT(m.id)::int AS count FROM "Media" m WHERE ${conditions.join(" AND ")}`;
+      const rows = await this.prisma.$queryRawUnsafe<Array<{ count: number }>>(sql, ...params);
+      return rows[0]?.count ?? 0;
+    }
+    const { userId, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    return this.prisma.media.count({
+      where: {
+        userId,
+        ...thumbStateWhereOrm(thumbState),
+        ...textStateWhereOrm(textState),
+        ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
+        ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
+      },
+    });
+  }
+
+  /** Fetch deletion rows for a fixed set of ids (hand-picked multi-select).
+   *  Scoped to userId so a caller can only delete their own media. */
+  async findMediaForDeletionByIds (userId: string, ids: string[]): Promise<MediaDeletionRow[]> {
+    if (ids.length === 0) return [];
+    return this.prisma.media.findMany({
+      where: { userId, id: { in: ids } },
+      select: MediaRepository.DELETION_SELECT,
+    });
+  }
+
+  /** Delete a chunk of media rows in one statement, scoped to the owning user so
+   *  a stray id from another user can never be deleted (defense in depth — callers
+   *  already pre-filter by userId). DB-level cascades remove the dependent
+   *  BundleItem / Document / MediaExtractedMetadata rows and SetNull the
+   *  Reminder / Bundle.sourceMediaId references. Returns the rows actually deleted.
+   *  (userId is the second arg so the delete worker's injected port stays compatible.) */
+  async deleteMediaByIds (ids: string[], userId: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const { count } = await this.prisma.media.deleteMany({ where: { id: { in: ids }, userId } });
+    return count;
+  }
+
   /** Return storageKey and thumbnailKey for a media item (used to delete S3 objects). */
   async findMediaKeys (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
-      select: { storageKey: true, thumbnailKey: true, sourcePath: true },
+      select: { storageKey: true, thumbnailKey: true, sourcePath: true, mimeType: true },
     });
   }
 
@@ -419,11 +552,15 @@ export class MediaRepository {
         const added   = data.tags!.filter(t => !oldSet.has(t));
         const removed = oldTags.filter(t => !newSet.has(t));
 
+        // Only newly-added names are treated as deliberate user actions: they are
+        // recorded (or promoted) to origin USER. Tags merely retained keep their
+        // origin, so re-saving an item without touching its auto tag never
+        // silently converts that tag to user-made.
         for (const name of added) {
           await tx.tag.upsert({
             where: { userId_name: { userId, name } },
-            update: { count: { increment: 1 } },
-            create: { userId, name, count: 1 },
+            update: { count: { increment: 1 }, origin: "USER" },
+            create: { userId, name, count: 1, origin: "USER" },
           });
         }
         for (const name of removed) {
@@ -451,10 +588,12 @@ export class MediaRepository {
 
       const newTags = [...media.tags, tagName];
       await tx.media.update({ where: { id: mediaId }, data: { tags: newTags } });
+      // System-applied (OCR/thumbnail) tag: AUTO on create, never demotes an
+      // existing USER tag.
       await tx.tag.upsert({
         where: { userId_name: { userId: media.userId, name: tagName } },
         update: { count: { increment: 1 } },
-        create: { userId: media.userId, name: tagName, count: 1 },
+        create: { userId: media.userId, name: tagName, count: 1, origin: "AUTO" },
       });
     });
   }
@@ -497,7 +636,7 @@ export class MediaRepository {
   async findForTextJob (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
-      select: { id: true, storageKey: true, title: true },
+      select: { id: true, storageKey: true, title: true, sourcePath: true, mimeType: true },
     });
   }
 
@@ -573,7 +712,7 @@ export class MediaRepository {
   async findThumbInfo (id: string) {
     return this.prisma.media.findUnique({
       where: { id },
-      select: { thumbnailKey: true, thumbState: true, mimeType: true, sourcePath: true },
+      select: { thumbnailKey: true, thumbState: true, mimeType: true, sourcePath: true, sizeBytes: true },
     });
   }
 
@@ -631,7 +770,7 @@ export class MediaRepository {
     return media?.textState ?? null;
   }
 
-  async setTextState (mediaId: string, state: "PENDING" | "READY" | "ERROR" | "FAILED"): Promise<boolean> {
+  async setTextState (mediaId: string, state: "PENDING" | "READY" | "ERROR" | "UNSUPPORTED"): Promise<boolean> {
     // Guard: worker-initiated writes (including PDF intermediate PENDING→PENDING re-queues)
     // are only allowed from PENDING. This prevents a late worker from overwriting a cancel
     // or stall-detection ERROR with READY.
@@ -692,11 +831,68 @@ export class MediaRepository {
     return new Set(rows.map(r => r.sourcePath).filter((p): p is string => p !== null));
   }
 
+  /** The Media id for an in-place item at this exact source path, or null. Used
+   *  by the live watcher to resolve an `unlink` event to the row to delete. */
+  async findIdBySourcePath (userId: string, sourcePath: string): Promise<string | null> {
+    const row = await this.prisma.media.findFirst({
+      where: { userId, sourcePath },
+      select: { id: true },
+    });
+    return row?.id ?? null;
+  }
+
+  /** Media ids for in-place items whose source path sits under `prefix` (a
+   *  removed directory). The trailing separator prevents `/a/b` from matching
+   *  a sibling `/a/bc`. Uses the OS separator so it matches the backslash paths
+   *  stored on Windows (path.join output), not just POSIX `/`. Used by the
+   *  watcher's `unlinkDir` handler. */
+  async findIdsBySourcePathPrefix (userId: string, prefix: string): Promise<string[]> {
+    const withSep = prefix.endsWith(path.sep) ? prefix : prefix + path.sep;
+    const rows = await this.prisma.media.findMany({
+      where: { userId, sourcePath: { startsWith: withSep } },
+      select: { id: true },
+    });
+    return rows.map(r => r.id);
+  }
+
+  /** All in-place source paths for a user (with their id), for reconciliation
+   *  pruning of rows whose original no longer exists on disk. */
+  async listSourcePaths (userId: string): Promise<Array<{ id: string; sourcePath: string }>> {
+    const rows = await this.prisma.media.findMany({
+      where: { userId, sourcePath: { not: null } },
+      select: { id: true, sourcePath: true },
+    });
+    return rows
+      .filter((r): r is { id: string; sourcePath: string } => r.sourcePath !== null);
+  }
+
   async markTextUnsupported (mediaIds: string[]): Promise<void> {
     if (mediaIds.length === 0) return;
     await this.prisma.media.updateMany({
       where: { id: { in: mediaIds }, textState: "PENDING" },
-      data: { textState: "FAILED" },
+      data: { textState: "UNSUPPORTED" },
+    });
+  }
+
+  /** Marks thumbState PENDING → UNSUPPORTED for items whose type can't be
+   *  thumbnailed, so they never run a doomed thumbnail job. Guards on PENDING to
+   *  avoid a retrograde READY → UNSUPPORTED write. The reason is persisted to
+   *  thumbError for display. */
+  async markThumbUnsupported (mediaIds: string[]): Promise<void> {
+    if (mediaIds.length === 0) return;
+    await this.prisma.media.updateMany({
+      where: { id: { in: mediaIds }, thumbState: "PENDING" },
+      data: { thumbState: "UNSUPPORTED", thumbError: THUMBNAIL_UNSUPPORTED_REASON },
+    });
+  }
+
+  /** Mark rows whose source is too large to thumbnail (see MAX_THUMBNAIL_BYTES).
+   *  Used at enqueue time so a doomed thumb job is never created. */
+  async markThumbTooLarge (mediaIds: string[]): Promise<void> {
+    if (mediaIds.length === 0) return;
+    await this.prisma.media.updateMany({
+      where: { id: { in: mediaIds }, thumbState: "PENDING" },
+      data: { thumbState: "UNSUPPORTED", thumbError: THUMBNAIL_TOO_LARGE_REASON },
     });
   }
 
@@ -712,12 +908,12 @@ export class MediaRepository {
         orderBy: [{ count: 'desc' }, { name: 'asc' }],
         take: limit,
         skip: offset,
-        select: { name: true, count: true, color: true },
+        select: { name: true, count: true, color: true, origin: true },
       }),
       this.prisma.tag.count({ where: { userId } }),
     ]);
     return {
-      tags: rows.map(r => ({ tag: r.name, count: r.count, color: r.color ?? null })),
+      tags: rows.map(r => ({ tag: r.name, count: r.count, color: r.color ?? null, origin: r.origin })),
       total,
     };
   }
@@ -838,17 +1034,37 @@ export class MediaRepository {
     await this.prisma.tag.updateMany({ where: { userId, name }, data: { color } });
   }
 
+  /** Set the origin (USER/AUTO) on a tag row — the manual override from settings. */
+  async setTagOrigin (userId: string, name: string, origin: TagOrigin): Promise<void> {
+    await this.prisma.tag.updateMany({ where: { userId, name }, data: { origin } });
+  }
+
+  /** Return the subset of `tagNames` whose Tag row is AUTO for this user. */
+  async listAutoTagNames (userId: string, tagNames: string[]): Promise<string[]> {
+    if (tagNames.length === 0) return [];
+    const rows = await this.prisma.tag.findMany({
+      where: { userId, name: { in: tagNames }, origin: "AUTO" },
+      select: { name: true },
+    });
+    return rows.map(r => r.name);
+  }
+
   /**
    * Increment (or create) Tag rows for each tag name.
    * Called after createMedia / createBatch to keep Tag counts in sync.
+   * Names listed in `autoTags` are recorded with origin AUTO on creation; all
+   * other names default to USER, and a user-supplied name promotes an existing
+   * AUTO row to USER (never the reverse).
    */
-  async upsertTags (userId: string, tags: string[]): Promise<void> {
+  async upsertTags (userId: string, tags: string[], autoTags?: Iterable<string>): Promise<void> {
+    const autoSet = new Set(autoTags ?? []);
     for (const name of tags) {
       if (!name) continue;
+      const isAuto = autoSet.has(name);
       await this.prisma.tag.upsert({
         where: { userId_name: { userId, name } },
-        update: { count: { increment: 1 } },
-        create: { userId, name, count: 1 },
+        update: isAuto ? { count: { increment: 1 } } : { count: { increment: 1 }, origin: "USER" },
+        create: { userId, name, count: 1, origin: isAuto ? "AUTO" : "USER" },
       });
     }
   }

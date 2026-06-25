@@ -43,6 +43,7 @@
     "archiver": "^7.0.1",
     "argon2": "^0.44.0",
     "bullmq": "^5.66.4",
+    "chokidar": "^4.0.3",
     "dotenv": "^17.2.3",
     "fastify": "^4.28.1",
     "fastify-plugin": "^4.5.1",

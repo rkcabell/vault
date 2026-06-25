@@ -6,7 +6,7 @@ export type JobUpdateEvent = {
   mediaId: string;
   userId: string;
   field: "textState" | "thumbState" | "tagsUpdated";
-  value: "READY" | "ERROR" | "FAILED" | "updated";
+  value: "READY" | "ERROR" | "FAILED" | "UNSUPPORTED" | "updated";
 };
 
 declare module "fastify" {
@@ -36,7 +36,7 @@ export default fp(
         const field = payload.field;
         const value = payload.value;
         if (field !== "textState" && field !== "thumbState" && field !== "tagsUpdated") return;
-        if (value !== "READY" && value !== "ERROR" && value !== "FAILED" && value !== "updated") return;
+        if (value !== "READY" && value !== "ERROR" && value !== "FAILED" && value !== "UNSUPPORTED" && value !== "updated") return;
         emitter.emit("update", {
           mediaId: payload.mediaId,
           userId,

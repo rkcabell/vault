@@ -10,6 +10,7 @@ import { detectTextLanguage } from "../../lib/text/detectLanguage.js";
 import { segmentExtractedText } from "../../lib/text/segmentText.js";
 import type { PdfTextPage } from "../pdf/extractPdfText.js";
 import { buildTextStats } from "./metadata/textStats.js";
+import { exceedsTextSize, isPlainTextMime, TEXT_TOO_LARGE_REASON, TEXT_UNSUPPORTED_REASON } from "../../lib/media/processingSupport.js";
 import type { MediaMetadata } from "./metadata/types.js";
 
 /**
@@ -82,24 +83,37 @@ type MediaReadDeps = {
  */
 export function createMediaReadService (deps: MediaReadDeps) {
   /**
-   * Fetch BullMQ job metadata for display in the UI.
-   * Only queries the queue when `textState` is PENDING (show attempt progress)
-   * or ERROR/FAILED (surface the failure reason). Returns null in all other
+   * Fetch text-state metadata for display in the UI.
+   * Queries BullMQ when `textState` is PENDING (show attempt progress) or ERROR
+   * (surface the real failure reason). For UNSUPPORTED there is no job — the
+   * reason is derived from the file itself (too large vs. unsupported type) so the
+   * detail page can explain why extraction was skipped. Returns null in all other
    * states to avoid unnecessary Redis round-trips on the read path.
    * On lookup failure, logs a warning and returns null rather than throwing.
    */
   const getOcrJobMeta = async (
     mediaId: string,
     textState?: string | null,
+    mimeType?: string | null,
+    sizeBytes?: number | null,
   ): Promise<{
     textError: string | null;
     textAttemptsMade: number | null;
     textAttemptsTotal: number | null;
   } | null> => {
+    // UNSUPPORTED items never ran a job; surface a static reason without hitting Redis.
+    // Mirror the worker's skip rule: only plain-text over the size cap is "too large";
+    // everything else marked UNSUPPORTED is an unsupported type.
+    if (textState === "UNSUPPORTED") {
+      const isTooLarge = isPlainTextMime((mimeType ?? "").toLowerCase()) && exceedsTextSize(sizeBytes);
+      const textError = isTooLarge ? TEXT_TOO_LARGE_REASON : TEXT_UNSUPPORTED_REASON;
+      return { textError, textAttemptsMade: null, textAttemptsTotal: null };
+    }
+
     if (!deps.ocrQueue) return null;
 
     const includeAttempts = textState === "PENDING";
-    const includeError = textState === "ERROR" || textState === "FAILED";
+    const includeError = textState === "ERROR";
     if (!includeAttempts && !includeError) return null;
 
     try {
@@ -197,9 +211,13 @@ export function createMediaReadService (deps: MediaReadDeps) {
         : null;
 
     const { ...mediaPayload } = media;
-    const jobMeta = await getOcrJobMeta(media.id, media.textState);
+    const jobMeta = await getOcrJobMeta(media.id, media.textState, media.mimeType, media.sizeBytes);
+    // The subset of this item's tags the system applied (origin AUTO). The
+    // frontend uses it to sort/style user-made tags ahead of auto ones.
+    const autoTags = await deps.repository.listAutoTagNames(userId, media.tags);
 
     return {
+      autoTags,
       media: {
         ...mediaPayload,
         hasText: textTotalLength > 0,

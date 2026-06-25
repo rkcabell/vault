@@ -31,6 +31,8 @@ interface BuildOpts {
     cancelTextExtraction?: (_u: string, _id: string) => Promise<unknown>;
     unpackArchive?: (_u: string, _id: string) => Promise<unknown>;
     regenerateThumbnail?: (_u: string, _id: string) => Promise<unknown>;
+    regenerateThumbnailsBatch?: (_u: string, _ids: string[], _roots?: string[]) => Promise<unknown>;
+    enqueueTextExtractionBatch?: (_u: string, _ids: string[], _roots?: string[]) => Promise<unknown>;
   };
   prisma?: {
     userFindUnique?: (_a: unknown) => Promise<unknown>;
@@ -72,6 +74,8 @@ function makeMediaServices({
       cancelTextExtraction: as_svc.cancelTextExtraction ?? (async () => null),
       unpackArchive: as_svc.unpackArchive ?? (async () => null),
       regenerateThumbnail: as_svc.regenerateThumbnail ?? (async () => null),
+      regenerateThumbnailsBatch: as_svc.regenerateThumbnailsBatch ?? (async () => ({ queued: 0, missing: 0 })),
+      enqueueTextExtractionBatch: as_svc.enqueueTextExtractionBatch ?? (async () => ({ queued: 0, missing: 0 })),
     },
   };
 }
@@ -571,6 +575,96 @@ test("POST /:id/thumbnail/regenerate: not found returns 404", async () => {
 test("POST /:id/thumbnail/regenerate: unauthenticated returns 401", async () => {
   const app = await buildApp();
   const res = await app.inject({ method: "POST", url: `/${ID}/thumbnail/regenerate` });
+  assert.equal(res.statusCode, 401);
+});
+
+// ── POST /batch/thumbnail ──────────────────────────────────────────────────────
+
+test("POST /batch/thumbnail: forwards ids + allowedRoots snapshot and returns summary", async () => {
+  let captured: { ids: string[]; roots?: string[] } | undefined;
+  const app = await buildApp({
+    actionsService: {
+      regenerateThumbnailsBatch: async (_u, ids, roots) => { captured = { ids, roots }; return { queued: ids.length, missing: 0 }; },
+    },
+    preferencesService: {
+      getPreferences: async () => ({ autoTagOnUpload: true, autoUnpackArchives: false, indexAllowedRoots: ["C:\\nas"] }) as never,
+    },
+  });
+
+  const res = await app.inject({
+    method: "POST", url: "/batch/thumbnail",
+    headers: JSON_HEADERS,
+    payload: JSON.stringify({ ids: [ID, "m-2"] }),
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { queued: 2, missing: 0 });
+  assert.deepEqual(captured?.ids, [ID, "m-2"]);
+  assert.deepEqual(captured?.roots, ["C:\\nas"]);
+});
+
+test("POST /batch/thumbnail: empty ids returns 400", async () => {
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST", url: "/batch/thumbnail",
+    headers: JSON_HEADERS,
+    payload: JSON.stringify({ ids: [] }),
+  });
+  assert.equal(res.statusCode, 400);
+});
+
+test("POST /batch/thumbnail: unauthenticated returns 401", async () => {
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST", url: "/batch/thumbnail",
+    headers: { "content-type": "application/json" },
+    payload: JSON.stringify({ ids: [ID] }),
+  });
+  assert.equal(res.statusCode, 401);
+});
+
+// ── POST /batch/text ───────────────────────────────────────────────────────────
+
+test("POST /batch/text: forwards ids + allowedRoots snapshot and returns summary", async () => {
+  let captured: { ids: string[]; roots?: string[] } | undefined;
+  const app = await buildApp({
+    actionsService: {
+      enqueueTextExtractionBatch: async (_u, ids, roots) => { captured = { ids, roots }; return { queued: ids.length, missing: 0 }; },
+    },
+    preferencesService: {
+      getPreferences: async () => ({ autoTagOnUpload: true, autoUnpackArchives: false, indexAllowedRoots: ["C:\\nas"] }) as never,
+    },
+  });
+
+  const res = await app.inject({
+    method: "POST", url: "/batch/text",
+    headers: JSON_HEADERS,
+    payload: JSON.stringify({ ids: [ID] }),
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { queued: 1, missing: 0 });
+  assert.deepEqual(captured?.ids, [ID]);
+  assert.deepEqual(captured?.roots, ["C:\\nas"]);
+});
+
+test("POST /batch/text: empty ids returns 400", async () => {
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST", url: "/batch/text",
+    headers: JSON_HEADERS,
+    payload: JSON.stringify({ ids: [] }),
+  });
+  assert.equal(res.statusCode, 400);
+});
+
+test("POST /batch/text: unauthenticated returns 401", async () => {
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST", url: "/batch/text",
+    headers: { "content-type": "application/json" },
+    payload: JSON.stringify({ ids: [ID] }),
+  });
   assert.equal(res.statusCode, 401);
 });
 

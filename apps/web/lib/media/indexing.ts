@@ -8,9 +8,11 @@ export type IndexStatus = {
   jobId: string;
   state: string;
   done: boolean;
+  aborted: boolean;
   scanned: number;
   indexed: number;
   skipped: number;
+  filtered: number;
 };
 
 export async function getIndexRoots (): Promise<IndexRoots> {
@@ -48,6 +50,27 @@ export async function getIndexStatus (jobId: string): Promise<IndexStatus | null
     });
     if (!res.ok) return null;
     return (await res.json()) as IndexStatus;
+  } catch {
+    return null;
+  }
+}
+
+/** Stop the index walker without touching the worker queues. Best-effort. */
+export async function stopIndex (): Promise<void> {
+  try {
+    await apiFetch("/api/media/index/stop", { method: "POST", credentials: "include" });
+  } catch {
+    // best-effort; the poll will reflect the updated status on the next tick
+  }
+}
+
+/** The user's in-flight scan, if any — lets the UI re-attach after a page reload. */
+export async function getActiveIndex (): Promise<IndexStatus | null> {
+  try {
+    const res = await apiFetch("/api/media/index/active", { credentials: "include" });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { status: IndexStatus | null };
+    return data.status;
   } catch {
     return null;
   }

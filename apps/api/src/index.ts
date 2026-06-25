@@ -1,4 +1,3 @@
-//File: apps/api/src/index.ts
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
@@ -53,11 +52,9 @@ async function main () {
   registerShutdown(app);
 
   // Surface the real error message instead of the generic "Internal Server Error".
-  // Fastify's default handler hard-codes the message for non-HTTP errors (a security
-  // default), but this is a personal app where descriptive errors are more useful.
   app.setErrorHandler((error, req, reply) => {
     if (error.statusCode) {
-      // HTTP error created by @fastify/sensible — pass through with its own message.
+      // HTTP error created by @fastify/sensible
       void reply.status(error.statusCode).send(error);
     } else {
       req.log.error({ err: error }, "unhandled error");
@@ -78,21 +75,22 @@ async function main () {
     done();
   });
 
-  //Fastify instance
   await app.register(configPlugin); // loads & validates env into app.config
-  await app.register(cookie, { secret: app.config.JWT_SECRET }); // registers cookie plugin
+  await app.register(cookie, { secret: app.config.JWT_SECRET });
   await app.register(cors, { origin: app.config.CORS_ORIGIN, credentials: true });
-  await app.register(sensible); // adds handy utilities
-  await app.register(healthRoutes, { prefix: "/health" }); // /healthz, /readyz
-  await app.register(prismaPlugin); // registers a PrismaClient (DB)
-  await app.register(jwtPlugin); // registers jwt plugin
-  await app.register(authRoutes, { prefix: "/api/auth" }); // auth routes plugin
+  await app.register(sensible);
+  await app.register(healthRoutes, { prefix: "/health" });
+  await app.register(prismaPlugin);
+  await app.register(jwtPlugin);
+  await app.register(authRoutes, { prefix: "/api/auth" });
   await app.register(profileRoutes, { prefix: "/api/profile" });
   await app.register(s3Plugin); // S3/MinIO client (s3 mode only)
   await app.register(storagePlugin); // app.storage adapter (s3 or filesystem)
-  await app.register(preferencesPlugin); // shared PreferencesService singleton
-  await app.register(mediaServicesPlugin); // media services + queues wiring
-  await app.register(queueEventsPlugin); // shared QueueEvents + jobEvents emitter for SSE
+  await app.register(preferencesPlugin);
+  // register redis before mediaServices
+  await app.register(redisPlugin);
+  await app.register(mediaServicesPlugin);
+  await app.register(queueEventsPlugin); // shared QueueEvents → jobEvents emitter for SSE
   await app.register(mediaRoutes, { prefix: "/api/media" });
   await app.register(tagsRoutes, { prefix: "/api/tags" });
   await app.register(remindersRoutes, { prefix: "/api/reminders" });
@@ -101,7 +99,6 @@ async function main () {
   await app.register(initRoutes, { prefix: "/api/init" });
   await app.register(serverRoutes, { prefix: "/api/server" });
   await app.register(storageRoutes, { prefix: "/api/storage" });
-  await app.register(redisPlugin); // Redis for queue/rate-limit groundwork
   await app.register(rateLimitPlugin); // Redis rate limit
 
   const port = app.config.PORT;

@@ -34,13 +34,17 @@ model User {
 }
 
 model Tag {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
   name      String
   color     String?
-  count     Int      @default(0)
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // USER = the user deliberately applied this tag; AUTO = the system applied it
+  // (MIME-type tag on upload/index, bundle/extension tags on unpack). User intent
+  // wins: a user-applied tag is promoted to USER and never auto-demoted.
+  origin    TagOrigin @default(USER)
+  count     Int       @default(0)
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, name])
   @@index([userId, count(sort: Desc)])
@@ -141,6 +145,12 @@ enum MediaWorkerState {
   READY
   FAILED
   ERROR
+  UNSUPPORTED
+}
+
+enum TagOrigin {
+  USER
+  AUTO
 }
 
 model MediaExtractedMetadata {

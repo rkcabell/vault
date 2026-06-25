@@ -173,11 +173,11 @@ test("processOcrJob: returns early when textState is ERROR", async () => {
   assert.equal(upsertCalled, false);
 });
 
-test("processOcrJob: returns early when textState is FAILED", async () => {
+test("processOcrJob: returns early when textState is UNSUPPORTED", async () => {
   let upsertCalled = false;
   const deps = makeDeps({
     findForOcr: async () => ({
-      id: "m1", textState: "FAILED", storageKey: "k", sizeBytes: 0, mimeType: "image/png",
+      id: "m1", textState: "UNSUPPORTED", storageKey: "k", sizeBytes: 0, mimeType: "image/png",
     }),
     upsertDocument: async () => { upsertCalled = true; },
   });
@@ -248,6 +248,59 @@ test("processOcrJob: non-PDF path runs OCR and sets textState READY", async () =
   assert.ok(ua.rawText.includes("OCR extracted result text content here"));
   assert.equal(ua.textSource, "OCR");
   assert.equal(textStateSet, "READY");
+});
+
+test("processOcrJob: plain-text path reads directly (NATIVE), no OCR", async () => {
+  let upsertArgs: unknown = null;
+  let textStateSet: string | null = null;
+  let ocrmypdfCalled = false;
+  const tags: string[] = [];
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "txt1", textState: "PENDING", storageKey: "s/notes.md", sizeBytes: 42,
+      mimeType: "text/markdown",
+    }),
+    upsertDocument: async (args) => { upsertArgs = args; },
+    setTextState: async (_id, state) => { textStateSet = state; return true; },
+    addTagIfAbsent: async (_id, tag) => { tags.push(tag); },
+    textDeps: {
+      getObjectBuffer: async () => Buffer.from("# Title\nsearchable body text", "utf8"),
+      ocrWithOcrmypdf: async () => { ocrmypdfCalled = true; return { ocrPdf: Buffer.alloc(0) }; },
+    },
+  });
+
+  await processOcrJob(deps, { mediaId: "txt1" });
+
+  const ua = upsertArgs as { rawText: string; textSource: string; pages: unknown };
+  assert.equal(ocrmypdfCalled, false, "ocrmypdf must not run for plain text");
+  assert.equal(ua.rawText, "# Title\nsearchable body text");
+  assert.equal(ua.textSource, "NATIVE");
+  assert.deepEqual(ua.pages, []);
+  assert.equal(textStateSet, "READY");
+  assert.ok(tags.includes("has-text"), "non-empty text gets the has-text tag");
+});
+
+test("processOcrJob: oversized text file is skipped (UNSUPPORTED), no extraction", async () => {
+  let upsertCalled = false;
+  let textStateSet: string | null = null;
+  let bufferRead = false;
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "bigtxt", textState: "PENDING", storageKey: "s/huge.log", sizeBytes: 10 * 1024 * 1024,
+      mimeType: "text/plain",
+    }),
+    upsertDocument: async () => { upsertCalled = true; },
+    setTextState: async (_id, state) => { textStateSet = state; return true; },
+    textDeps: { getObjectBuffer: async () => { bufferRead = true; return Buffer.from("x"); } },
+  });
+
+  await processOcrJob(deps, { mediaId: "bigtxt" });
+
+  assert.equal(textStateSet, "FAILED");
+  assert.equal(upsertCalled, false, "no document upserted for oversized text");
+  assert.equal(bufferRead, false, "oversized file is never read into memory");
 });
 
 test("processOcrJob: fires publishJobUpdate with READY on success", async () => {

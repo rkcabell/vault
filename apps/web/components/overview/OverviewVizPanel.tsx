@@ -4,13 +4,13 @@ import Link from "next/link";
 import { HardDrive } from "lucide-react";
 // NOTE: VizDonut (the pie chart) is intentionally stashed — it was removed from
 // this panel on 2026-06-17 but kept for future reuse. See viz/VizDonut.tsx.
-import { VizTreemap } from "./viz/VizTreemap";
+import { VizCategoryTreemap } from "./viz/VizCategoryTreemap";
 import { VizStorageBar } from "./viz/VizStorageBar";
-import { mergedLegend } from "./viz/vizUtils";
-import type { MediaStorageItem } from "@vault/types";
+import { bucketColor, BUCKET_LABEL, BUCKET_ORDER, type BucketKey } from "./viz/vizUtils";
+import type { MediaCategorySlice } from "@vault/types";
 
 interface Props {
-  docs: MediaStorageItem[];
+  categories: MediaCategorySlice[];
   mediaStats: {
     totalDocs: number;
     storageBytes: number;
@@ -18,8 +18,13 @@ interface Props {
   };
 }
 
-export function OverviewVizPanel({ docs, mediaStats }: Props) {
-  const legend = mergedLegend(mediaStats.typeBreakdown, docs);
+export function OverviewVizPanel({ categories, mediaStats }: Props) {
+  // Legend mirrors the category tiles: one entry per present bucket, in the
+  // canonical bucket order, coloured to match its tile.
+  const present = new Set(categories.filter(c => c.bytes > 0).map(c => c.bucket as BucketKey));
+  const legend = BUCKET_ORDER
+    .filter(b => present.has(b))
+    .map(b => ({ label: BUCKET_LABEL[b], color: bucketColor(b) }));
 
   return (
     <section className="flex flex-col gap-3 min-w-0">
@@ -44,12 +49,12 @@ export function OverviewVizPanel({ docs, mediaStats }: Props) {
           {/* Pie chart (VizDonut) stashed for later — intentionally not rendered. See viz/VizDonut.tsx */}
 
           <div className="viz-combined-storage">
-            <div className="viz-section-label">Storage</div>
+            <div className="viz-section-label">Storage by type</div>
             <div className="viz-combined-body">
-              {/* Compact (ratio) mode: only the dominant files, so the home card
-                  shows a proportional sample rather than every file in the vault.
-                  Labels off to keep it clean — the full set lives on /explore. */}
-              <VizTreemap docs={docs} compact showLabels={false} />
+              {/* One tile per file-type category, sized by the storage it
+                  occupies and labelled with file count + total size. The
+                  per-file detail view lives on /explore. */}
+              <VizCategoryTreemap categories={categories} />
             </div>
           </div>
         </div>

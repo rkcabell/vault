@@ -4,9 +4,16 @@ import { z } from "zod";
 // Tags  (GET /tags, POST /tags, DELETE /tags/:tag)
 // ---------------------------------------------------------------------------
 
+// USER = the user deliberately applied this tag; AUTO = the system did (MIME-type
+// tag on upload/index, bundle/extension tags on unpack). Mirrors the Prisma enum.
+export const TagOriginSchema = z.enum(["USER", "AUTO"]);
+export type TagOrigin = z.infer<typeof TagOriginSchema>;
+
 export const TagItemSchema = z.object({
   name: z.string(),
   count: z.number(),
+  color: z.string().nullable().optional(),
+  origin: TagOriginSchema.optional(),
 });
 export type TagItem = z.infer<typeof TagItemSchema>;
 

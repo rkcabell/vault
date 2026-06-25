@@ -12,7 +12,7 @@ const DevPurgeButton =
     ? dynamic(() => import("@/components/dev/DevPurgeButton"))
     : null;
 import { Container, PageHeader } from "@/components/common";
-import { MediaCard, MediaCardListHeader, MediaCardSkeleton, type MediaItem } from "@/components/media";
+import { MediaCard, MediaCardListHeader, MediaCardSkeleton, LibraryUpdateBanner, type MediaItem } from "@/components/media";
 import { BulkActionBar } from "@/components/media/BulkActionBar";
 import { BulkTagDialog } from "@/components/media/BulkTagDialog";
 import { BulkBundleDialog } from "@/components/media/BulkBundleDialog";
@@ -21,7 +21,10 @@ import { Button } from "@/components/ui/Button";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
 import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown, Search, X, Tag } from "lucide-react";
 import { useUpload } from "@/components/contexts/UploadContext";
-import { emitTagsUpdated, TAGS_UPDATED_EVENT } from "@/lib/tags";
+import { useDeleteProgress } from "@/components/contexts/DeleteProgressContext";
+import { regenerateThumbnailsBatch, extractTextBatch } from "@/lib/media/batch";
+import { emitTagsUpdated, TAGS_UPDATED_EVENT, partitionTagsByOrigin } from "@/lib/tags";
+import type { TagOrigin } from "@vault/types";
 import { BUNDLES_UPDATED_EVENT, emitBundlesUpdated } from "@/lib/bundles";
 import {
   DropdownMenu,
@@ -51,6 +54,19 @@ const SORT_OPTIONS = [
 
 type SortValue = (typeof SORT_OPTIONS)[number]["value"];
 type DensityValue = (typeof DENSITY_OPTIONS)[number];
+
+// Processing-status filter. Each option maps to the API's thumbState/textState
+// query params (a single enum each). "Needs …" surfaces the un-queued PENDING
+// items left behind after Abort Queues so they can be re-queued in bulk.
+const STATUS_OPTIONS = [
+  { value: "all", label: "All statuses", thumbState: "", textState: "" },
+  { value: "thumb_pending", label: "Needs thumbnail", thumbState: "PENDING", textState: "" },
+  { value: "thumb_error", label: "Thumbnail error", thumbState: "FAILED", textState: "" },
+  { value: "text_pending", label: "Needs text", thumbState: "", textState: "PENDING" },
+  { value: "text_error", label: "Text error", thumbState: "", textState: "ERROR" },
+] as const;
+
+type StatusValue = (typeof STATUS_OPTIONS)[number]["value"];
 
 // Default query param values.
 const DEFAULT_SORT: SortValue = "createdAt_desc";
@@ -121,7 +137,7 @@ export default function LibraryPageInner() {
 
   // Tag filter panel.
   const [showTagFilter, setShowTagFilter] = useState(false);
-  const [tagOptions, setTagOptions] = useState<{ name: string; count: number; color: string | null }[]>([]);
+  const [tagOptions, setTagOptions] = useState<{ name: string; count: number; color: string | null; origin?: TagOrigin }[]>([]);
   const [tagSearch, setTagSearch] = useState('');
   const [hasUnpackedArchiveBundles, setHasUnpackedArchiveBundles] = useState(false);
 
@@ -129,6 +145,9 @@ export default function LibraryPageInner() {
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const deletedIdsRef = useRef<Set<string>>(new Set());
   const fetchIdRef = useRef(0);
+  // Background bulk delete (runs in the worker; this page tracks its progress).
+  const { start: startBulkDeleteJob, status: bulkDeleteStatus } = useDeleteProgress();
+  const reconciledDeleteJobRef = useRef<string | null>(null);
 
   // Select mode.
   const [isSelectMode, setIsSelectMode] = useState(false);
@@ -138,6 +157,7 @@ export default function LibraryPageInner() {
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [isBundleDialogOpen, setIsBundleDialogOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isRequeueing, setIsRequeueing] = useState(false);
 
   // Delete confirmation popover.
   const [confirmState, setConfirmState] = useState<{ x: number; y: number; anchorWidth?: number; bottomOffset?: number; message: string; action: () => void } | null>(null);
@@ -268,6 +288,24 @@ export default function LibraryPageInner() {
     [router, searchParams],
   );
 
+  const statusValue: StatusValue =
+    STATUS_OPTIONS.find((o) => o.thumbState === thumbState && o.textState === textState)?.value ?? "all";
+  const statusLabel = STATUS_OPTIONS.find((o) => o.value === statusValue)?.label ?? "All statuses";
+
+  const handleStatusChange = useCallback(
+    (value: StatusValue) => {
+      const opt = STATUS_OPTIONS.find((o) => o.value === value);
+      const params = new URLSearchParams(searchParams.toString());
+      if (opt?.thumbState) params.set("thumbState", opt.thumbState);
+      else params.delete("thumbState");
+      if (opt?.textState) params.set("textState", opt.textState);
+      else params.delete("textState");
+      const nextQuery = params.toString();
+      router.push(nextQuery ? `${LIBRARY_PATH}?${nextQuery}` : LIBRARY_PATH);
+    },
+    [router, searchParams],
+  );
+
   const clearAllFilters = useCallback(() => {
     setSearchInput("");
     const params = new URLSearchParams(searchParams.toString());
@@ -314,8 +352,10 @@ export default function LibraryPageInner() {
 
   const filteredTagOptions = useMemo(() => {
     const q = tagSearch.trim().toLowerCase();
-    if (!q) return tagOptions;
-    return tagOptions.filter(t => t.name.toLowerCase().includes(q));
+    const matched = q ? tagOptions.filter(t => t.name.toLowerCase().includes(q)) : tagOptions;
+    // Keep user-made tags ahead of auto ones, preserving the count ranking within
+    // each group.
+    return partitionTagsByOrigin(matched, t => t.origin === 'AUTO');
   }, [tagOptions, tagSearch]);
 
   // True when any user-initiated filter is active. Used to keep the toolbar
@@ -447,7 +487,7 @@ export default function LibraryPageInner() {
     if (!showTagFilter) return;
     apiFetch('/api/tags?limit=200', { credentials: 'include' })
       .then(r => r.ok ? r.json() : { tags: [] })
-      .then((d: { tags: { name: string; count: number; color: string | null }[] }) => {
+      .then((d: { tags: { name: string; count: number; color: string | null; origin?: TagOrigin }[] }) => {
         setTagOptions(d.tags ?? []);
       })
       .catch(() => {});
@@ -461,7 +501,7 @@ export default function LibraryPageInner() {
       try {
         const res = await apiFetch('/api/tags?limit=200', { credentials: 'include' });
         if (!res.ok) return;
-        const data = await res.json() as { tags: { name: string; count: number; color: string | null }[] };
+        const data = await res.json() as { tags: { name: string; count: number; color: string | null; origin?: TagOrigin }[] };
         const tags = data.tags ?? [];
         if (showTagFilter) setTagOptions(tags);
 
@@ -721,6 +761,38 @@ export default function LibraryPageInner() {
     }
   }, [selectedIds, isDownloading]);
 
+  // Re-queue thumbnail/text processing for the hand-picked selection. Used to
+  // recover items left at PENDING with no job after Abort Queues. Optimistically
+  // flips the affected state to PENDING; SSE flips it to READY as workers finish.
+  const handleBatchRequeue = useCallback(
+    async (kind: "thumbnail" | "text") => {
+      const ids = Array.from(selectedIds);
+      if (ids.length === 0 || isRequeueing) return;
+      setIsRequeueing(true);
+      try {
+        if (kind === "thumbnail") {
+          await regenerateThumbnailsBatch(ids);
+          setMediaItems((prev) =>
+            prev.map((item) => (selectedIds.has(item.id) ? { ...item, thumbState: "PENDING" } : item)),
+          );
+        } else {
+          await extractTextBatch(ids);
+          setMediaItems((prev) =>
+            prev.map((item) => (selectedIds.has(item.id) ? { ...item, textState: "PENDING" } : item)),
+          );
+        }
+        setIsSelectMode(false);
+        setSelectedIds(new Set());
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to start processing.";
+        setError(message);
+      } finally {
+        setIsRequeueing(false);
+      }
+    },
+    [selectedIds, isRequeueing],
+  );
+
   const handleBulkDelete = useCallback((info: { centerX: number; anchorWidth: number; bottomOffset: number }) => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0 && !isSelectAllLibrary) return;
@@ -732,76 +804,48 @@ export default function LibraryPageInner() {
       bottomOffset: info.bottomOffset,
       message: `Delete ${count} ${count === 1 ? "item" : "items"}? This cannot be undone.`,
       action: async () => {
-        if (isSelectAllLibrary) {
-          // Delete all items matching the current filter server-side.
-          try {
+        // Both paths enqueue a background job and return immediately — the worker
+        // does the set-based delete + thumbnail unlinks off the request thread, so
+        // a huge selection never hangs the request or starves the DB pool. The
+        // LibraryUpdateBanner shows progress; the done-reconcile effect below
+        // re-fetches silently when the job finishes.
+        try {
+          if (isSelectAllLibrary) {
+            // Delete everything matching the current filter (worker re-selects in chunks).
+            // Don't re-fetch immediately — the banner tracks progress and the
+            // done-reconcile effect below handles the silent list update on finish.
             const qs = buildDeleteAllQuery();
-            const res = await apiFetch(`/api/media${qs ? `?${qs}` : ""}`, {
-              method: "DELETE",
-              credentials: "include",
-            });
-            if (!res.ok) {
-              const msg = await readErrorMessage(res);
-              setError(msg);
-              return;
-            }
-            setTotalCount(0);
+            await startBulkDeleteJob({ query: qs });
             setIsSelectAllLibrary(false);
-            setIsSelectMode(false);
-            setSelectedIds(new Set());
-            deletedIdsRef.current = new Set();
-            emitTagsUpdated();
-            emitBundlesUpdated();
-            fetchMedia();
-          } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to delete items.";
-            setError(message);
+          } else {
+            // Hand-picked ids — remove from view immediately, then reconcile.
+            await startBulkDeleteJob({ ids });
+            const idSet = new Set(ids);
+            ids.forEach(id => deletedIdsRef.current.add(id));
+            setMediaItems(prev => prev.filter(item => !idSet.has(item.id)));
+            setTotalCount(prev => prev !== null ? Math.max(0, prev - ids.length) : null);
+            fetchMedia({ silent: true });
           }
-          return;
-        }
-
-        // Normal path: delete the selected IDs individually.
-        setDeletingIds(prev => {
-          const next = new Set(prev);
-          ids.forEach(id => next.add(id));
-          return next;
-        });
-
-        const results = await Promise.allSettled(
-          ids.map(id =>
-            apiFetch(`/api/media/${id}`, { method: "DELETE", credentials: "include" })
-          )
-        );
-
-        const deleted: string[] = [];
-        results.forEach((result, i) => {
-          if (result.status === "fulfilled" && result.value.ok) {
-            deleted.push(ids[i]);
-            deletedIdsRef.current.add(ids[i]);
-          }
-        });
-
-        setDeletingIds(prev => {
-          const next = new Set(prev);
-          ids.forEach(id => next.delete(id));
-          return next;
-        });
-
-        if (deleted.length > 0) {
-          setTotalCount(prev => prev !== null ? Math.max(0, prev - deleted.length) : null);
-          emitTagsUpdated();
-          emitBundlesUpdated();
-          // Non-silent re-fetch: clears list immediately and shows loading skeleton
-          // instead of a blank "no items" state while the request is in-flight.
-          fetchMedia();
-          if (deleted.length === ids.length) {
-            setIsSelectMode(false);
-            setSelectedIds(new Set());
-          }
+          setIsSelectMode(false);
+          setSelectedIds(new Set());
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Failed to start delete.";
+          setError(message);
         }
       },
     });
-  }, [selectedIds, fetchMedia, isSelectAllLibrary, totalCount, buildDeleteAllQuery]);
+  }, [selectedIds, fetchMedia, isSelectAllLibrary, totalCount, buildDeleteAllQuery, startBulkDeleteJob]);
+
+  // When a tracked bulk delete finishes, reconcile the list once: a silent
+  // re-fetch drops any items the worker removed (covers the select-all path,
+  // where the client can't know which ids matched the filter).
+  useEffect(() => {
+    if (!bulkDeleteStatus || !bulkDeleteStatus.done) return;
+    if (reconciledDeleteJobRef.current === bulkDeleteStatus.jobId) return;
+    reconciledDeleteJobRef.current = bulkDeleteStatus.jobId;
+    setTotalCount(null);
+    fetchMedia({ silent: true });
+  }, [bulkDeleteStatus, fetchMedia]);
 
   // Drag & drop handlers (no window/global pattern)
   const onDragEnter = useCallback((e: React.DragEvent) => {
@@ -875,6 +919,8 @@ export default function LibraryPageInner() {
         </div>
       )}
 
+      <LibraryUpdateBanner />
+
       {(mediaItems.length > 0 || hasAnyFilter) && (
         <div className="mb-4 flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -937,8 +983,31 @@ export default function LibraryPageInner() {
             )}
             </div>
 
-            {/* Right zone: view controls */}
+            {/* Right zone: status filter + view controls */}
             <div className="flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant={statusValue === "all" ? "outline" : "default"}
+                    size="sm"
+                    className="flex items-center gap-2"
+                  >
+                    <span>{statusLabel}</span>
+                    <ChevronDown className="h-4 w-4 opacity-70" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[12rem]">
+                  {STATUS_OPTIONS.map((option) => (
+                    <DropdownMenuItem
+                      key={option.value}
+                      onClick={() => handleStatusChange(option.value)}
+                      className={option.value === statusValue ? "font-semibold" : "text-muted-foreground"}
+                    >
+                      {option.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
               {viewMode === "grid" && mediaItems.length > 0 && (
                 <div className="w-72">
                   <input
@@ -1029,6 +1098,7 @@ export default function LibraryPageInner() {
                       onCycle={cycleTag}
                       color={t.color}
                       count={t.count}
+                      origin={t.origin}
                     />
                   ))
                 ) : (
@@ -1207,9 +1277,12 @@ export default function LibraryPageInner() {
           onAddToBundle={() => setIsBundleDialogOpen(true)}
           onClear={() => { setSelectedIds(new Set()); setIsSelectAllLibrary(false); lastSelectedIdRef.current = null; }}
           onDownload={handleBulkDownload}
+          onRegenerateThumbnail={() => handleBatchRequeue("thumbnail")}
+          onExtractText={() => handleBatchRequeue("text")}
           onCancel={toggleSelectMode}
           onSelectAll={() => setSelectedIds(new Set(mediaItems.map(m => m.id)))}
           isDownloading={isDownloading}
+          isRequeueing={isRequeueing}
         />
       )}
 

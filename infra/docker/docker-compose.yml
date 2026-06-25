@@ -2,6 +2,10 @@ services:
   postgres:
     image: postgres:16
     env_file: ../../.env.docker
+    # Raise headroom above the default 100. Dev runs multiple Prisma clients (API
+    # + worker, plus any zombie node processes from restarts); a burst of indexing
+    # jobs + a bulk delete can otherwise hit "too many clients already" (P2037).
+    command: [ "postgres", "-c", "max_connections=200" ]
     environment:
       POSTGRES_DB: vault
       POSTGRES_USER: ${POSTGRES_USER:-vault}

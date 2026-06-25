@@ -90,7 +90,7 @@ export function OverviewHealthPoller({ initialWorkers }: Props) {
           )}
           {serverInfo.memoryMB !== null && (
             <div className="overview-system-info-row">
-              <span>Memory (RSS)</span>
+              <span>Memory Usage</span>
               <span className="overview-system-info-value">{serverInfo.memoryMB} MB</span>
             </div>
           )}

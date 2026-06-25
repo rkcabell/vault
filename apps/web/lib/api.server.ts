@@ -1,6 +1,6 @@
 ﻿// apps/web/lib/api.ts
 import { cookies } from 'next/headers'
-import type { MediaDetailResponse, MediaListItem, MediaListResponse, MediaStorageItem, DownloadResponse, BundleListItem, BundleDetail, BundlesListResponse, RemindersSummary, ReminderOverviewRow } from '@vault/types'
+import type { MediaDetailResponse, MediaListItem, MediaListResponse, MediaStorageItem, MediaCategoryBreakdown, DownloadResponse, BundleListItem, BundleDetail, BundlesListResponse, RemindersSummary, ReminderOverviewRow } from '@vault/types'
 
 const API_BASE =
   typeof window === 'undefined'
@@ -87,6 +87,14 @@ export async function listMedia (
 export async function listMediaSizes (): Promise<MediaStorageItem[]> {
   const r = await http<{ items: MediaStorageItem[] }>('/media/storage')
   return r.items
+}
+
+export async function fetchCategoryBreakdown (): Promise<MediaCategoryBreakdown> {
+  try {
+    return await http<MediaCategoryBreakdown>('/media/storage/categories')
+  } catch {
+    return { categories: [], totalFiles: 0, totalBytes: 0 }
+  }
 }
 
 export async function listBundles (): Promise<BundleListItem[]> {

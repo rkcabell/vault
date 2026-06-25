@@ -44,9 +44,17 @@ const EnvSchema = z
 
     // Whether the server may open a native file manager (Explorer/Finder) on the
     // host. Only valid when the browser and server share a machine (local dev /
-    // single-user desktop). Set false for remote, containerized, or multi-user
-    // deployments so the server-side reveal is refused and the button is hidden.
-    LOCAL_EXPLORER: z.coerce.boolean().default(true),
+    // single-user desktop). Set LOCAL_EXPLORER=false for remote, containerized,
+    // or multi-user deployments so the server-side reveal is refused and the
+    // button is hidden. Default on (unset = enabled).
+    //
+    // Parsed as a string, not z.coerce.boolean(): coercion is Boolean(value), so
+    // the string "false" would coerce to true and silently leave the feature on.
+    // Matches the worker's `!== "false"` env convention.
+    LOCAL_EXPLORER: z
+      .string()
+      .optional()
+      .transform(v => v !== "false"),
   })
   .superRefine((val, ctx) => {
     if (val.STORAGE_DRIVER === "s3") {

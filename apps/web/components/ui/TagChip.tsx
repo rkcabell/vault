@@ -13,6 +13,10 @@ const tagChipVariants = cva(
         secondary:
           "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
         outline: "text-foreground",
+        // Origin-aware tones: user-made tags read slightly bolder than the
+        // default; auto tags are muted so user tags take visual priority.
+        user: "border-transparent bg-primary/20 text-primary hover:bg-primary/30",
+        auto: "border-transparent bg-muted text-muted-foreground hover:bg-muted/70",
       },
     },
     defaultVariants: {

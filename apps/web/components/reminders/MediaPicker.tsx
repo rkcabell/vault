@@ -9,7 +9,7 @@ export type MediaPickerItem = {
   id: string;
   title: string | null;
   filename: string;
-  thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED";
+  thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
   mimeType?: string | null;
 };
 

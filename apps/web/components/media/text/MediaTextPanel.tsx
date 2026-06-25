@@ -45,7 +45,6 @@ export function MediaTextPanel (props: {
   id: string
   textState: MediaWorkerState | null | undefined
   textError?: string | null
-  mimeType?: string | null
   document: MediaDocument | null | undefined
   highlightTerms: string[]
   refreshKey: number
@@ -57,7 +56,6 @@ export function MediaTextPanel (props: {
     id,
     textState: mediaTextState,
     textError,
-    mimeType,
     document,
     highlightTerms,
     refreshKey,
@@ -98,7 +96,11 @@ export function MediaTextPanel (props: {
   const isTextReady = textState === 'ready'
   const isRunning =
     textState === 'pending' || textState === 'loading' || mediaTextState === 'PENDING'
-  const isErrorState = textState === 'failed' || textState === 'error'
+  // UNSUPPORTED is the backend's terminal "won't process" state (wrong type or too
+  // large) — the worker never ran, so it's not a failure. Show a neutral "Not supported"
+  // chip with the reason instead of the destructive "Failed" badge.
+  const isUnsupportedType = mediaTextState === 'UNSUPPORTED'
+  const isErrorState = (textState === 'failed' || textState === 'error') && !isUnsupportedType
 
   useEffect(() => {
     if (isRunning) {
@@ -119,28 +121,7 @@ export function MediaTextPanel (props: {
   const isCopyDisabled =
     !isTextReady || isCopying || textTotalLength === 0 || placeholder
 
-  const m = mimeType?.toLowerCase() ?? ''
-  const mimeUnsupported = Boolean(m) && !m.startsWith('image/') && !m.includes('pdf')
-
-  if (mimeUnsupported) {
-    return (
-      <Card>
-        <CardContent className='space-y-4'>
-          <TextPanelHeader
-            statusChip={{ label: 'Not supported', variant: 'secondary' }}
-            sourceLabel={null}
-            lastUpdatedText={null}
-            showMetadata={false}
-          />
-          <p className='text-sm text-muted-foreground'>
-            Text extraction is not available for this file type.
-          </p>
-        </CardContent>
-      </Card>
-    )
-  }
-
-  const statusChip = getStatusChip({ isErrorState, isRunning, canShowViewer })
+  const statusChip = getStatusChip({ isErrorState, isRunning, canShowViewer, isUnsupported: isUnsupportedType })
   const sourceChipLabel = formatSourceChipLabel(textSource)
   const lastUpdatedText = formatLastUpdatedText(undefined)
   const languageStatus = document?.textLanguageStatus ?? null
@@ -152,6 +133,11 @@ export function MediaTextPanel (props: {
   const progressLine = getProgressLine({ textTotalLength })
   const errorMessage = isErrorState ? classifyTextError(mediaTextState, textError) : null
   const errorDetail = textError ?? null
+  // For UNSUPPORTED items the backend supplies a human reason via textError
+  // (e.g. "File too large…", "Text extraction isn't supported for this file type").
+  const unsupportedReason = isUnsupportedType
+    ? (textError ?? 'Text extraction isn’t supported for this file.')
+    : null
   const showShortLanguageNote = hasAnyText && languageStatus === 'short'
   const shortLanguageNote = 'Short sample (<100 characters). Detection may be inaccurate.'
 
@@ -222,7 +208,11 @@ export function MediaTextPanel (props: {
           />
         )}
 
-        {showEmptyState && !isErrorState && !isRunning && (
+        {isUnsupportedType && (
+          <p className='text-sm text-muted-foreground'>{unsupportedReason}</p>
+        )}
+
+        {showEmptyState && !isErrorState && !isRunning && !isUnsupportedType && (
           <TextEmptyState
             isDeleting={isDeleting}
           />

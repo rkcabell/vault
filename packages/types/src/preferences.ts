@@ -20,6 +20,15 @@ export type Preferences = {
   exploreBucketColors: Record<string, string>;
   /** Absolute directories Vault may index in place. Empty = feature disabled. */
   indexAllowedRoots: string[];
+  /** File extensions (lowercase, no dot) skipped during in-place indexing. */
+  indexBlacklistExtensions: string[];
+  /** Absolute folders (and everything beneath them) excluded from in-place
+   *  indexing even when they sit under an allowed root — e.g. @eaDir, .immich. */
+  indexExcludeFolders: string[];
+  /** Skip build/dependency bloat during in-place indexing: dependency/build
+   *  directories (node_modules, dist, .git…) and non-content file types
+   *  (binaries, source code, build artifacts). Documents/images/media stay. */
+  indexSkipNonContent: boolean;
 };
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -40,4 +49,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   darkTheme: "new-moon",
   exploreBucketColors: {},
   indexAllowedRoots: [],
+  indexBlacklistExtensions: [],
+  indexExcludeFolders: [],
+  indexSkipNonContent: true,
 };

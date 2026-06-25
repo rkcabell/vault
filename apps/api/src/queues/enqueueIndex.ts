@@ -15,6 +15,12 @@ export type IndexJobData = {
   ignoreHidden: boolean;
   /** Snapshotted from user preferences at enqueue time; worker validates rootPath against these. */
   allowedRoots: string[];
+  /** Extensions (lowercase, no dot) to skip — snapshotted from preferences at enqueue time. */
+  blacklistExtensions?: string[];
+  /** Absolute folders (and their subtrees) to skip — snapshotted from preferences at enqueue time. */
+  excludeFolders?: string[];
+  /** Skip build/dependency dirs + non-content file types — snapshotted from preferences at enqueue time. */
+  skipNonContent?: boolean;
 };
 
 /** Live progress attached to the BullMQ job, polled by GET /api/media/index/status. */
@@ -22,6 +28,11 @@ export type IndexJobProgress = {
   scanned: number;
   indexed: number;
   skipped: number;
+  /** Files passed over during the walk (junk dir/file, zero-byte, blacklist, non-content).
+   *  Distinct from `skipped`, which counts already-indexed paths the walk did yield. */
+  filtered: number;
+  /** True when the walk was stopped early by a dev abort (see lib/media/indexAbort). */
+  aborted?: boolean;
 };
 
 export const INDEX_QUEUE = process.env.INDEX_QUEUE ?? "index_queue";

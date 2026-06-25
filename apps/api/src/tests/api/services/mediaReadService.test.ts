@@ -14,10 +14,12 @@ const logger = {
 function makeRepo (overrides: {
   findDocumentForUser?: (_userId: string, _id: string) => Promise<unknown>;
   findDetail?: (_userId: string, _id: string) => Promise<unknown>;
+  listAutoTagNames?: (_userId: string, _tagNames: string[]) => Promise<string[]>;
 } = {}) {
   return {
     findDocumentForUser: overrides.findDocumentForUser ?? (async () => null),
     findDetail: overrides.findDetail ?? (async () => null),
+    listAutoTagNames: overrides.listAutoTagNames ?? (async () => []),
   } as unknown as Parameters<typeof createMediaReadService>[0]["repository"];
 }
 
@@ -166,6 +168,24 @@ test("getMediaDetail: hasText is true when document has text", async () => {
   const result = await svc.getMediaDetail("u", "m1");
   assert.equal(result?.media.hasText, true);
   assert.ok((result?.document?.textTotalLength ?? 0) > 0);
+});
+
+test("getMediaDetail: returns autoTags from the repository for the item's tags", async () => {
+  let receivedTags: string[] | undefined;
+  const svc = makeService({
+    findDetail: async () => ({
+      id: "m1", mimeType: "image/jpeg", textState: "PENDING", tags: ["jpg", "vacation"],
+      thumbnailKey: null, document: null, extractedMetadata: null, bundleItems: [], reminders: [],
+    }),
+    listAutoTagNames: async (_userId: string, tagNames: string[]) => {
+      receivedTags = tagNames;
+      return ["jpg"];
+    },
+  });
+
+  const result = await svc.getMediaDetail("u", "m1");
+  assert.deepEqual(result?.autoTags, ["jpg"]);
+  assert.deepEqual(receivedTags, ["jpg", "vacation"], "queried against the item's tags");
 });
 
 test("getMediaDetail: permissions are always fully granted", async () => {

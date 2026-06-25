@@ -1,10 +1,12 @@
+import { extOf } from "./extensions.js";
+
 /**
  * Map a file extension to a MIME type. Used by in-place indexing, where files
  * are discovered on disk and the browser's `File.type` is unavailable. The set
  * mirrors the extensions enumerated in `lib/tags/mimeTypeTag.ts` so indexed and
  * uploaded items classify, tag, and OCR identically.
  */
-const EXT_MIME: Record<string, string> = {
+export const EXT_MIME: Record<string, string> = {
   // Images
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
@@ -60,6 +62,5 @@ const EXT_MIME: Record<string, string> = {
  * `application/octet-stream` for unknown/extension-less names.
  */
 export function mimeFromExtension (filename: string): string {
-  const ext = filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
-  return EXT_MIME[ext] ?? "application/octet-stream";
+  return EXT_MIME[extOf(filename)] ?? "application/octet-stream";
 }

@@ -1,4 +1,3 @@
-// apps/api/src/routes/media.ts
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { execFile, spawn } from "node:child_process";
@@ -84,7 +83,7 @@ const FALLBACK_WEBP_BASE64 =
 const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
 
 export const mediaRoutes: FastifyPluginAsync = async app => {
-  const { uploadService, queryService, readService, actionsService, indexService } = app.mediaServices;
+  const { uploadService, queryService, readService, actionsService, indexService, deleteService } = app.mediaServices;
   let unpackQueue: Queue<UnpackJob> | null = null;
   const getUnpackQueue = () => {
     if (!unpackQueue) {
@@ -222,8 +221,8 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       tag: z.string().trim().optional(),
       tags: z.unknown().optional(),
       excludeTags: z.string().trim().optional(),
-      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
-      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
+      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
+      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
       mimeType: z.string().trim().optional(),
       sort: z.enum(SORT_OPTIONS).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -272,17 +271,35 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
   });
 
 
-  // GET /media/storage - per-file sizes for the whole vault (storage treemap)
+  // GET /media/storage - data for the storage treemap. Returns the largest
+  // files exactly plus a stratified, byte-weighted sample of the long tail so
+  // the payload/DOM stay small at tens of thousands of files. top/sample are
+  // tunable via query for experimentation.
+  const StorageQuery = z.object({
+    top:    z.coerce.number().int().min(1).max(2000).optional(),
+    sample: z.coerce.number().int().min(0).max(2000).optional(),
+  });
   app.get("/storage", { preHandler: [requireAuth] }, async req => {
     const userId = req.userId!;
-    const items = await queryService.listAllSizes(userId);
-    return { items };
+    const { top, sample } = StorageQuery.parse(req.query);
+    const { tiles, totalFiles, totalBytes } = await queryService.listAllSizes(userId, {
+      topN: top,
+      sampleN: sample,
+    });
+    return { items: tiles, totalFiles, totalBytes };
   });
 
 
   // GET /media/stats - aggregate doc count / storage / type breakdown (overview)
   app.get("/stats", { preHandler: [requireAuth] }, async req => {
     return queryService.getStats(req.userId!);
+  });
+
+
+  // GET /media/storage/categories - per-file-type storage totals (count + bytes)
+  // for the overview "storage by type" graph.
+  app.get("/storage/categories", { preHandler: [requireAuth] }, async req => {
+    return queryService.getCategoryBreakdown(req.userId!);
   });
 
 
@@ -322,37 +339,59 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     });
   });
 
-  // DELETE /media - delete all media matching filter params (same query format as GET /media)
+  // POST /media/abort - dev escape hatch: hard-stop all background processing by
+  // obliterating the index/thumb/ocr/unpack queues (clears the enqueue backlog
+  // and any in-flight index walk that a restart alone won't stop).
+  app.post("/abort", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const result = await actionsService.abortProcessing();
+    req.log.warn({ userId, cleared: result.cleared }, "processing queues aborted (dev)");
+    return reply.send(result);
+  });
+
+  // DELETE /media - enqueue a background bulk delete and return 202 immediately.
+  // The actual set-based delete + thumbnail unlinks run in the delete worker, so a
+  // huge selection never blocks the request or starves the Prisma pool.
+  //   - body { ids: [...] }  → delete those hand-picked items (multi-select).
+  //   - filter query params  → delete everything matching (same format as GET /media);
+  //                            an empty filter deletes every item the user owns.
   app.delete("/", { preHandler: [requireAuth] }, async (req, reply) => {
     const userId = req.userId!;
-    const rawQuery = req.query as Record<string, unknown>;
+
+    const Body = z.object({ ids: z.array(z.string().min(1)).optional() }).optional();
+    const ids = Body.parse(req.body ?? undefined)?.ids;
+
+    if (ids && ids.length > 0) {
+      const { jobId } = await deleteService.startDelete(userId, { ids });
+      req.log.info({ userId, jobId, idCount: ids.length }, "bulk delete enqueued (ids)");
+      return reply.code(202).send({ jobId });
+    }
+
     const Query = z.object({
       q: z.string().trim().optional(),
       tags: z.unknown().optional(),
       excludeTags: z.string().trim().optional(),
-      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
-      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED"]).optional(),
+      thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
+      textState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
       excludeUnpacked: z.coerce.boolean().optional(),
     });
-    const { q, tags, excludeTags: excludeTagsRaw, thumbState, textState, excludeUnpacked } = Query.parse(rawQuery);
+    const { q, tags, excludeTags: excludeTagsRaw, thumbState, textState, excludeUnpacked } = Query.parse(req.query as Record<string, unknown>);
 
     const tagFilters = typeof tags === "string" ? tags.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
     const excludeTagFilters = excludeTagsRaw ? excludeTagsRaw.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
 
-    const hasFilters = q || tagFilters.length > 0 || excludeTagFilters.length > 0 || thumbState || textState || excludeUnpacked;
-    const result = hasFilters
-      ? await actionsService.deleteAllMedia(userId, {
-          queryText: q,
-          tags: tagFilters,
-          excludeTags: excludeTagFilters,
-          thumbState,
-          textState,
-          excludeUnpacked,
-        })
-      : await actionsService.deleteAllMediaBulk(userId);
-
-    req.log.info({ userId, count: result.count }, "bulk delete all media");
-    return reply.send(result);
+    const { jobId } = await deleteService.startDelete(userId, {
+      filters: {
+        queryText: q,
+        tags: tagFilters,
+        excludeTags: excludeTagFilters,
+        thumbState,
+        textState,
+        excludeUnpacked,
+      },
+    });
+    req.log.info({ userId, jobId }, "bulk delete enqueued (filter)");
+    return reply.code(202).send({ jobId });
   });
 
   // DELETE /media/:id - delete my media
@@ -490,11 +529,17 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
     const allowedRoots = prefs?.indexAllowedRoots ?? [];
     const ignoreHidden = prefs?.ignoreHiddenFiles ?? true;
+    const blacklistExtensions = prefs?.indexBlacklistExtensions ?? [];
+    const excludeFolders = prefs?.indexExcludeFolders ?? [];
+    const skipNonContent = prefs?.indexSkipNonContent ?? true;
 
     const result = await indexService.startIndex(userId, {
       path: body.path,
       recursive: body.recursive ?? true,
       ignoreHidden,
+      blacklistExtensions,
+      excludeFolders,
+      skipNonContent,
     }, allowedRoots);
 
     if (!result.ok) {
@@ -522,6 +567,47 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     const status = await indexService.getStatus(userId, jobId);
     if (!status) return reply.notFound();
     return reply.send(status);
+  });
+
+  // GET /media/index/active - the user's in-flight scan, so the UI can re-attach
+  // after a reload. Returns { status: null } when nothing is running.
+  app.get("/index/active", { preHandler: [requireAuth] }, async req => {
+    const status = await indexService.getActive(req.userId!);
+    return { status };
+  });
+
+  // POST /media/index/stop - stop the index walker without touching the worker
+  // queues. Already-discovered files keep processing (thumbnails, OCR); only
+  // the directory walk stops adding new files.
+  app.post("/index/stop", { preHandler: [requireAuth] }, async (req, reply) => {
+    req.log.info({ userId: req.userId }, "index walk stop requested");
+    await actionsService.stopIndexWalk();
+    return reply.send({ ok: true });
+  });
+
+  // GET /media/delete/status?jobId=... - poll bulk-delete progress
+  app.get("/delete/status", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const { jobId } = z.object({ jobId: z.string().min(1) }).parse(req.query);
+
+    const status = await deleteService.getStatus(userId, jobId);
+    if (!status) return reply.notFound();
+    return reply.send(status);
+  });
+
+  // GET /media/delete/active - the user's in-flight bulk delete, so the UI can
+  // re-attach after a reload. Returns { status: null } when nothing is running.
+  app.get("/delete/active", { preHandler: [requireAuth] }, async req => {
+    const status = await deleteService.getActive(req.userId!);
+    return { status };
+  });
+
+  // POST /media/delete/abort - stop in-flight bulk deletes (epoch bump).
+  app.post("/delete/abort", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const result = await deleteService.abort();
+    req.log.warn({ userId, ...result }, "bulk delete aborted");
+    return reply.send(result ?? { epoch: null });
   });
 
   // GET /media/:id/text - chunked extracted text
@@ -560,11 +646,17 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         })
         .parse(req.body ?? {});
 
+      // Snapshot the allow-list so the worker can re-validate an in-place
+      // source path (mirrors the index + thumbnail flows; env-based roots are
+      // empty now that the list lives in user preferences).
+      const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+      const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
       const result = await actionsService.enqueueTextExtraction(userId, id, {
         language: body.language,
         rotation: body.rotation,
         forceOcr: body.forceOcr ?? false,
-      });
+      }, allowedRoots);
 
       if (!result) return reply.notFound();
 
@@ -618,6 +710,15 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
     const detail = await readService.getMediaDetail(userId, id);
     if (!detail) return reply.notFound();
+
+    // Viewing an item is a strong signal it matters: bump its still-pending
+    // thumbnail ahead of any backlog (e.g. after indexing a folder). Fire and
+    // forget — a queue hiccup must never block serving the detail page.
+    if (detail.media.thumbState === "PENDING") {
+      void actionsService.prioritizeThumbnail(id).catch(err => {
+        req.log.warn({ err, mediaId: id }, "[media] thumbnail prioritization failed");
+      });
+    }
 
     // Compute the local filesystem path for "Open in File Explorer".
     // In-place indexed items have sourcePath; fs-stored uploads live at
@@ -702,6 +803,43 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       return reply.send(result);
     },
   );
+
+  // Batch re-queue: collection-level paths kept distinct from the /:id/* routes
+  // so Fastify doesn't treat "batch" as an :id. Both take { ids: string[] }.
+  const batchBodySchema = z.object({ ids: z.array(z.string().min(1)).min(1).max(500) });
+
+  const parseBatchBody = (body: unknown): string[] => {
+    const parsed = batchBodySchema.safeParse(body ?? {});
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(parsed.error.errors[0]?.message ?? "Invalid request body");
+    }
+    return parsed.data.ids;
+  };
+
+  // POST /media/batch/thumbnail - re-queue thumbnail generation for many items
+  app.post("/batch/thumbnail", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const ids = parseBatchBody(req.body);
+
+    // Snapshot the allow-list once for the whole batch (see single-item route).
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
+    const result = await actionsService.regenerateThumbnailsBatch(userId, ids, allowedRoots);
+    return reply.send(result);
+  });
+
+  // POST /media/batch/text - re-run text extraction for many items
+  app.post("/batch/text", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const ids = parseBatchBody(req.body);
+
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const allowedRoots = prefs?.indexAllowedRoots ?? [];
+
+    const result = await actionsService.enqueueTextExtractionBatch(userId, ids, allowedRoots);
+    return reply.send(result);
+  });
 
   // GET /media/:id/thumbnail - stream thumbnail bytes or fallback
   app.get("/:id/thumbnail", { preHandler: [requireAuth] }, async (req, reply) => {
