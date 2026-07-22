@@ -9,13 +9,14 @@ import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { MediaMetadataRepository } from "../../repositories/mediaMetadataRepository.js";
 import type { StorageAdapter } from "../../adapters/storage/types.js";
 import { openSourceStream, readSourceBuffer } from "../../adapters/storage/openSource.js";
-import { waitUntilObjectExists } from "../../adapters/s3ObjectProbe.js";
 import { looksLikeHeic, looksLikeMp4, looksLikePdf, looksLikePng } from "../../lib/fileSignatures.js";
 import { renderPdfThumbnail } from "./renderPdfThumbnail.js";
 import { renderVideoThumbnail } from "./renderVideoThumbnail.js";
 import { renderHeicThumbnail } from "./renderHeicThumbnail.js";
 import { computeThumbKey, type ThumbJob } from "../../queues/enqueueThumbnail.js";
 import { extractMetadataFromBuffer } from "../media/metadata/extractMediaMetadata.js";
+import { resolveFileDate } from "../../lib/tags/rules/fileDate.js";
+import { tagDuplicatesForHash } from "../media/duplicateTag.js";
 import { exceedsThumbnailSize, THUMBNAIL_TOO_LARGE_REASON } from "../../lib/media/processingSupport.js";
 
 type PrefsLookup = { getPreferences: (userId: string) => Promise<{ extractMetadata?: boolean; detectDuplicates?: boolean }> };
@@ -169,13 +170,6 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
     return;
   }
 
-  // S3 objects can lag after upload; in-place files already exist on disk, so
-  // the propagation probe only applies to managed sources.
-  if (!sourcePath) {
-    const exists = await waitUntilObjectExists(storage, bucket, storageKey, { maxTries: 4 });
-    if (!exists) throw new Error("SOURCE_NOT_READY");
-  }
-
   const mimeType = existing?.mimeType ?? "";
   const isVideo = mimeType.startsWith("video/");
 
@@ -213,8 +207,13 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   // Skipped when the user has disabled extractMetadata (privacy — avoids storing EXIF/GPS).
   if (deps.metadataRepository && mimeType && prefs?.extractMetadata !== false) {
     extractMetadataFromBuffer(original, mimeType)
-      .then((meta) => {
-        if (meta) return deps.metadataRepository!.upsert(job.mediaId, meta);
+      .then(async (meta) => {
+        if (!meta) return;
+        await deps.metadataRepository!.upsert(job.mediaId, meta);
+        // Upgrade fileDate to the embedded EXIF/PDF date — it beats any
+        // mtime-derived value stored at ingest (see lib/tags/rules/fileDate.ts).
+        const fileDate = resolveFileDate(meta);
+        if (fileDate) await prismaMedia.setFileDate(job.mediaId, fileDate);
       })
       .catch((err: unknown) => logger.warn({ err, mediaId: job.mediaId }, "metadata extraction failed"));
   }
@@ -225,13 +224,7 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
     const contentHash = crypto.createHash("sha256").update(original).digest("hex");
     await prismaMedia.setContentHash(job.mediaId, contentHash);
     if (prefs?.detectDuplicates && job.userId) {
-      const existing2 = await prismaMedia.findDuplicateByHash(job.userId, contentHash, job.mediaId);
-      if (existing2) {
-        await Promise.all([
-          prismaMedia.addTagIfAbsent(job.mediaId, "duplicate"),
-          prismaMedia.addTagIfAbsent(existing2.id, "duplicate"),
-        ]);
-      }
+      await tagDuplicatesForHash(prismaMedia, job.userId, job.mediaId, contentHash);
     }
   } catch (err: unknown) {
     logger.warn({ err, mediaId: job.mediaId }, "hash/duplicate check failed");

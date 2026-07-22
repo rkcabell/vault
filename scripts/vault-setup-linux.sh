@@ -19,10 +19,10 @@ NC='\033[0m'
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT/.env.prod"
-EXAMPLE="$ROOT/.env.docker.example"
+EXAMPLE="$ROOT/.env.prod.example"
 COMPOSE_FILE="$ROOT/infra/docker/docker-compose.prod.yml"
 COMPOSE_ARGS=(--env-file "$ENV_FILE" -f "$COMPOSE_FILE")
-REQUIRED_ENV_KEYS=(POSTGRES_PASSWORD MINIO_ROOT_PASSWORD JWT_SECRET JWT_REFRESH_SECRET)
+REQUIRED_ENV_KEYS=(POSTGRES_PASSWORD JWT_SECRET JWT_REFRESH_SECRET)
 
 STEP=0
 step() { echo -e "\n${BLUE}${BOLD}[$((++STEP))] $1${NC}"; }
@@ -61,13 +61,13 @@ show_compose_diagnostics() {
   docker "${COMPOSE_ARGS[@]}" ps 2>/dev/null \
     || warn "Unable to read compose service status."
   docker "${COMPOSE_ARGS[@]}" logs --tail 80 \
-    postgres redis minio minio-init api web jobs-ocr jobs-thumb nginx 2>/dev/null \
+    postgres redis api web jobs-ocr jobs-thumb nginx 2>/dev/null \
     || warn "Unable to read compose logs."
 }
 
 assert_services_healthy() {
   local issues=()
-  local running_services=(postgres redis minio api web jobs-ocr jobs-thumb nginx)
+  local running_services=(postgres redis api web jobs-ocr jobs-thumb nginx)
 
   for service in "${running_services[@]}"; do
     local id
@@ -82,19 +82,6 @@ assert_services_healthy() {
       issues+=("$service status is '$status' (expected 'running')")
     fi
   done
-
-  local init_id
-  init_id=$(docker "${COMPOSE_ARGS[@]}" ps --all -q minio-init 2>/dev/null | tr -d '[:space:]')
-  if [[ -z "$init_id" ]]; then
-    issues+=("minio-init container is missing")
-  else
-    local init_status init_exit
-    init_status=$(docker inspect -f '{{.State.Status}}' "$init_id" 2>/dev/null | tr -d '[:space:]')
-    init_exit=$(docker inspect -f '{{.State.ExitCode}}' "$init_id" 2>/dev/null | tr -d '[:space:]')
-    if [[ "$init_status" != "exited" || "$init_exit" != "0" ]]; then
-      issues+=("minio-init status is '$init_status' with exit code '$init_exit' (expected exited/0)")
-    fi
-  fi
 
   if [[ ${#issues[@]} -gt 0 ]]; then
     for issue in "${issues[@]}"; do warn "$issue"; done
@@ -137,15 +124,19 @@ else
 
   jwt_secret=$(new_hex_secret)
   jwt_refresh_secret=$(new_hex_secret)
+  pg_password=$(new_hex_secret)
 
   # Strip carriage returns, patch generated secrets and CORS origin
   content=$(tr -d '\r' < "$EXAMPLE")
   content=$(echo "$content" | sed "s|^JWT_SECRET=.*|JWT_SECRET=$jwt_secret|")
   content=$(echo "$content" | sed "s|^JWT_REFRESH_SECRET=.*|JWT_REFRESH_SECRET=$jwt_refresh_secret|")
   content=$(echo "$content" | sed "s|^CORS_ORIGIN=.*|CORS_ORIGIN=http://localhost|")
+  # Postgres password appears twice: the standalone var and inside the URL.
+  content=$(echo "$content" | sed "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$pg_password|")
+  content=$(echo "$content" | sed "s|^POSTGRES_URL=postgresql://vault:[^@]*@|POSTGRES_URL=postgresql://vault:$pg_password@|")
 
   printf '%s\n' "$content" > "$ENV_FILE"
-  ok ".env.prod created with generated JWT secrets"
+  ok ".env.prod created with generated secrets (JWT + Postgres)"
 fi
 
 missing_keys=()
@@ -212,7 +203,6 @@ echo -e "${GREEN}${BOLD}Vault is running!${NC}"
 echo ""
 echo -e "  Web app       ->  $(hyperlink http://localhost http://localhost)"
 echo -e "  API           ->  $(hyperlink http://localhost:8000 http://localhost:8000)"
-echo -e "  MinIO console ->  $(hyperlink http://localhost:9001 http://localhost:9001)  (vault / vaultvault)"
 echo ""
 echo "To stop:   docker compose --env-file .env.prod -f infra/docker/docker-compose.prod.yml down"
 echo "To start:  docker compose --env-file .env.prod -f infra/docker/docker-compose.prod.yml up -d"

@@ -134,6 +134,18 @@ export function useMediaDetail (id: string) {
     [id, downloadUrl]
   )
 
+  // A GIF only animates when the original file is shown — the generated
+  // thumbnail is a single static frame. Fetch the original's URL up front so
+  // the detail preview autoplays it; every other type keeps the lazy fetch
+  // behind the Download button. On failure the preview just keeps the
+  // static thumbnail, so the error is deliberately swallowed.
+  useEffect(() => {
+    if (loadState !== 'ready') return
+    if (media?.mimeType?.toLowerCase() !== 'image/gif') return
+    if (downloadUrl) return
+    void fetchDownloadUrl().catch(() => {})
+  }, [loadState, media?.mimeType, downloadUrl, fetchDownloadUrl])
+
   const updateTitle = useCallback(
     async (nextTitle: string) => {
       const res = await apiFetch(`/api/media/${id}`, {

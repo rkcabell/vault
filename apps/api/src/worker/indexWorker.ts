@@ -77,7 +77,7 @@ async function* walk (
       if (st.size === 0) { stats.filtered++; continue; } // empty placeholders/stubs — no content
       if (isBlacklisted(entry.name, blacklist)) { stats.filtered++; continue; }
       if (skipNonContent && isNonContentFile(entry.name)) { stats.filtered++; continue; }
-      yield { absPath: full, name: entry.name, size: st.size };
+      yield { absPath: full, name: entry.name, size: st.size, mtimeMs: st.mtimeMs };
     }
   }
 }

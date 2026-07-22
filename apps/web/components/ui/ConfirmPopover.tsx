@@ -12,6 +12,9 @@ interface ConfirmPopoverProps {
   anchorWidth?: number;
   /** When provided, positions the popover using CSS bottom instead of top (px from bottom of viewport). */
   bottomOffset?: number;
+  /** When provided (with anchorWidth), pins the popover's top edge at this px
+   *  from the viewport top — used by anchors that open downward (top bar). */
+  topOffset?: number;
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
@@ -26,6 +29,7 @@ export function ConfirmPopover({
   y,
   anchorWidth,
   bottomOffset,
+  topOffset,
   message,
   confirmLabel = "Delete",
   cancelLabel = "Cancel",
@@ -66,7 +70,11 @@ export function ConfirmPopover({
     // Anchor mode: center on x, width tracks the button
     W = Math.max(anchorWidth + 48, 148);
     left = Math.max(8, Math.min(x - W / 2, vw - W - 8));
-    top = bottomOffset !== undefined ? 0 : Math.max(8, y - POPOVER_HEIGHT - 8);
+    top = topOffset !== undefined
+      ? Math.min(topOffset, vh - POPOVER_HEIGHT - 8)
+      : bottomOffset !== undefined
+        ? 0
+        : Math.max(8, y - POPOVER_HEIGHT - 8);
   } else {
     // Legacy cursor mode
     W = 224;

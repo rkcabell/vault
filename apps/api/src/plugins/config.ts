@@ -19,28 +19,27 @@ const EnvSchema = z
     JWT_ACCESS_TTL: z.string().default("15m"),
     JWT_REFRESH_TTL: z.string().default("7d"),
 
-    // Storage backend selection. "fs" (default) stores blobs on a filesystem
-    // path (mountable from a NAS share); "s3" uses the S3_* settings below.
-    STORAGE_DRIVER: z.enum(["s3", "fs"]).default("fs"),
-    // Defaults so filesystem mode works zero-config; override for a real path
-    // (e.g. a mounted NAS share). Empty string still fails the fs superRefine.
-    STORAGE_FS_PATH: z.string().default("/data/vault"),
-
-    // S3_* are required only when STORAGE_DRIVER=s3 (enforced in superRefine).
-    S3_ENDPOINT: z.string().url().optional(),
-    S3_PUBLIC_ENDPOINT: z.string().url().optional(),
-    S3_REGION: z.string().default("us-east-1"),
-    S3_ACCESS_KEY_ID: z.string().optional(),
-    S3_SECRET_ACCESS_KEY: z.string().optional(),
-    // Logical namespace for object keys. Used as the S3 bucket name; ignored by
-    // the filesystem adapter, so it carries a default that fs deployments inherit.
-    S3_BUCKET: z.string().default("vault-media"),
+    // Blob storage location: all managed originals + thumbnails live under this
+    // filesystem path (point it at a local drive or a mounted NAS share).
+    // Defaults so a zero-config boot works.
+    STORAGE_FS_PATH: z.string().min(1).default("/data/vault"),
+    // Logical key namespace, threaded through service calls but inert on the
+    // filesystem backend. Kept to avoid churn; removed with the key-scheme rework.
+    STORAGE_BUCKET: z.string().default("vault-media"),
     REDIS_URL: z.string().url(),
 
     // In-place indexing allow-list: comma-separated absolute directories Vault
     // may walk and read originals from without copying them. Empty/unset = the
     // in-place indexing feature is disabled. See lib/media/indexRoots.ts.
     INDEX_ALLOWED_ROOTS: z.string().optional(),
+
+    // Lock out new account creation once the owner's account exists. Parsed as
+    // a string for the same "false"-coercion reason as LOCAL_EXPLORER below,
+    // but with the opposite default (off unless explicitly enabled).
+    DISABLE_REGISTRATION: z
+      .string()
+      .optional()
+      .transform(v => v === "true"),
 
     // Whether the server may open a native file manager (Explorer/Finder) on the
     // host. Only valid when the browser and server share a machine (local dev /
@@ -55,31 +54,6 @@ const EnvSchema = z
       .string()
       .optional()
       .transform(v => v !== "false"),
-  })
-  .superRefine((val, ctx) => {
-    if (val.STORAGE_DRIVER === "s3") {
-      const required = [
-        "S3_ENDPOINT",
-        "S3_PUBLIC_ENDPOINT",
-        "S3_ACCESS_KEY_ID",
-        "S3_SECRET_ACCESS_KEY",
-      ] as const;
-      for (const key of required) {
-        if (!val[key]) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [key],
-            message: `${key} is required when STORAGE_DRIVER=s3`,
-          });
-        }
-      }
-    } else if (!val.STORAGE_FS_PATH) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["STORAGE_FS_PATH"],
-        message: "STORAGE_FS_PATH is required when STORAGE_DRIVER=fs",
-      });
-    }
   })
   // Expose the parsed allow-list alongside the raw env var so callers read a
   // normalized string[] (`config.indexAllowedRoots`) instead of re-splitting.

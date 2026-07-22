@@ -1,5 +1,4 @@
 import fp from "fastify-plugin";
-import { createS3Adapter } from "../adapters/s3Adapter.js";
 import { createFsAdapter } from "../adapters/storage/fsAdapter.js";
 import type { StorageAdapter } from "../adapters/storage/types.js";
 
@@ -10,23 +9,17 @@ declare module "fastify" {
 }
 
 /**
- * Decorate `app.storage` with the configured backend adapter. Must be
- * registered after the `s3` plugin (so `app.s3` exists in S3 mode) and before
- * any plugin/route that uses `app.storage` (e.g. mediaServices).
+ * Decorate `app.storage` with the filesystem storage adapter. Must be
+ * registered before any plugin/route that uses `app.storage` (e.g.
+ * mediaServices). Blobs live under STORAGE_FS_PATH; the browser reaches them
+ * through the authenticated proxy routes in `routes/storage.ts` — presign URLs
+ * are site-relative (/api/storage/blob/...), so cookies authenticate.
  */
 export default fp(
   async app => {
-    const storage: StorageAdapter =
-      app.config.STORAGE_DRIVER === "fs"
-        ? createFsAdapter({
-            basePath: app.config.STORAGE_FS_PATH!, // required by config superRefine in fs mode
-            // Presign URLs are site-relative (/api/storage/blob/...); the browser
-            // reaches them via the web app's /api rewrite, so cookies authenticate.
-          })
-        : createS3Adapter(app.s3!);
-
+    const storage = createFsAdapter({ basePath: app.config.STORAGE_FS_PATH });
     app.decorate("storage", storage);
-    app.log.info({ driver: app.config.STORAGE_DRIVER }, "storage adapter ready");
+    app.log.info({ basePath: app.config.STORAGE_FS_PATH }, "storage adapter ready (filesystem)");
   },
   { name: "storage" },
 );

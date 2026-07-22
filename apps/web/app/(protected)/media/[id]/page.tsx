@@ -15,6 +15,7 @@ import { MessageCard } from "@/components/ui/MessageCard";
 import { TAGS_UPDATED_EVENT, emitTagsUpdated } from "@/lib/tags";
 import { emitBundlesUpdated } from "@/lib/bundles";
 import { useMediaDetail } from "@/hooks/media/useMediaDetail";
+import { useMediaEvents } from "@/hooks/useMediaEvents";
 import { useServerStatus } from "@/hooks/useServerStatus";
 import { MediaPreviewCard } from "@/components/media/MediaPreviewCard";
 import { MediaInfoCard } from "@/components/media/MediaInfoCard";
@@ -203,61 +204,22 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
 
   const title = media?.title || media?.filename || "Media details";
   const busy = isDeleting || isDownloading || isUnpacking;
-  useEffect(() => {
-    let es: EventSource | null = null;
-    let retryDelay = 2_000;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let unmounted = false;
-
-    const connect = () => {
-      if (unmounted) return;
-      es = new EventSource("/api/media/events");
-
-      es.onopen = () => {
-        retryDelay = 2_000; // reset backoff on successful connect
+  // Server-pushed updates for THIS item (worker-state flips, server-side tag
+  // changes). List-membership events are the library's concern — ignored here.
+  useMediaEvents({
+    onConnect: () => refresh({ silent: true }),
+    onEvent: (event) => {
+      if (event.mediaId !== id) return;
+      if (event.field === "mediaDeleted" || event.field === "mediaCreated") return;
+      if (event.field === "tagsUpdated") {
+        emitTagsUpdated();
         refresh({ silent: true });
-      };
-
-      es.onmessage = (e: MessageEvent<string>) => {
-        try {
-          const { mediaId, field, value } = JSON.parse(e.data) as {
-            mediaId?: string;
-            field?: "textState" | "thumbState" | "tagsUpdated";
-            value?: string;
-          };
-          if (mediaId !== id || !field || !value) return;
-          if (field === "tagsUpdated") {
-            emitTagsUpdated();
-            refresh({ silent: true });
-            return;
-          }
-          setMedia((prev) => (prev ? { ...prev, [field]: value } : prev));
-          refresh({ silent: true });
-        } catch {
-          // ignore malformed messages
-        }
-      };
-
-      // Close and schedule a reconnect with exponential backoff (2 s → 4 → 8 → … → 60 s).
-      // Prevents the browser's fixed 3 s retry from hammering the port during downtime.
-      es.onerror = () => {
-        es?.close();
-        es = null;
-        if (!unmounted) {
-          retryTimer = setTimeout(connect, retryDelay);
-          retryDelay = Math.min(retryDelay * 2, 60_000);
-        }
-      };
-    };
-
-    connect();
-
-    return () => {
-      unmounted = true;
-      if (retryTimer !== null) clearTimeout(retryTimer);
-      es?.close();
-    };
-  }, [id, refresh, setMedia]);
+        return;
+      }
+      setMedia((prev) => (prev ? { ...prev, [event.field]: event.value } : prev));
+      refresh({ silent: true });
+    },
+  });
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -602,6 +564,8 @@ const handleDelete = (e: React.MouseEvent) => {
                   localPath={localPath}
                   onSaveTitle={updateTitle}
                   busy={busy}
+                  onRevealPath={handleRevealInExplorer}
+                  canReveal={localExplorer && !!localPath}
                 />
               </PanelCard>
             </div>
@@ -612,7 +576,7 @@ const handleDelete = (e: React.MouseEvent) => {
         open={confirmState !== null}
         x={confirmState?.x ?? 0}
         y={confirmState?.y ?? 0}
-        message="Delete this media item? This cannot be undone."
+        message="Delete this media record? This removes it from your library, not your drive."
         onConfirm={() => { setConfirmState(null); void doDelete(); }}
         onCancel={() => setConfirmState(null)}
       />

@@ -17,11 +17,10 @@ $ErrorActionPreference = "Stop"
 
 $ROOT = Split-Path -Parent $PSScriptRoot
 $ENV_FILE = Join-Path $ROOT ".env.prod"
-$EXAMPLE = Join-Path $ROOT ".env.docker.example"
+$EXAMPLE = Join-Path $ROOT ".env.prod.example"
 $COMPOSE_FILE = Join-Path $ROOT "infra\docker\docker-compose.prod.yml"
 $REQUIRED_ENV_KEYS = @(
     "POSTGRES_PASSWORD",
-    "MINIO_ROOT_PASSWORD",
     "JWT_SECRET",
     "JWT_REFRESH_SECRET"
 )
@@ -85,7 +84,7 @@ function Show-ComposeDiagnostics {
         Warn "Unable to read compose service status."
     }
 
-    & docker @(Get-ComposeBaseArgs) logs --tail 80 postgres redis minio minio-init api web jobs-ocr jobs-thumb nginx 2>$null
+    & docker @(Get-ComposeBaseArgs) logs --tail 80 postgres redis api web jobs-ocr jobs-thumb nginx 2>$null
     if ($LASTEXITCODE -ne 0) {
         Warn "Unable to read compose logs."
     }
@@ -142,7 +141,7 @@ function Get-EnvValue {
 function Assert-ServicesHealthy {
     $issues = @()
     $baseArgs = Get-ComposeBaseArgs
-    $runningServices = @("postgres", "redis", "minio", "api", "web", "jobs-ocr", "jobs-thumb", "nginx")
+    $runningServices = @("postgres", "redis", "api", "web", "jobs-ocr", "jobs-thumb", "nginx")
 
     foreach ($service in $runningServices) {
         $id = (& docker @baseArgs ps -q $service 2>$null | Out-String).Trim()
@@ -153,17 +152,6 @@ function Assert-ServicesHealthy {
         }
     }
 
-    $initId = (& docker @baseArgs ps --all -q minio-init 2>$null | Out-String).Trim()
-    if (-not $initId) {
-        $issues += "minio-init container is missing"
-    }
-    else {
-        $initStatus = (& docker inspect -f "{{.State.Status}}"   $initId 2>$null | Out-String).Trim()
-        $initExitCode = (& docker inspect -f "{{.State.ExitCode}}" $initId 2>$null | Out-String).Trim()
-        if ($initStatus -ne "exited" -or $initExitCode -ne "0") {
-            $issues += "minio-init status is '$initStatus' with exit code '$initExitCode' (expected exited/0)"
-        }
-    }
 
     if ($issues.Count -gt 0) {
         foreach ($issue in $issues) { Warn $issue }
@@ -274,16 +262,20 @@ else {
 
     $jwtSecret = New-HexSecret
     $jwtRefreshSecret = New-HexSecret
+    $pgPassword = New-HexSecret
 
     $content = Get-Content $EXAMPLE -Raw
     $content = $content -replace "(?m)^JWT_SECRET=\S+", "JWT_SECRET=$jwtSecret"
     $content = $content -replace "(?m)^JWT_REFRESH_SECRET=\S+", "JWT_REFRESH_SECRET=$jwtRefreshSecret"
     $content = $content -replace "(?m)^CORS_ORIGIN=\S+", "CORS_ORIGIN=http://localhost"
+    # Postgres password appears twice: the standalone var and inside the URL.
+    $content = $content -replace "(?m)^POSTGRES_PASSWORD=\S+", "POSTGRES_PASSWORD=$pgPassword"
+    $content = $content -replace "(?m)^POSTGRES_URL=postgresql://vault:[^@]+@", "POSTGRES_URL=postgresql://vault:$pgPassword@"
 
     # Write without BOM and with LF line endings for docker compose.
     [System.IO.File]::WriteAllText($ENV_FILE, ($content -replace "`r`n", "`n"))
 
-    Ok ".env.prod created with generated JWT secrets"
+    Ok ".env.prod created with generated secrets (JWT + Postgres)"
 }
 
 $missingKeys = @()
@@ -322,7 +314,6 @@ Write-Host ""
 Write-Host "  Web app       ->  http://localhost"
 Start-Process "http://localhost"
 Write-Host "  API           ->  http://localhost:8000"
-Write-Host "  MinIO console ->  http://localhost:9001  (vault / vaultvault)"
 Write-Host ""
 Write-Host "To stop:   pnpm vault:down"
 Write-Host "To start:  pnpm vault:up"

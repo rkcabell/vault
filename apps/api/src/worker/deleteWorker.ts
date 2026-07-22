@@ -23,11 +23,14 @@ type DeleteWorkerDeps = {
   bundleRepository: {
     clearCoverMediaForIds: (userId: string, mediaIds: string[]) => Promise<void>;
   };
-  s3Adapter: {
+  storage: {
     deleteIfPresent: (input: { bucket: string; key: string }) => Promise<void>;
   };
   bucket: string;
   logger: DeleteLogger;
+  /** Publishes a media event to Redis so open library views refresh without a
+   *  manual reload. Optional — tests and minimal wiring may omit it. */
+  publishJobUpdate?: (update: { userId: string; mediaId: string; field: string; value: string }) => void;
   /** Reads the current abort epoch (see lib/media/deleteAbort). Defaults to "never abort". */
   readAbortEpoch?: () => Promise<number>;
   /** How many rows to delete per chunk (tests use a small value). */
@@ -78,7 +81,7 @@ export function createDeleteProcessor (deps: DeleteWorkerDeps): Processor<Delete
     // Storage failures are non-fatal — once the rows are gone a stray object is
     // harmless (no row references it), so a failed unlink shouldn't fail the chunk.
     await mapLimit(storageOps, storageConcurrency, op =>
-      deps.s3Adapter.deleteIfPresent(op).catch(() => {}),
+      deps.storage.deleteIfPresent(op).catch(() => {}),
     );
 
     return deleted;
@@ -102,6 +105,7 @@ export function createDeleteProcessor (deps: DeleteWorkerDeps): Processor<Delete
     let aborted = false;
     let didDelete = false;
 
+    try {
     if (useIds) {
       for (let i = 0; i < ids!.length; i += chunkSize) {
         if (await isAborted()) { aborted = true; break; }
@@ -111,6 +115,9 @@ export function createDeleteProcessor (deps: DeleteWorkerDeps): Processor<Delete
         try {
           progress.deleted += await deleteChunk(userId, rows);
           didDelete = true;
+          // Per-chunk event so a long delete empties open views progressively
+          // (the client debounces its refetch).
+          deps.publishJobUpdate?.({ userId, mediaId: "*", field: "mediaDeleted", value: String(progress.deleted) });
         } catch (err) {
           progress.failed += chunkIds.length;
           deps.logger.warn({ userId, err }, "delete chunk failed");
@@ -126,6 +133,7 @@ export function createDeleteProcessor (deps: DeleteWorkerDeps): Processor<Delete
         try {
           progress.deleted += await deleteChunk(userId, rows);
           didDelete = true;
+          deps.publishJobUpdate?.({ userId, mediaId: "*", field: "mediaDeleted", value: String(progress.deleted) });
         } catch (err) {
           // A failing chunk would otherwise be re-selected forever — bail out.
           progress.failed += rows.length;
@@ -136,8 +144,24 @@ export function createDeleteProcessor (deps: DeleteWorkerDeps): Processor<Delete
       }
     }
 
-    // One authoritative pass fixes every Tag.count against committed data.
-    if (didDelete) await deps.mediaRepository.reconcileTagCounts(userId);
+    } finally {
+      // One authoritative pass fixes every Tag.count against committed data.
+      // Runs in a finally so an unexpected throw mid-job can't leave counts
+      // permanently drifted from the chunks that already committed.
+      if (didDelete) {
+        await deps.mediaRepository.reconcileTagCounts(userId).catch(err =>
+          deps.logger.warn({ userId, err }, "tag count reconcile failed"),
+        );
+        // Tell open library views the list changed. Published after the counts
+        // are reconciled so the refetch they trigger sees consistent data.
+        deps.publishJobUpdate?.({
+          userId,
+          mediaId: "*",
+          field: "mediaDeleted",
+          value: String(progress.deleted),
+        });
+      }
+    }
 
     if (aborted) {
       progress.aborted = true;

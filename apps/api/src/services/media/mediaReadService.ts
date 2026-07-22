@@ -1,7 +1,7 @@
 import type { FastifyBaseLogger } from "fastify";
 import type { Queue } from "bullmq";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
-import type { S3Adapter } from "../../adapters/s3Adapter.js";
+import type { StorageAdapter } from "../../adapters/storage/types.js";
 import type { OcrJobData } from "../ocrProcessingService.js";
 import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
 import { openSourceStream } from "../../adapters/storage/openSource.js";
@@ -71,7 +71,7 @@ function normalizePdfTextPages (value: unknown): PdfTextPage[] | null {
 
 type MediaReadDeps = {
   repository: MediaRepository;
-  s3Adapter: S3Adapter;
+  storage: StorageAdapter;
   bucket: string;
   logger: FastifyBaseLogger;
   ocrQueue?: Queue<OcrJobData>;
@@ -262,7 +262,7 @@ export function createMediaReadService (deps: MediaReadDeps) {
   const getThumbnail = async (id: string) => {
     const thumbKey = computeThumbKey(id);
     try {
-      const res = await deps.s3Adapter.getObjectStream({
+      const res = await deps.storage.getObjectStream({
         bucket: deps.bucket,
         key: thumbKey,
       });
@@ -283,22 +283,29 @@ export function createMediaReadService (deps: MediaReadDeps) {
    * presigned URL (getDownloadUrl), not this proxy. Returns null when the item
    * is missing, not in-place, or the source file is gone.
    */
-  const getSourceStream = async (userId: string, id: string, allowedRoots: string[]) => {
+  const getSourceStream = async (
+    userId: string,
+    id: string,
+    allowedRoots: string[],
+    range?: { start: number; end: number },
+  ) => {
     const media = await deps.repository.findSourceInfo(userId, id);
     if (!media || !media.sourcePath) return null;
 
     try {
       const res = await openSourceStream({
-        storage: deps.s3Adapter,
+        storage: deps.storage,
         bucket: deps.bucket,
         storageKey: media.storageKey,
         sourcePath: media.sourcePath,
         allowedRoots,
+        range,
       });
       if (!res) return null;
       return {
         body: res.body,
         contentLength: res.contentLength,
+        totalLength: res.totalLength ?? res.contentLength,
         mimeType: media.mimeType || "application/octet-stream",
         filename: media.filename,
       };

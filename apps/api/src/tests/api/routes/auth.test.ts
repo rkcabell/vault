@@ -57,16 +57,18 @@ function makeJwt({
   return { signAccess, signRefresh, verifyAccess, verifyRefresh };
 }
 
-async function buildApp(opts: { prisma?: PrismaMockOpts; jwt?: JwtMockOpts } = {}) {
+async function buildApp(opts: { prisma?: PrismaMockOpts; jwt?: JwtMockOpts; disableRegistration?: boolean } = {}) {
   const app = Fastify({ logger: false });
   await app.register(sensible);
   await app.register(cookie);
-   
+
   (app as any).decorate("prisma", makePrisma(opts.prisma));
-   
+
   (app as any).decorate("jwt", makeJwt(opts.jwt));
-   
+
   (app as any).decorate("rateLimit", () => async () => {});
+
+  (app as any).decorate("config", { DISABLE_REGISTRATION: opts.disableRegistration ?? false });
   await app.register(authRoutes);
   return app;
 }
@@ -164,6 +166,27 @@ test("POST /register: valid body creates user and returns tokens", async () => {
   assert.equal(body.user.email, "new@example.com");
   assert.equal(body.access, "acc-tok");
   assert.equal(body.refresh, "ref-tok");
+});
+
+test("POST /register: returns 403 when DISABLE_REGISTRATION is set", async () => {
+  let created = false;
+  const app = await buildApp({
+    prisma: {
+      userFindUnique: async () => null,
+      userCreate: async () => { created = true; return { id: "x", email: "x@example.com" }; },
+    },
+    disableRegistration: true,
+  });
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/register",
+    headers: JSON_CT,
+    payload: JSON.stringify({ email: "new@example.com", password: "password1234" }),
+  });
+
+  assert.equal(res.statusCode, 403);
+  assert.equal(created, false, "no user row created while registration is disabled");
 });
 
 test("POST /register: invalid email returns 400", async () => {

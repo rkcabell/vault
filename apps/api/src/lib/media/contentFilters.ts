@@ -77,8 +77,9 @@ export const BUILD_DIR_SUFFIXES: readonly string[] = [".dist-info", ".egg-info",
  * Allowlist of extensions Vault can index and process
  * mimeFromExtension.ts sync to handle new formats as they are added.
  * Any extension absent from this set is treated as non-content and skipped.
+ * Exported so the settings UI can show users exactly what gets indexed.
  */
-const CONTENT_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(EXT_MIME));
+export const CONTENT_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(EXT_MIME));
 
 /**
  * Skip important directories such as OS/system files, disk metadata, trash/recycle bin.

@@ -10,7 +10,6 @@ const GENERAL_PREF_KEYS = [
   "detectDuplicates",
   "lowMemoryMode",
   "autoUnpackArchives",
-  "ignoreHiddenFiles",
   "yellowHighlight",
   "soonWindowDays",
 ] as const;
@@ -112,14 +111,6 @@ export function GeneralSettingsCard() {
           checked={prefs.autoUnpackArchives}
           disabled={!isLoaded}
           onChange={v => updatePreferences({ autoUnpackArchives: v })}
-        />
-        <SettingRow
-          id="ignore-hidden-files"
-          label="Ignore hidden files"
-          description='Skip hidden files (e.g. .immich, .DS_Store)'
-          checked={prefs.ignoreHiddenFiles}
-          disabled={!isLoaded}
-          onChange={v => updatePreferences({ ignoreHiddenFiles: v })}
         />
         <SettingRow
           id="yellow-highlight"

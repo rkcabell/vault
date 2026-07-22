@@ -1,7 +1,7 @@
 // File: apps/web/app/(protected)/library/LibraryPageInner.tsx
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { usePreferences } from "@/hooks/usePreferences";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -26,6 +26,9 @@ import { regenerateThumbnailsBatch, extractTextBatch } from "@/lib/media/batch";
 import { emitTagsUpdated, TAGS_UPDATED_EVENT, partitionTagsByOrigin } from "@/lib/tags";
 import type { TagOrigin } from "@vault/types";
 import { BUNDLES_UPDATED_EVENT, emitBundlesUpdated } from "@/lib/bundles";
+import { MEDIA_LIST_UPDATED_EVENT, type MediaListUpdatedDetail } from "@/lib/media/events";
+import { useMediaEvents } from "@/hooks/useMediaEvents";
+import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,6 +53,15 @@ const SORT_OPTIONS = [
   { value: "size_desc", label: "Largest" },
   { value: "size_asc", label: "Smallest" },
   { value: "mimeType_asc", label: "Type" },
+  { value: "starred_first", label: "Starred first" },
+  // Sorts by the file's own date (EXIF/PDF/mtime, not upload time) and lays
+  // the library out with year + month section breaks.
+  { value: "fileDate_desc", label: "Year" },
+] as const;
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
 ] as const;
 
 type SortValue = (typeof SORT_OPTIONS)[number]["value"];
@@ -60,9 +72,9 @@ type DensityValue = (typeof DENSITY_OPTIONS)[number];
 // items left behind after Abort Queues so they can be re-queued in bulk.
 const STATUS_OPTIONS = [
   { value: "all", label: "All statuses", thumbState: "", textState: "" },
-  { value: "thumb_pending", label: "Needs thumbnail", thumbState: "PENDING", textState: "" },
+  { value: "thumb_pending", label: "Pending thumbnail", thumbState: "PENDING", textState: "" },
   { value: "thumb_error", label: "Thumbnail error", thumbState: "FAILED", textState: "" },
-  { value: "text_pending", label: "Needs text", thumbState: "", textState: "PENDING" },
+  { value: "text_pending", label: "Pending text", thumbState: "", textState: "PENDING" },
   { value: "text_error", label: "Text error", thumbState: "", textState: "ERROR" },
 ] as const;
 
@@ -81,7 +93,9 @@ type MediaListItem = {
   tags?: string[];
   mimeType?: string | null;
   sizeBytes?: number | null;
+  starred?: boolean;
   createdAt: string;
+  fileDate?: string | null;
 };
 
 type MediaListResponse = {
@@ -160,7 +174,7 @@ export default function LibraryPageInner() {
   const [isRequeueing, setIsRequeueing] = useState(false);
 
   // Delete confirmation popover.
-  const [confirmState, setConfirmState] = useState<{ x: number; y: number; anchorWidth?: number; bottomOffset?: number; message: string; action: () => void } | null>(null);
+  const [confirmState, setConfirmState] = useState<{ x: number; y: number; anchorWidth?: number; bottomOffset?: number; topOffset?: number; message: string; action: () => void } | null>(null);
 
   // Refresh control.
   const [refreshToken, setRefreshToken] = useState(0);
@@ -252,6 +266,45 @@ export default function LibraryPageInner() {
     (viewMode === "grid" && isCompactGrid) || (viewMode === "list" && isCompactList)
       ? "compact"
       : "comfortable";
+
+  // "Year" sort: group the ordered list into year → month sections. Adjacent
+  // grouping is enough because the API returns items ordered by fileDate;
+  // null dates sort last and collapse into a single "Unknown date" section.
+  const isYearSort = sort === "fileDate_desc";
+  // Year sections the user has collapsed, keyed by year key ("2024" / "unknown").
+  const [collapsedYears, setCollapsedYears] = useState<Set<string>>(new Set());
+  const toggleYearCollapsed = useCallback((key: string) => {
+    setCollapsedYears(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  const dateGroups = useMemo(() => {
+    if (!isYearSort) return null;
+    type MonthGroup = { key: string; label: string | null; entries: { media: MediaItem; index: number }[] };
+    type YearGroup = { key: string; label: string; months: MonthGroup[] };
+    const groups: YearGroup[] = [];
+    mediaItems.forEach((media, index) => {
+      const parsed = media.fileDate ? new Date(media.fileDate) : null;
+      const d = parsed !== null && !Number.isNaN(parsed.getTime()) ? parsed : null;
+      const yearKey = d ? String(d.getFullYear()) : "unknown";
+      const monthKey = d ? `${yearKey}-${d.getMonth()}` : "unknown";
+      let year = groups[groups.length - 1];
+      if (!year || year.key !== yearKey) {
+        year = { key: yearKey, label: d ? yearKey : "Unknown date", months: [] };
+        groups.push(year);
+      }
+      let month = year.months[year.months.length - 1];
+      if (!month || month.key !== monthKey) {
+        month = { key: monthKey, label: d ? MONTH_NAMES[d.getMonth()] : null, entries: [] };
+        year.months.push(month);
+      }
+      month.entries.push({ media, index });
+    });
+    return groups;
+  }, [isYearSort, mediaItems]);
 
   const buildQuery = useCallback(
     (cursor?: string) => {
@@ -374,8 +427,14 @@ export default function LibraryPageInner() {
         tags: item.tags,
         mimeType: item.mimeType,
         sizeBytes: item.sizeBytes,
+        starred: item.starred,
+        fileDate: item.fileDate ?? null,
       } satisfies MediaItem;
     });
+  }, []);
+
+  const handleStarToggle = useCallback((id: string, next: boolean) => {
+    setMediaItems(prev => prev.map(item => (item.id === id ? { ...item, starred: next } : item)));
   }, []);
 
   const fetchMedia = useCallback(
@@ -524,66 +583,61 @@ export default function LibraryPageInner() {
     return () => window.removeEventListener(TAGS_UPDATED_EVENT, handler);
   }, [router]);
 
-  // SSE: receive job-state updates pushed from the server instead of polling.
-  // Empty deps — mounts once. Uses fetchMediaRef so it always calls the latest
-  // version without causing reconnects on every buildQuery/gridCols change.
-  // Uses manual exponential backoff instead of the browser's built-in retry
-  // (~3 s fixed) to avoid socket exhaustion during server restarts.
+  // Debounced silent refetch for list-membership events — bulk deletes and
+  // index walks publish one event per chunk/batch, so coalesce bursts into a
+  // single fetch instead of refetching per event.
+  const listRefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleListRefetch = useCallback(() => {
+    if (listRefetchTimerRef.current !== null) return;
+    listRefetchTimerRef.current = setTimeout(() => {
+      listRefetchTimerRef.current = null;
+      fetchMediaRef.current({ silent: true });
+    }, 400);
+  }, []);
+  useEffect(() => () => {
+    if (listRefetchTimerRef.current !== null) clearTimeout(listRefetchTimerRef.current);
+  }, []);
+
+  // Server-pushed updates (SSE): per-item worker-state flips patch the grid in
+  // place; create/delete events refetch the list — this is what makes bulk
+  // deletes, index walks, and other tabs' uploads appear without a manual reload.
+  useMediaEvents({
+    // Re-fetch on every (re)connect to catch events missed while disconnected.
+    onConnect: () => fetchMediaRef.current({ silent: true }),
+    onEvent: (event) => {
+      if (event.field === "tagsUpdated") {
+        emitTagsUpdated();
+        return;
+      }
+      if (event.field === "mediaDeleted" || event.field === "mediaCreated") {
+        if (event.field === "mediaDeleted" && event.mediaId !== "*") {
+          // Single-item delete carries the id — drop it without waiting.
+          deletedIdsRef.current.add(event.mediaId);
+          setMediaItems((prev) => prev.filter((item) => item.id !== event.mediaId));
+        }
+        scheduleListRefetch();
+        return;
+      }
+      setMediaItems((prev) =>
+        prev.map((item) => (item.id === event.mediaId ? { ...item, [event.field]: event.value } : item))
+      );
+    },
+  });
+
+  // Same-tab signal from mutations elsewhere in the app (delete completion,
+  // purge, unpack) — the media counterpart of the bundles listener above.
   useEffect(() => {
-    let es: EventSource | null = null;
-    let retryDelay = 2_000;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let unmounted = false;
-
-    const connect = () => {
-      if (unmounted) return;
-      es = new EventSource("/api/media/events");
-
-      es.onopen = () => {
-        retryDelay = 2_000; // reset backoff on successful connect
-        // Re-fetch the full list to catch any missed updates during downtime.
-        fetchMediaRef.current({ silent: true });
-      };
-
-      es.onmessage = (e: MessageEvent<string>) => {
-        try {
-          const { mediaId, field, value } = JSON.parse(e.data) as {
-            mediaId?: string;
-            field?: "textState" | "thumbState" | "tagsUpdated";
-            value?: string;
-          };
-          if (!mediaId || !field || !value) return;
-          if (field === "tagsUpdated") {
-            emitTagsUpdated();
-            return;
-          }
-          setMediaItems((prev) =>
-            prev.map((item) => (item.id === mediaId ? { ...item, [field]: value } : item))
-          );
-        } catch {
-          // ignore malformed frames
-        }
-      };
-
-      // Close and schedule a reconnect with exponential backoff (2 s → 4 → 8 → … → 60 s).
-      // Prevents the browser's fixed 3 s retry from hammering the port during downtime.
-      es.onerror = () => {
-        es?.close();
-        es = null;
-        if (!unmounted) {
-          retryTimer = setTimeout(connect, retryDelay);
-          retryDelay = Math.min(retryDelay * 2, 60_000);
-        }
-      };
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<MediaListUpdatedDetail>).detail;
+      if (detail?.removedIds?.length) {
+        for (const id of detail.removedIds) deletedIdsRef.current.add(id);
+        const removed = new Set(detail.removedIds);
+        setMediaItems((prev) => prev.filter((item) => !removed.has(item.id)));
+      }
+      fetchMediaRef.current({ silent: true });
     };
-
-    connect();
-
-    return () => {
-      unmounted = true;
-      if (retryTimer !== null) clearTimeout(retryTimer);
-      es?.close();
-    };
+    window.addEventListener(MEDIA_LIST_UPDATED_EVENT, handler);
+    return () => window.removeEventListener(MEDIA_LIST_UPDATED_EVENT, handler);
   }, []);
 
   const handleUploadClick = useCallback(() => {
@@ -594,6 +648,13 @@ export default function LibraryPageInner() {
     if (!nextCursor) return;
     fetchMedia({ cursor: nextCursor, append: true });
   }, [fetchMedia, nextCursor]);
+
+  // Endless scroll: auto-load the next page as the sentinel nears the viewport.
+  const loadMoreSentinelRef = useInfiniteScroll({
+    hasMore: !!nextCursor,
+    isLoading: isLoadingMore || isLoading,
+    onLoadMore: handleLoadMore,
+  });
 
   const handleDelete = useCallback(
     (id: string, e: React.MouseEvent) => {
@@ -793,7 +854,7 @@ export default function LibraryPageInner() {
     [selectedIds, isRequeueing],
   );
 
-  const handleBulkDelete = useCallback((info: { centerX: number; anchorWidth: number; bottomOffset: number }) => {
+  const handleBulkDelete = useCallback((info: { centerX: number; anchorWidth: number; topOffset: number }) => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0 && !isSelectAllLibrary) return;
     const count = isSelectAllLibrary ? (totalCount ?? ids.length) : ids.length;
@@ -801,7 +862,7 @@ export default function LibraryPageInner() {
       x: info.centerX,
       y: 0,
       anchorWidth: info.anchorWidth,
-      bottomOffset: info.bottomOffset,
+      topOffset: info.topOffset,
       message: `Delete ${count} ${count === 1 ? "item" : "items"}? This cannot be undone.`,
       action: async () => {
         // Both paths enqueue a background job and return immediately — the worker
@@ -885,6 +946,78 @@ export default function LibraryPageInner() {
     },
     [addFiles, router]
   );
+
+  // Shared card renderer so the flat and year-grouped layouts stay identical.
+  // gridCols only applies to grid cards (list cards never received it).
+  const renderMediaCard = (media: MediaItem, index: number) => (
+    <MediaCard
+      key={media.id}
+      media={media}
+      variant={viewMode}
+      density={cardDensity}
+      {...(viewMode === "grid" ? { gridCols } : {})}
+      loading={index < EAGER_THUMB_COUNT ? "eager" : "lazy"}
+      onDownload={isSelectMode ? undefined : (id) => void handleDownload(id)}
+      onDelete={isSelectMode ? undefined : handleDelete}
+      onRename={isSelectMode ? undefined : handleRename}
+      onStarToggle={isSelectMode ? undefined : handleStarToggle}
+      isDeleting={deletingIds.has(media.id)}
+      isSelectMode={isSelectMode}
+      isSelected={selectedIds.has(media.id)}
+      onSelect={handleSelect}
+    />
+  );
+
+  // Year sort layout: collapsible year headers with month sub-headers between
+  // card runs. col-span-full makes the headings span the CSS grid; in list
+  // mode they render as full-width rows inside the bordered list container.
+  const renderDateGroups = () =>
+    (dateGroups ?? []).map(year => {
+      const isCollapsed = collapsedYears.has(year.key);
+      const itemCount = year.months.reduce((n, m) => n + m.entries.length, 0);
+      return (
+        <Fragment key={year.key}>
+          <h2
+            className={`col-span-full ${
+              viewMode === "list" ? "bg-muted/30 px-4 py-2" : "mt-2 first:mt-0"
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => toggleYearCollapsed(year.key)}
+              aria-expanded={!isCollapsed}
+              className="flex w-full cursor-pointer items-center gap-2 text-left"
+            >
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+                  isCollapsed ? "-rotate-90" : ""
+                }`}
+              />
+              <span className="text-lg font-semibold tracking-tight">{year.label}</span>
+              <span className="text-sm font-normal text-muted-foreground">
+                {itemCount} item{itemCount === 1 ? "" : "s"}
+              </span>
+              <span aria-hidden className="ml-2 h-px flex-1 bg-border" />
+            </button>
+          </h2>
+          {!isCollapsed &&
+            year.months.map(month => (
+              <Fragment key={month.key}>
+                {month.label && (
+                  <h3
+                    className={`col-span-full text-sm font-medium text-muted-foreground ${
+                      viewMode === "list" ? "bg-muted/20 px-4 py-1.5" : ""
+                    }`}
+                  >
+                    {month.label}
+                  </h3>
+                )}
+                {month.entries.map(({ media, index }) => renderMediaCard(media, index))}
+              </Fragment>
+            ))}
+        </Fragment>
+      );
+    });
 
   return (
     <Container className="py-6">
@@ -977,7 +1110,11 @@ export default function LibraryPageInner() {
             </DropdownMenu>
             {DevPurgeButton && (
               <DevPurgeButton
-                onSuccess={() => { setTotalCount(0); setError(null); setTagOptions([]); emitTagsUpdated(); emitBundlesUpdated(); fetchMedia(); router.replace(LIBRARY_PATH); }}
+                // The purge is a background job that has only just been ENQUEUED
+                // here — don't refetch or zero anything yet. The delete-progress
+                // banner tracks it, and its completion emits the media/tag/bundle
+                // events that refresh this page.
+                onSuccess={() => { setError(null); router.replace(LIBRARY_PATH); }}
                 onError={setError}
               />
             )}
@@ -1126,35 +1263,32 @@ export default function LibraryPageInner() {
         </div>
       )}
 
-      {/* "Select all N items in library" banner */}
-      {isSelectMode && !isSelectAllLibrary && selectedIds.size === mediaItems.length && mediaItems.length > 0 && totalCount !== null && totalCount > mediaItems.length && (
-        <div className="mb-4 flex items-center gap-2 rounded-md bg-muted px-4 py-2 text-sm">
-          <span>All {mediaItems.length} visible items selected.</span>
-          <button
-            type="button"
-            className="font-medium text-primary underline-offset-2 hover:underline"
-            onClick={() => setIsSelectAllLibrary(true)}
-          >
-            Select all {totalCount} items in library
-          </button>
-        </div>
-      )}
-      {isSelectMode && isSelectAllLibrary && totalCount !== null && (
-        <div className="mb-4 flex items-center gap-2 rounded-md bg-primary/10 px-4 py-2 text-sm">
-          <span>All {totalCount} items in library selected.</span>
-          <button
-            type="button"
-            className="font-medium text-primary underline-offset-2 hover:underline"
-            onClick={() => setIsSelectAllLibrary(false)}
-          >
-            Deselect
-          </button>
-        </div>
+      {/* Selection toolbar — sticky at the top of the scroll container; owns
+          every select-all control (visible → whole library → clear). */}
+      {isSelectMode && (
+        <BulkActionBar
+          count={isSelectAllLibrary ? (totalCount ?? selectedIds.size) : selectedIds.size}
+          visibleCount={mediaItems.length}
+          totalCount={totalCount}
+          isSelectAllLibrary={isSelectAllLibrary}
+          onSelectAllLibraryChange={setIsSelectAllLibrary}
+          onDelete={(info) => handleBulkDelete(info)}
+          onTag={() => setIsTagDialogOpen(true)}
+          onAddToBundle={() => setIsBundleDialogOpen(true)}
+          onClear={() => { setSelectedIds(new Set()); setIsSelectAllLibrary(false); lastSelectedIdRef.current = null; }}
+          onDownload={handleBulkDownload}
+          onRegenerateThumbnail={() => handleBatchRequeue("thumbnail")}
+          onExtractText={() => handleBatchRequeue("text")}
+          onCancel={toggleSelectMode}
+          onSelectAll={() => setSelectedIds(new Set(mediaItems.map(m => m.id)))}
+          isDownloading={isDownloading}
+          isRequeueing={isRequeueing}
+        />
       )}
 
       {/* Unified drag-drop wrapper + overlay (single overlay, no custom globals needed) */}
       <div
-        className={isSelectMode ? "relative pb-20" : "relative"}
+        className="relative"
         onDragEnter={onDragEnter}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
@@ -1179,22 +1313,9 @@ export default function LibraryPageInner() {
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <MediaCardSkeleton key={i} variant={viewMode} density={cardDensity} />
                       ))
-                    : mediaItems.map((media, index) => (
-                        <MediaCard
-                          key={media.id}
-                          media={media}
-                          variant={viewMode}
-                          density={cardDensity}
-                          loading={index < EAGER_THUMB_COUNT ? "eager" : "lazy"}
-                          onDownload={isSelectMode ? undefined : (id) => void handleDownload(id)}
-                          onDelete={isSelectMode ? undefined : handleDelete}
-                          onRename={isSelectMode ? undefined : handleRename}
-                          isDeleting={deletingIds.has(media.id)}
-                          isSelectMode={isSelectMode}
-                          isSelected={selectedIds.has(media.id)}
-                          onSelect={handleSelect}
-                        />
-                      ))
+                    : dateGroups
+                      ? renderDateGroups()
+                      : mediaItems.map((media, index) => renderMediaCard(media, index))
                   }
                 </div>
               </div>
@@ -1224,23 +1345,9 @@ export default function LibraryPageInner() {
               </div>
             ) : mediaItems.length > 0 ? (
               <div className={layoutClass}>
-                {mediaItems.map((media, index) => (
-                  <MediaCard
-                    key={media.id}
-                    media={media}
-                    variant={viewMode}
-                    density={cardDensity}
-                    gridCols={gridCols}
-                    loading={index < EAGER_THUMB_COUNT ? "eager" : "lazy"}
-                    onDownload={isSelectMode ? undefined : (id) => void handleDownload(id)}
-                    onDelete={isSelectMode ? undefined : handleDelete}
-                    onRename={isSelectMode ? undefined : handleRename}
-                    isDeleting={deletingIds.has(media.id)}
-                    isSelectMode={isSelectMode}
-                    isSelected={selectedIds.has(media.id)}
-                    onSelect={handleSelect}
-                  />
-                ))}
+                {dateGroups
+                  ? renderDateGroups()
+                  : mediaItems.map((media, index) => renderMediaCard(media, index))}
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -1261,37 +1368,20 @@ export default function LibraryPageInner() {
         )}
 
         {nextCursor && mediaItems.length > 0 && (
-          <div className=" mt-6 flex justify-center">
-            <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}>
-              {isLoadingMore ? "Loading more..." : "Load more"}
-            </Button>
+          <div ref={loadMoreSentinelRef} className="mt-6 flex justify-center py-4" aria-hidden={!isLoadingMore}>
+            {isLoadingMore && (
+              <span className="text-sm text-muted-foreground">Loading more…</span>
+            )}
           </div>
         )}
       </div>
-      {/* Bulk action bar */}
-      {isSelectMode && (
-        <BulkActionBar
-          count={isSelectAllLibrary ? (totalCount ?? selectedIds.size) : selectedIds.size}
-          onDelete={(info) => handleBulkDelete(info)}
-          onTag={() => setIsTagDialogOpen(true)}
-          onAddToBundle={() => setIsBundleDialogOpen(true)}
-          onClear={() => { setSelectedIds(new Set()); setIsSelectAllLibrary(false); lastSelectedIdRef.current = null; }}
-          onDownload={handleBulkDownload}
-          onRegenerateThumbnail={() => handleBatchRequeue("thumbnail")}
-          onExtractText={() => handleBatchRequeue("text")}
-          onCancel={toggleSelectMode}
-          onSelectAll={() => setSelectedIds(new Set(mediaItems.map(m => m.id)))}
-          isDownloading={isDownloading}
-          isRequeueing={isRequeueing}
-        />
-      )}
-
       <ConfirmPopover
         open={confirmState !== null}
         x={confirmState?.x ?? 0}
         y={confirmState?.y ?? 0}
         anchorWidth={confirmState?.anchorWidth}
         bottomOffset={confirmState?.bottomOffset}
+        topOffset={confirmState?.topOffset}
         message={confirmState?.message ?? "Delete? This cannot be undone."}
         onConfirm={() => {
           const action = confirmState?.action;

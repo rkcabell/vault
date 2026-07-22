@@ -5,7 +5,8 @@ import type { Route } from "next";
 import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from "react";
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Archive, Ban, BookOpen, Check, CheckCircle2, Circle, Download, ExternalLink, File as FileIcon, FileText, Film, MoreVertical, Music, Pencil, Trash2, type LucideIcon } from 'lucide-react';
+import { Archive, Ban, BookOpen, Check, CheckCircle2, Circle, Download, ExternalLink, File as FileIcon, FileText, Film, MoreVertical, Music, Pencil, Star, Trash2, type LucideIcon } from 'lucide-react';
+import { apiFetch } from '@/lib/apiFetch';
 import { cn } from '@/lib/utils';
 import { ARCHIVE_MIME_TYPES, formatBytes } from '@/lib/media/utils';
 import { orderTagsByOrigin, isAutoTagFromStore } from '@/lib/tags';
@@ -33,6 +34,9 @@ export interface MediaItem {
   downloadUrl?: string;
   mimeType?: string | null;
   sizeBytes?: number | null;
+  starred?: boolean;
+  /** Resolved file date (EXIF/PDF/mtime) — powers the Year sort's dividers. */
+  fileDate?: string | null;
 }
 
 interface MediaCardProps {
@@ -42,6 +46,8 @@ interface MediaCardProps {
   onDownload?: (id: string) => void;
   onRename?: (id: string, nextTitle: string) => void | Promise<void>;
   onDelete?: (id: string, e: React.MouseEvent) => void | Promise<void>;
+  /** Called after the star toggle round-trips (mirrors BundleCard). */
+  onStarToggle?: (id: string, next: boolean) => void;
   isDeleting?: boolean;
   loading?: "eager" | "lazy";
   density?: "comfortable" | "compact";
@@ -154,6 +160,7 @@ export function MediaCard({
   onDownload,
   onRename,
   onDelete,
+  onStarToggle,
   isDeleting = false,
   loading = "lazy",
   density = "comfortable",
@@ -277,6 +284,26 @@ export function MediaCard({
     onDownload?.(media.id);
   };
 
+  const [isStarring, setIsStarring] = useState(false);
+  const handleStar = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isStarring) return;
+    setIsStarring(true);
+    try {
+      const res = await apiFetch(`/api/media/${media.id}/star`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { starred: boolean };
+        onStarToggle?.(media.id, data.starred);
+      }
+    } finally {
+      setIsStarring(false);
+    }
+  };
+
   const triggerDelete = (e?: React.MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
@@ -308,7 +335,7 @@ export function MediaCard({
     return (
       <Card
         className={cn('rounded-none shadow-none bg-transparent border-0 border-b border-border/40 hover:bg-muted/50 transition-colors', isSelectMode && 'cursor-pointer select-none', className)}
-        style={isSelectMode && isSelected ? { outline: '2px solid #06b6d4', outlineOffset: '0px' } : undefined}
+        style={isSelectMode && isSelected ? { outline: '2px solid var(--color-selection, #06b6d4)', outlineOffset: '0px' } : undefined}
         onClick={isSelectMode ? handleSelectClick : undefined}
       >
         <CardContent className={cn("py-2 px-4", isCompact && "py-1.5 px-3")}>
@@ -323,7 +350,7 @@ export function MediaCard({
                 className="flex-shrink-0 p-0.5"
               >
                 {isSelected
-                  ? <CheckCircle2 className="h-6 w-6 text-cyan-500 fill-cyan-500 stroke-white" />
+                  ? <CheckCircle2 className="h-6 w-6 stroke-white" style={{ color: "var(--color-selection, #06b6d4)", fill: "var(--color-selection, #06b6d4)" }} />
                   : <Circle className="h-6 w-6 text-muted-foreground" />
                 }
               </button>
@@ -432,6 +459,13 @@ export function MediaCard({
                 </div>
                 {!isRenaming && (
                   <>
+                    {media.starred && (
+                      <Star
+                        className="h-3.5 w-3.5 shrink-0"
+                        style={{ fill: "var(--color-star, #fbbf24)", color: "var(--color-star, #fbbf24)" }}
+                        aria-label="Starred"
+                      />
+                    )}
                     <span className={cn(LIST_TYPE_W, "shrink-0 flex items-center")}>
                       <span className="overview-type-badge">{getMimeTypeLabel(media.mimeType, media.filename)}</span>
                     </span>
@@ -458,6 +492,12 @@ export function MediaCard({
                         <span className="whitespace-nowrap">Open Details</span>
                       </Link>
                     </DropdownMenuItem>
+                    {onStarToggle && (
+                      <DropdownMenuItem onClick={(e) => { void handleStar(e); }} disabled={isStarring}>
+                        <Star className="mr-2 h-4 w-4 shrink-0" />
+                        {media.starred ? "Unstar" : "Star"}
+                      </DropdownMenuItem>
+                    )}
                     {onRename && (
                       <DropdownMenuItem onClick={triggerRename}>
                         <Pencil className="mr-2 h-4 w-4 shrink-0" />
@@ -495,7 +535,7 @@ export function MediaCard({
   return (
     <Card
       className={cn('group flex flex-col overflow-hidden hover:shadow-lg transition-shadow', isSelectMode && 'select-none', className)}
-      style={isSelectMode && isSelected ? { outline: '2px solid #06b6d4', outlineOffset: '0px' } : undefined}
+      style={isSelectMode && isSelected ? { outline: '2px solid var(--color-selection, #06b6d4)', outlineOffset: '0px' } : undefined}
     >
       {isSelectMode ? (
         <div
@@ -524,7 +564,7 @@ export function MediaCard({
             className="absolute top-2 left-2 z-10"
           >
             {isSelected
-              ? <CheckCircle2 className="h-6 w-6 text-white fill-blue-500 drop-shadow" />
+              ? <CheckCircle2 className="h-6 w-6 text-white drop-shadow" style={{ fill: "var(--color-selection, #06b6d4)" }} />
               : <Circle className="h-6 w-6 text-white drop-shadow" />
             }
           </button>
@@ -545,6 +585,25 @@ export function MediaCard({
                 loading={loading}
                 onError={handleThumbError}
               />
+            )}
+            {/* Star — top-left overlay (mirrors BundleCard). Always visible when
+                starred; appears on hover otherwise. */}
+            {onStarToggle && (
+              <button
+                onClick={(e) => { void handleStar(e); }}
+                disabled={isStarring}
+                aria-label={media.starred ? "Unstar" : "Star"}
+                className={cn(
+                  "absolute top-1 left-1 z-10 p-1.5 text-white drop-shadow transition-all disabled:opacity-50",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md",
+                  media.starred ? "opacity-100" : "opacity-0 group-hover:opacity-100 hover:scale-110",
+                )}
+              >
+                <Star
+                  className="h-5 w-5"
+                  style={media.starred ? { fill: "var(--color-star, #fbbf24)", color: "var(--color-star, #fbbf24)" } : undefined}
+                />
+              </button>
             )}
           </div>
         </Link>
@@ -628,6 +687,12 @@ export function MediaCard({
                     Open
                   </Link>
                 </DropdownMenuItem>
+                {onStarToggle && (
+                  <DropdownMenuItem onClick={(e) => { void handleStar(e); }} disabled={isStarring}>
+                    <Star className="mr-2 h-4 w-4 shrink-0" />
+                    {media.starred ? "Unstar" : "Star"}
+                  </DropdownMenuItem>
+                )}
                 {onRename && (
                   <DropdownMenuItem onClick={triggerRename}>
                     <Pencil className="mr-2 h-4 w-4 shrink-0" />

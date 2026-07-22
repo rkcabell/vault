@@ -34,6 +34,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   AlertCircle,
+  FolderOpen,
 } from "lucide-react";
 
 const getFileIcon = (type: string) => {
@@ -51,6 +52,7 @@ export default function UploadPage() {
   const { prefs } = usePreferences();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -146,18 +148,15 @@ export default function UploadPage() {
   const uploadOne = async (plan: UploadPlan) => {
     updateFileStatus(plan.fileId, "uploading");
 
-    // Filesystem-backed storage returns a same-origin proxy URL (/api/storage/blob/...)
-    // that needs the auth cookie; S3/MinIO returns an absolute presigned URL that must
-    // NOT carry credentials. Send cookies only for relative (same-origin) targets.
-    const isProxyUpload = plan.init.putUrl.startsWith("/");
-
+    // Uploads stream through the same-origin storage proxy
+    // (/api/storage/blob/...), which needs the auth cookie.
     let res: Response;
     try {
       res = await fetch(plan.init.putUrl, {
         method: "PUT",
         headers: { "Content-Type": plan.contentType },
         body: plan.file,
-        ...(isProxyUpload ? { credentials: "include" as const } : {}),
+        credentials: "include",
       });
     } catch (err) {
       // Network-level failure (offline, DNS, CORS) — distinguish from an HTTP error status.
@@ -167,7 +166,7 @@ export default function UploadPage() {
     }
 
     if (!res.ok) {
-      const detail = isProxyUpload ? await res.text().catch(() => "") : "";
+      const detail = await res.text().catch(() => "");
       throw new Error(
         `Upload failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})${detail ? `: ${detail.slice(0, 200)}` : ""}.`,
       );
@@ -304,10 +303,28 @@ export default function UploadPage() {
               className="hidden"
               onChange={(e) => handleFileSelect(e.target.files)}
             />
+            {/* webkitdirectory makes the OS dialog pick a folder; the browser
+                expands it to every file inside (recursively). Non-standard but
+                supported by all current browsers; not in React's input types,
+                hence the attribute spread. */}
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => handleFileSelect(e.target.files)}
+              {...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
+            />
 
-            <Button onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
-              Select Files
-            </Button>
+            <div className="flex justify-center gap-2">
+              <Button onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+                Select Files
+              </Button>
+              <Button variant="outline" onClick={() => folderInputRef.current?.click()} disabled={isUploading}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                Select Folder
+              </Button>
+            </div>
           </div>
         </Card>
 

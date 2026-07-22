@@ -74,7 +74,7 @@ export function MediaInfoCard (props: {
           </Button>
           {!canReveal && (
             <div className='pointer-events-none absolute bottom-full left-1/2 mb-2 w-64 -translate-x-1/2 rounded bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md border border-border opacity-0 group-hover:opacity-100 transition-opacity z-50'>
-              Stored in S3/MinIO — not a local file.
+              No local path available for this file.
               {storageKey && (
                 <span className='mt-1 block break-all font-mono text-muted-foreground'>
                   Key: {storageKey}

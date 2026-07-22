@@ -6,7 +6,7 @@ import type { Queue } from "bullmq";
 import type { OcrJobData } from "../ocrProcessingService.js";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { BundleRepository } from "../../repositories/bundleRepository.js";
-import type { S3Adapter } from "../../adapters/s3Adapter.js";
+import type { StorageAdapter } from "../../adapters/storage/types.js";
 import { openSourceStream } from "../../adapters/storage/openSource.js";
 import type { ThumbJob } from "../../queues/enqueueThumbnail.js";
 import { computeThumbKey, enqueueThumbBulk } from "../../queues/enqueueThumbnail.js";
@@ -15,7 +15,8 @@ import type { UnpackJob } from "../../queues/enqueueUnpack.js";
 import type { IndexJobData } from "../../queues/enqueueIndex.js";
 import { makeStorageKey } from "../../lib/media/keys.js";
 import { extractArchive, isCoverCandidate } from "../archive/extractArchive.js";
-import { normalizeTag } from "../../lib/tags/normalizeTags.js";
+import { normalizeTag, normalizeTags } from "../../lib/tags/normalizeTags.js";
+import { evaluateRules, type TagRuleInput } from "../../lib/tags/rules/evaluateRules.js";
 import { ARCHIVE_MIME_TYPES } from "../../lib/media/archiveTypes.js";
 import { ocrSupported, thumbnailSupported } from "../../lib/media/processingSupport.js";
 import { signalIndexAbort, type AbortRedis } from "../../lib/media/indexAbort.js";
@@ -70,17 +71,6 @@ function coerceTag(name: string): string | null {
   }
 }
 
-function extTag(filename: string): string | null {
-  const ext = path.extname(filename).toLowerCase();
-  const candidate = ext.length > 1 ? ext.slice(1) : null;
-  if (!candidate) return null;
-  try {
-    return normalizeTag(candidate);
-  } catch {
-    return null;
-  }
-}
-
 function sanitizeTitle (title: string): string {
   const cleaned = title.replace(/[/\\:*?"<>|]/g, "").trim().slice(0, 100);
   return cleaned || "";
@@ -126,7 +116,7 @@ export type TextExtractionOptions = {
 type MediaActionsDeps = {
   repository: MediaRepository;
   bundleRepository: BundleRepository;
-  s3Adapter: S3Adapter;
+  storage: StorageAdapter;
   bucket: string;
   ocrQueue: Queue<OcrJobData>;
   thumbQueue: Queue<ThumbJob>;
@@ -136,6 +126,12 @@ type MediaActionsDeps = {
   indexQueue?: Queue<IndexJobData>;
   // Used by the dev abort to bump the index-abort epoch (stops an in-flight walk).
   redis?: Pick<AbortRedis, "incr">;
+  /** The user's enabled Tag Organizer rules, applied to unpacked archive
+   *  entries. Optional so tests that never unpack don't have to wire it. */
+  listTagRules?: (userId: string) => Promise<TagRuleInput[]>;
+  /** Publishes a media event so open library views refresh without a manual
+   *  reload (delete removes an item, unpack creates children). */
+  publishJobUpdate?: (update: { userId: string; mediaId: string; field: string; value: string }) => void;
 };
 
 export function createMediaActionsService (deps: MediaActionsDeps) {
@@ -146,10 +142,10 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     // In-place indexed items live on the user's drive; Vault must never delete
     // the source. Only managed originals are removed from storage.
     if (!media.sourcePath) {
-      await deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: media.storageKey });
+      await deps.storage.deleteIfPresent({ bucket: deps.bucket, key: media.storageKey });
     }
     if (media.thumbnailKey) {
-      await deps.s3Adapter.deleteIfPresent({ bucket: deps.bucket, key: media.thumbnailKey });
+      await deps.storage.deleteIfPresent({ bucket: deps.bucket, key: media.thumbnailKey });
     }
 
     await deps.repository.deleteMedia(id);
@@ -164,6 +160,10 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
       deps.thumbQueue.getJob(id).then(job => job?.remove().catch(() => {})),
     ]);
 
+    // Cross-tab/view refresh: the deleting page updates itself optimistically,
+    // but any other open library view only learns of the removal from this event.
+    deps.publishJobUpdate?.({ userId, mediaId: id, field: "mediaDeleted", value: "1" });
+
     return { ok: true };
   };
 
@@ -175,7 +175,13 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     const media = await deps.repository.findMediaForUpdate(userId, id);
     if (!media) return null;
 
-    return deps.repository.updateMetadata(media.id, data, userId);
+    // Normalize here, not only at the HTTP edge — any caller of this service
+    // must not be able to persist raw tags (count drift + case mismatches).
+    const normalized = data.tags !== undefined
+      ? { ...data, tags: normalizeTags(data.tags) }
+      : data;
+
+    return deps.repository.updateMetadata(media.id, normalized, userId);
   };
 
   const enqueueTextExtraction = async (
@@ -257,7 +263,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
       return { url: `/api/media/${id}/source` };
     }
 
-    const url = await deps.s3Adapter.presignGet({
+    const url = await deps.storage.presignGet({
       bucket: deps.bucket,
       key: media.storageKey,
       expiresSeconds: MAX_PRESIGNED_SECONDS,
@@ -290,7 +296,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
       // In-place items stream from disk; managed items from storage. openSourceStream
       // branches on sourcePath and re-validates it against the allow-list.
       const result = await openSourceStream({
-        storage: deps.s3Adapter,
+        storage: deps.storage,
         bucket: deps.bucket,
         storageKey: item.storageKey,
         sourcePath: item.sourcePath,
@@ -368,6 +374,12 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     }
   };
 
+  /** Toggle the star on a media item (mirrors the bundle star). Returns the
+   *  new starred state, or null when the item isn't the user's. */
+  const toggleStar = async (userId: string, id: string): Promise<boolean | null> => {
+    return deps.repository.toggleStar(id, userId);
+  };
+
   const unpackArchive = async (
     userId: string,
     mediaId: string,
@@ -384,7 +396,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     if (!ARCHIVE_MIME_TYPES.has(media.mimeType)) return "not-archive";
 
     // Fetch the archive stream from S3
-    const s3Result = await deps.s3Adapter.getObjectStream({ bucket: deps.bucket, key: media.storageKey });
+    const s3Result = await deps.storage.getObjectStream({ bucket: deps.bucket, key: media.storageKey });
     if (!s3Result) return null;
 
     // Derive bundle name from the archive title (strip extension)
@@ -394,6 +406,9 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     // Create the bundle
     const bundle = await deps.bundleRepository.createBundle(userId, bundleName);
     const bundleId = bundle.id;
+
+    // One rules fetch covers every extracted entry.
+    const rules = (await deps.listTagRules?.(userId)) ?? [];
 
     const createdIds: string[] = [];
     const thumbItems: { mediaId: string; userId: string; storageKey: string }[] = [];
@@ -413,7 +428,7 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
       const storageKey = makeStorageKey(userId, newId, filename);
 
       // Upload extracted file to S3
-      await deps.s3Adapter.putObject({
+      await deps.storage.putObject({
         bucket: deps.bucket,
         key: storageKey,
         body: entry.stream,
@@ -424,10 +439,16 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
       // Derive title from filename (strip extension)
       const title = path.basename(filename, path.extname(filename)) || filename;
 
-      // Create Media record. Both the bundle-name and extension tags are
-      // system-applied, so they are recorded as AUTO.
-      const extractedTags = [coerceTag(bundleName), extTag(filename)].filter(
-        (t): t is string => t !== null,
+      // Create Media record. The bundle-name tag plus the user's Tag Organizer
+      // rules (type:, source:unpacked, …) — all system-applied, recorded AUTO.
+      const ruleTags = evaluateRules(rules, {
+        filename,
+        mimeType: entry.mimeType,
+        sizeBytes: entry.size ?? 0,
+        ingest: "unpacked",
+      });
+      const extractedTags = Array.from(
+        new Set([coerceTag(bundleName), ...ruleTags].filter((t): t is string => t !== null)),
       );
       await deps.repository.createMedia(
         {
@@ -485,6 +506,10 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     // Link the archive to the bundle (bidirectionally)
     await deps.repository.setLinkedBundle(mediaId, bundleId);
     await deps.bundleRepository.setSourceMedia(bundleId, mediaId);
+
+    // New items exist — tell open library views (relevant for auto-unpack on
+    // finalize, where no client action follows to trigger a refetch).
+    deps.publishJobUpdate?.({ userId, mediaId: "*", field: "mediaCreated", value: String(createdIds.length) });
 
     return { bundleId };
   };
@@ -598,5 +623,6 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     getBulkDownloadItems,
     streamBulkArchive,
     unpackArchive,
+    toggleStar,
   };
 }

@@ -26,7 +26,7 @@ async function buildApp(storage: StorageAdapter, driver = "fs") {
     verifyAccess: () => ({ sub: "user-1" }),
   });
   (app as unknown as { decorate: (k: string, v: unknown) => void }).decorate("config", {
-    S3_BUCKET: "vault-media",
+    STORAGE_BUCKET: "vault-media",
     STORAGE_DRIVER: driver,
     NODE_ENV: "test",
   });

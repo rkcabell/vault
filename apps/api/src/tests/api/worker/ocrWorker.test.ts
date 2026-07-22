@@ -2,11 +2,9 @@
 
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { HeadObjectCommand } from "@aws-sdk/client-s3";
-import { s3 } from "@/plugins/s3Client.js";
-import { createS3Adapter } from "@/adapters/s3Adapter.js";
 import { prisma } from "@vault/db";
 import { processOcrJob, type OcrDeps } from "@/worker/ocrWorker.js";
+import type { StorageAdapter } from "@/adapters/storage/types.js";
 
 function buildMinimalPdf (text: string): Buffer {
   const stream = `BT /F1 24 Tf 72 120 Td (${text}) Tj ET`;
@@ -46,19 +44,27 @@ function buildMinimalPdf (text: string): Buffer {
 }
 
 process.env.NODE_ENV = "test";
-process.env.S3_BUCKET = "test-bucket";
+process.env.STORAGE_BUCKET = "test-bucket";
 process.env.REDIS_URL = "redis://localhost:6379";
 process.env.OCR_QUEUE = "ocr_queue";
 
-const originalSend = s3.send.bind(s3);
 const originalFindUnique = prisma.media.findUnique.bind(prisma.media);
 const originalUpdateMany = prisma.media.updateMany.bind(prisma.media);
 const originalUpsert = prisma.document.upsert.bind(prisma.document);
 const originalExecuteRaw = (prisma as any).$executeRaw.bind(prisma);
 const originalTransaction = (prisma as any).$transaction.bind(prisma);
 
-function mockS3Send (fn: (cmd: any) => any) {
-  (s3 as any).send = async (cmd: any) => fn(cmd);
+/** Fake storage that records reads; the OCR path reads via textDeps.getObjectBuffer. */
+function fakeStorage (onRead?: () => void): StorageAdapter {
+  return {
+    getObjectStream: async () => { onRead?.(); return null; },
+    putObject: async () => {},
+    deleteIfPresent: async () => {},
+    objectExists: async () => true,
+    presignPut: async () => "/api/storage/blob/x",
+    presignGet: async () => "/api/storage/blob/x",
+    usage: async () => ({ sizeBytes: 0, objectCount: 0 }),
+  } as unknown as StorageAdapter;
 }
 
 function mockMediaFindUnique (result: any) {
@@ -73,22 +79,22 @@ function mockDocumentUpsert (fn: (args: any) => any) {
   (prisma.document as any).upsert = async (args: any) => fn(args);
 }
 
-function mockOcrDeps (): OcrDeps {
+function mockOcrDeps (overrides: Partial<OcrDeps["textDeps"]> = {}, onStorageRead?: () => void): OcrDeps {
   return {
     prisma,
-    storage: createS3Adapter(s3),
+    storage: fakeStorage(onStorageRead),
     bucket: "test-bucket",
     enqueueOcr: async () => {},
     sleep: async () => {},
     textDeps: {
       getObjectBuffer: async () => Buffer.from("image-bytes"),
       ocrWithOcrmypdf: async () => ({ ocrPdf: buildMinimalPdf("mock OCR text") }),
+      ...overrides,
     },
   };
 }
 
 afterEach(() => {
-  (s3 as any).send = originalSend;
   (prisma.media as any).findUnique = originalFindUnique;
   (prisma.media as any).updateMany = originalUpdateMany;
   (prisma.document as any).upsert = originalUpsert;
@@ -106,24 +112,15 @@ function mockNoopTransaction () {
 }
 
 test("processOcrJob returns when media is missing", async () => {
-  let s3Called = false;
+  let storageCalled = false;
 
-  mockS3Send(() => {
-    s3Called = true;
-    return {};
-  });
   mockMediaFindUnique(null);
 
-  await processOcrJob(mockOcrDeps(), { mediaId: "missing-media" });
-  assert.equal(s3Called, false);
+  await processOcrJob(mockOcrDeps({}, () => { storageCalled = true; }), { mediaId: "missing-media" });
+  assert.equal(storageCalled, false);
 });
 
 test("processOcrJob writes OCR text for non-PDF media", async () => {
-  mockS3Send(cmd => {
-    if (cmd instanceof HeadObjectCommand) return {};
-    throw new Error("unexpected s3 command");
-  });
-
   mockMediaFindUnique({ id: "media-1", storageKey: "orig/key", mimeType: "image/png" });
   mockNoopTransaction();
 
@@ -150,13 +147,13 @@ test("processOcrJob writes OCR text for non-PDF media", async () => {
 });
 
 test("processOcrJob throws when source is not ready", async () => {
-  mockS3Send(() => {
-    throw new Error("not found");
-  });
-
   mockMediaFindUnique({ id: "media-2", storageKey: "orig/missing", mimeType: "image/png" });
   mockMediaUpdate(() => ({} as any));
   mockDocumentUpsert(() => ({} as any));
 
-  await assert.rejects(processOcrJob(mockOcrDeps(), { mediaId: "media-2" }), /Source not ready/);
+  // A missing managed source reads back null → SOURCE_NOT_READY from processTextJob.
+  await assert.rejects(
+    processOcrJob(mockOcrDeps({ getObjectBuffer: async () => null }), { mediaId: "media-2" }),
+    /Source object not ready/,
+  );
 });

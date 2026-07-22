@@ -29,7 +29,7 @@ export async function extractMetadataFromBuffer(
 }
 
 export async function extractMediaMetadata (args: ExtractArgs): Promise<MediaMetadata | null> {
-  const { media, document, s3Adapter, bucket, logger } = args;
+  const { media, document, storage, bucket, logger } = args;
   const metadata: MediaMetadata = {};
 
   const textStats = buildTextStats(document);
@@ -51,7 +51,7 @@ export async function extractMediaMetadata (args: ExtractArgs): Promise<MediaMet
   const sourceBuffer = await getSourceBuffer({
     bucket,
     key: media.storageKey,
-    s3Adapter,
+    storage,
     logger,
     mediaId: media.id,
   });

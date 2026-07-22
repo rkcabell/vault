@@ -12,7 +12,7 @@ interface HealthState {
   api:   ServiceStatus;
   db:    ServiceStatus;
   redis: ServiceStatus;
-  minio: ServiceStatus;
+  storage: ServiceStatus;
 }
 
 interface ServerInfo {
@@ -20,13 +20,13 @@ interface ServerInfo {
   memoryMB: number | null;
 }
 
-const CHECKING: HealthState = { api: "checking", db: "checking", redis: "checking", minio: "checking" };
+const CHECKING: HealthState = { api: "checking", db: "checking", redis: "checking", storage: "checking" };
 
 const SERVICES = [
   { icon: <Activity   className="h-3.5 w-3.5 text-muted-foreground" />, name: "API",      key: "api"   as const },
   { icon: <Database   className="h-3.5 w-3.5 text-muted-foreground" />, name: "Database", key: "db"    as const },
   { icon: <ServerCrash className="h-3.5 w-3.5 text-muted-foreground" />, name: "Redis",   key: "redis" as const },
-  { icon: <HardDrive  className="h-3.5 w-3.5 text-muted-foreground" />, name: "MinIO",    key: "minio" as const },
+  { icon: <HardDrive  className="h-3.5 w-3.5 text-muted-foreground" />, name: "Storage",  key: "storage" as const },
 ] as const;
 
 function formatUptime(s: number): string {
@@ -50,17 +50,17 @@ export function OverviewHealthPoller({ initialWorkers }: Props) {
 
     let db:    ServiceStatus = "unreachable";
     let redis: ServiceStatus = "unreachable";
-    let minio: ServiceStatus = "unreachable";
+    let storage: ServiceStatus = "unreachable";
 
     if (readiness.status === "fulfilled") {
       const { body } = readiness.value as { ok: boolean; body: { services?: Record<string, string> } | null };
       const svc = body?.services ?? {};
       db    = svc.db    === "healthy" ? "healthy" : svc.db    === "degraded" ? "degraded" : "unreachable";
       redis = svc.redis === "healthy" ? "healthy" : svc.redis === "degraded" ? "degraded" : "unreachable";
-      minio = svc.s3    === "healthy" ? "healthy" : svc.s3    === "degraded" ? "degraded" : "unreachable";
+      storage = svc.storage    === "healthy" ? "healthy" : svc.storage    === "degraded" ? "degraded" : "unreachable";
     }
 
-    setHealth({ api, db, redis, minio });
+    setHealth({ api, db, redis, storage });
 
     if (status.status === "fulfilled") {
       const s = status.value as { uptimeSeconds?: number; memoryMB?: number };

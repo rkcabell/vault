@@ -20,10 +20,14 @@ function makeDeps (existingPaths: string[] = []) {
   const thumbTooLarge: string[] = [];
   const thumbCalls: unknown[][] = [];
   const ocrCalls: unknown[][] = [];
+  const backfilled: { sourcePath: string; fileDate: Date }[] = [];
 
   const mediaRepository = {
     findExistingSourcePaths: async (_userId: string, paths: string[]) =>
       new Set(paths.filter(p => existingPaths.includes(p))),
+    backfillFileDates: async (_userId: string, items: { sourcePath: string; fileDate: Date }[]) => {
+      backfilled.push(...items);
+    },
     createBatch: async (rows: Prisma.MediaCreateManyInput[]) => {
       created.push(...rows);
     },
@@ -44,7 +48,10 @@ function makeDeps (existingPaths: string[] = []) {
 
   const ocrQueue = { addBulk: async (jobs: unknown[]) => { ocrCalls.push(jobs); return []; } } as any;
 
-  return { mediaRepository, thumbQueue, ocrQueue, created, unsupported, thumbUnsupported, thumbTooLarge, thumbCalls, ocrCalls };
+  // No tag rules by default — rule evaluation itself is covered in evaluateRules.test.ts.
+  const listTagRules = async () => [];
+
+  return { mediaRepository, thumbQueue, ocrQueue, listTagRules, created, unsupported, thumbUnsupported, thumbTooLarge, thumbCalls, ocrCalls, backfilled };
 }
 
 function makeJob (data: { userId: string; rootPath: string; recursive: boolean; ignoreHidden: boolean; allowedRoots?: string[]; blacklistExtensions?: string[]; excludeFolders?: string[]; skipNonContent?: boolean }) {
@@ -60,7 +67,7 @@ test("indexFiles: skips the thumbnail enqueue for files over 2 GiB, marks them t
   ];
 
   await indexFiles(
-    { mediaRepository: deps.mediaRepository, thumbQueue: deps.thumbQueue, ocrQueue: deps.ocrQueue },
+    { mediaRepository: deps.mediaRepository, thumbQueue: deps.thumbQueue, ocrQueue: deps.ocrQueue, listTagRules: deps.listTagRules },
     "u1",
     files,
     ["/r"],
@@ -281,6 +288,22 @@ test("already-indexed paths are skipped, not re-created", async () => {
   assert.equal((result as { indexed: number; skipped: number }).indexed, 2);
   assert.equal((result as { skipped: number }).skipped, 2);
   assert.equal(deps.created.length, 2);
+});
+
+test("skipped already-indexed files get a fileDate backfill from the walk's stat", async () => {
+  const existingA = path.join(base, "a.pdf");
+  const existingB = path.join(base, "b.jpg");
+  const deps = makeDeps([existingA, existingB]);
+  const processor = createIndexProcessor({ ...deps, logger: makeLogger() });
+
+  await processor(makeJob({ userId: "u1", rootPath: base, recursive: true, ignoreHidden: true, allowedRoots: [base] }));
+
+  // Both skipped rows are offered for backfill with a real mtime-derived date.
+  const byPath = new Map(deps.backfilled.map(b => [b.sourcePath, b.fileDate]));
+  assert.deepEqual([...byPath.keys()].sort(), [existingA, existingB].sort());
+  for (const d of byPath.values()) assert.ok(d instanceof Date && d.getTime() > 0);
+  // Newly indexed rows are not part of the backfill.
+  assert.ok(!deps.backfilled.some(b => /c\.txt|d\.png/.test(b.sourcePath)));
 });
 
 test("refuses to scan a path outside the allow-list", async () => {

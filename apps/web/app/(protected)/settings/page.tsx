@@ -4,6 +4,7 @@ import { ManageTagsCard } from "@/components/settings/ManageTagsCard";
 import { StorageSettingsCard } from "@/components/settings/StorageSettingsCard";
 import { IndexingSettingsCard } from "@/components/settings/IndexingSettingsCard";
 import { ExploreSettingsCard } from "@/components/settings/ExploreSettingsCard";
+import { DuplicatesCard } from "@/components/settings/DuplicatesCard";
 
 export default function SettingsPage() {
   return (
@@ -25,6 +26,8 @@ export default function SettingsPage() {
       <StorageSettingsCard />
 
       <IndexingSettingsCard />
+
+      <DuplicatesCard />
 
       <ExploreSettingsCard />
 

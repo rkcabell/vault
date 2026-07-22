@@ -42,11 +42,11 @@ function makeDeps (rows: MediaDeletionRow[], opts: { readAbortEpoch?: () => Prom
     clearCoverMediaForIds: async (_userId: string, ids: string[]) => { calls.coverClears.push(ids); },
   };
 
-  const s3Adapter = {
+  const storage = {
     deleteIfPresent: async ({ key }: { bucket: string; key: string }) => { calls.storageKeys.push(key); },
   };
 
-  return { deps: { mediaRepository, bundleRepository, s3Adapter, bucket: "b", logger: makeLogger(), ...opts } as any, calls };
+  return { deps: { mediaRepository, bundleRepository, storage, bucket: "b", logger: makeLogger(), ...opts } as any, calls };
 }
 
 function makeJob (data: { userId: string; ids?: string[]; filters?: object }) {

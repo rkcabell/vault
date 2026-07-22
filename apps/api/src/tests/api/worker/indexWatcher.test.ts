@@ -43,6 +43,7 @@ function makeDeps (opts: { idByPath?: Record<string, string>; idsByPrefix?: stri
     mediaRepository,
     thumbQueue,
     ocrQueue,
+    listTagRules: async () => [],
     deleteMedia: async (userId: string, id: string) => { deleted.push({ userId, id }); },
     regenerateThumbnail: async (userId: string, id: string) => { regenerated.push({ userId, id }); },
     logger: { info: () => {}, warn: () => {}, error: () => {} },

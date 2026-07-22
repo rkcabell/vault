@@ -16,7 +16,7 @@ type WatchLogger = {
 
 /** A minimal stat — injectable so handler tests don't touch the real FS. The
  *  type predicates are optional so test stubs can return just `{ size }`. */
-type StatLike = { size: number; isDirectory?: () => boolean; isSymbolicLink?: () => boolean };
+type StatLike = { size: number; mtimeMs?: number; isDirectory?: () => boolean; isSymbolicLink?: () => boolean };
 
 export type IndexWatcherDeps = IndexCoreDeps & {
   mediaRepository: MediaRepository;
@@ -70,7 +70,7 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
       // or a followed symlink, and skip empty placeholders.
       if (st.isDirectory?.() || st.isSymbolicLink?.()) return;
       if (st.size === 0) return;
-      const file = { absPath, name: path.basename(absPath), size: st.size };
+      const file = { absPath, name: path.basename(absPath), size: st.size, mtimeMs: st.mtimeMs };
       const { indexed } = await indexFiles(deps, config.userId, [file], config.allowedRoots);
       if (indexed > 0) deps.logger.info({ userId: config.userId, path: absPath }, "watch: indexed new file");
     } catch (err) {

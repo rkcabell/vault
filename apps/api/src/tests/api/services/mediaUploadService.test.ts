@@ -1,8 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createMediaUploadService } from "@/services/media/mediaUploadService.js";
+import { DEFAULT_TAG_RULES } from "@/lib/tags/rules/defaults.js";
 
 type Deps = Parameters<typeof createMediaUploadService>[0];
+
+// The seeded default rule set (type:, year:, month:, folder:), as the service
+// receives it from tagRuleRepository.listEnabled.
+const defaultRules = DEFAULT_TAG_RULES.map(r => ({ ...r, enabled: true }));
 
 const logger = {
   info: () => {},
@@ -36,10 +41,10 @@ function makeRepo (overrides: {
 
 function makeS3 (overrides: {
   presignPut?: (_args: unknown) => Promise<string>;
-} = {}): Deps["s3Adapter"] {
+} = {}): Deps["storage"] {
   return {
     presignPut: overrides.presignPut ?? (async () => "https://s3.example.com/put-url"),
-  } as unknown as Deps["s3Adapter"];
+  } as unknown as Deps["storage"];
 }
 
 function makeQueue (overrides: {
@@ -58,10 +63,11 @@ function makeService (
   const queue = makeQueue(queueOverrides);
   return createMediaUploadService({
     repository: makeRepo(repoOverrides),
-    s3Adapter: makeS3(s3Overrides),
+    storage: makeS3(s3Overrides),
     bucket: "test-bucket",
     thumbQueue: queue as unknown as Deps["thumbQueue"],
     ocrQueue: queue as unknown as Deps["ocrQueue"],
+    listTagRules: async () => defaultRules,
     logger,
   });
 }
@@ -97,7 +103,7 @@ test("initUpload: storageKey includes userId and filename", async () => {
   assert.ok(result.storageKey.includes("report.pdf"));
 });
 
-test("initUpload: adds a MIME type tag derived from mimeType", async () => {
+test("initUpload: adds the rule-derived type and source tags", async () => {
   const tags: string[][] = [];
   const svc = makeService({
     createMedia: async (data) => {
@@ -116,10 +122,11 @@ test("initUpload: adds a MIME type tag derived from mimeType", async () => {
   });
 
   assert.ok(tags[0]?.includes("vacation"));
-  assert.ok(tags[0]?.includes("jpg"));
+  assert.ok(tags[0]?.includes("type:jpg"), "MIME rule tag applied");
+  assert.ok(tags[0]?.includes("source:upload"), "built-in source axis applied");
 });
 
-test("initUpload: marks the MIME tag as auto but not user-supplied tags", async () => {
+test("initUpload: marks rule tags as auto but not user-supplied tags", async () => {
   let captured: { tags?: string[]; autoTags?: string[] } = {};
   const svc = makeService({
     createMedia: async (data: unknown, opts?: { autoTags?: string[] }) => {
@@ -137,12 +144,13 @@ test("initUpload: marks the MIME tag as auto but not user-supplied tags", async 
     tags: ["vacation"],
   });
 
-  assert.deepEqual(captured.autoTags, ["jpg"], "MIME tag is auto");
+  assert.ok(captured.autoTags?.includes("type:jpg"), "MIME rule tag is auto");
+  assert.ok(captured.autoTags?.includes("source:upload"), "source axis is auto");
   assert.ok(captured.tags?.includes("vacation"));
   assert.ok(!captured.autoTags?.includes("vacation"), "user tag is not auto");
 });
 
-test("initUpload: a user-typed tag matching the MIME tag is not treated as auto", async () => {
+test("initUpload: a user-typed tag matching a rule tag is not treated as auto", async () => {
   let captured: { autoTags?: string[] } = {};
   const svc = makeService({
     createMedia: async (data: unknown, opts?: { autoTags?: string[] }) => {
@@ -157,10 +165,34 @@ test("initUpload: a user-typed tag matching the MIME tag is not treated as auto"
     mimeType: "image/jpeg",
     sizeBytes: 0,
     title: "Photo",
-    tags: ["jpg"],
+    tags: ["type:jpg"],
   });
 
-  assert.deepEqual(captured.autoTags, [], "user intent wins; jpg is not auto");
+  assert.ok(!captured.autoTags?.includes("type:jpg"), "user intent wins; type:jpg is not auto");
+  assert.ok(captured.autoTags?.includes("source:upload"), "other rule tags stay auto");
+});
+
+test("initUpload: autoTagOnUpload=false skips every rule tag", async () => {
+  let captured: { tags?: string[]; autoTags?: string[] } = {};
+  const svc = makeService({
+    createMedia: async (data: unknown, opts?: { autoTags?: string[] }) => {
+      const d = data as { id: string; storageKey: string; tags: string[] };
+      captured = { tags: d.tags, autoTags: opts?.autoTags };
+      return { id: d.id, storageKey: d.storageKey };
+    },
+  });
+
+  await svc.initUpload("u", {
+    filename: "photo.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 0,
+    title: "Photo",
+    tags: ["vacation"],
+    autoTagOnUpload: false,
+  });
+
+  assert.deepEqual(captured.tags, ["vacation"]);
+  assert.deepEqual(captured.autoTags, []);
 });
 
 test("initUpload: deduplicates tags", async () => {
@@ -316,8 +348,9 @@ test("finalizeBatch: enqueues thumb and OCR jobs for each ready item", async () 
         { id: "m2", storageKey: "k/m2", mimeType: "image/jpeg" },
       ],
     }),
-    s3Adapter: makeS3(),
+    storage: makeS3(),
     bucket: "test-bucket",
+    listTagRules: async () => [],
     thumbQueue: { addBulk: async (jobs: unknown[]) => { thumbBulks.push(jobs); } } as unknown as Deps["thumbQueue"],
     ocrQueue: { addBulk: async (jobs: unknown[]) => { ocrBulks.push(jobs); } } as unknown as Deps["ocrQueue"],
     logger,
@@ -345,8 +378,9 @@ test("finalizeBatch: only enqueues thumb/OCR for compatible types, marks the res
       markTextUnsupported: async (ids: string[]) => { textUnsupported = ids; },
       markThumbUnsupported: async (ids: string[]) => { thumbUnsupported = ids; },
     }),
-    s3Adapter: makeS3(),
+    storage: makeS3(),
     bucket: "test-bucket",
+    listTagRules: async () => [],
     thumbQueue: { addBulk: async (jobs: unknown[]) => { thumbBulks.push(jobs as { data: { mediaId: string } }[]); } } as unknown as Deps["thumbQueue"],
     ocrQueue: { addBulk: async (jobs: unknown[]) => { ocrBulks.push(jobs as { data: { mediaId: string } }[]); } } as unknown as Deps["ocrQueue"],
     logger,
@@ -375,8 +409,9 @@ test("finalizeBatch: does NOT enqueue a thumb for an oversize file, marks it too
       ],
       markThumbTooLarge: async (ids: string[]) => { thumbTooLarge = ids; },
     }),
-    s3Adapter: makeS3(),
+    storage: makeS3(),
     bucket: "test-bucket",
+    listTagRules: async () => [],
     thumbQueue: { addBulk: async (jobs: unknown[]) => { thumbBulks.push(jobs as { data: { mediaId: string } }[]); } } as unknown as Deps["thumbQueue"],
     ocrQueue: { addBulk: async () => {} } as unknown as Deps["ocrQueue"],
     logger,

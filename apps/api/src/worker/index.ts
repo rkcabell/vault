@@ -11,6 +11,8 @@ import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumb
 import { createUnpackProcessor } from "./unpackWorker.js";
 import { createIndexProcessor } from "./indexWorker.js";
 import { createDeleteProcessor } from "./deleteWorker.js";
+import { createOrganizeProcessor } from "./organizeWorker.js";
+import { createHashProcessor } from "./hashWorker.js";
 import { createIndexWatcher } from "./indexWatcher.js";
 import { createMediaActionsService } from "../services/media/mediaActionsService.js";
 import { isUnderAllowedRoot } from "../lib/media/indexRoots.js";
@@ -19,6 +21,7 @@ import { readDeleteAbortEpoch } from "../lib/media/deleteAbort.js";
 import { enqueueIndex } from "../queues/enqueueIndex.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
+import { TagRuleRepository } from "../repositories/tagRuleRepository.js";
 import { MediaMetadataRepository } from "../repositories/mediaMetadataRepository.js";
 import { DocumentRepository } from "../repositories/documentRepository.js";
 import { PreferencesRepository } from "../repositories/preferencesRepository.js";
@@ -34,6 +37,10 @@ import type { IndexJobData } from "../queues/enqueueIndex.js";
 import { INDEX_QUEUE } from "../queues/enqueueIndex.js";
 import type { DeleteJobData } from "../queues/enqueueDelete.js";
 import { DELETE_QUEUE } from "../queues/enqueueDelete.js";
+import type { OrganizeJobData } from "../queues/enqueueOrganize.js";
+import { ORGANIZE_QUEUE } from "../queues/enqueueOrganize.js";
+import type { HashJobData } from "../queues/enqueueHash.js";
+import { HASH_QUEUE } from "../queues/enqueueHash.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const BUCKET = workerBucket();
@@ -78,13 +85,15 @@ async function main () {
       .catch(err => logger.warn({ err }, "failed to publish job update"));
   };
 
-  const s3Adapter = createWorkerStorage();
+  const storage = createWorkerStorage();
 
   const mediaRepository = new MediaRepository(prisma);
   const bundleRepository = new BundleRepository(prisma);
   const metadataRepository = new MediaMetadataRepository(prisma);
   const documentRepository = new DocumentRepository(prisma);
   const preferencesService = new PreferencesService(new PreferencesRepository(prisma));
+  const tagRuleRepository = new TagRuleRepository(prisma);
+  const listTagRules = (userId: string) => tagRuleRepository.listEnabled(userId);
 
   const ocrLogger = logger.child({ queue: OCR_QUEUE, jobName: "ocr" });
   const thumbLogger = logger.child({ queue: THUMB_QUEUE, jobName: "thumb" });
@@ -93,6 +102,7 @@ async function main () {
   const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, { connection });
   const indexQueue = new Queue<IndexJobData>(_INDEX_QUEUE, { connection });
   const deleteQueue = new Queue<DeleteJobData>(DELETE_QUEUE, { connection });
+  const hashQueue = new Queue<HashJobData>(HASH_QUEUE, { connection });
 
   const allowedRoots = workerAllowedRoots();
 
@@ -101,7 +111,7 @@ async function main () {
     createOcrProcessor({
       mediaRepository,
       documentRepository,
-      storage: s3Adapter,
+      storage: storage,
       bucket: BUCKET,
       allowedRoots,
       enqueueOcr: async (data, opts) => ocrQueue.add("ocr", data, opts),
@@ -124,7 +134,7 @@ async function main () {
       prismaMedia: mediaRepository,
       metadataRepository,
       preferencesService,
-      storage: s3Adapter,
+      storage: storage,
       bucket: BUCKET,
       allowedRoots,
       logger: thumbLogger,
@@ -141,11 +151,13 @@ async function main () {
     createUnpackProcessor({
       mediaRepository,
       bundleRepository,
-      s3Adapter,
+      storage,
       bucket: BUCKET,
       ocrQueue,
       thumbQueue,
+      listTagRules,
       logger: unpackLogger,
+      publishJobUpdate,
     }),
     { connection, concurrency: 2 },
   );
@@ -158,7 +170,10 @@ async function main () {
       mediaRepository,
       thumbQueue,
       ocrQueue,
+      hashQueue,
+      listTagRules,
       logger: indexLogger,
+      publishJobUpdate,
       // Read the abort epoch off the publish client (a plain GET); the dev abort
       // endpoint bumps it so an in-flight walk stops adding jobs.
       readAbortEpoch: () => readIndexAbortEpoch(publisher),
@@ -180,9 +195,10 @@ async function main () {
     createDeleteProcessor({
       mediaRepository,
       bundleRepository,
-      s3Adapter,
+      storage,
       bucket: BUCKET,
       logger: deleteLogger,
+      publishJobUpdate,
       // Read the abort epoch off the publish client (a plain GET); the delete
       // abort endpoint bumps it so an in-flight delete stops between chunks.
       readAbortEpoch: () => readDeleteAbortEpoch(publisher),
@@ -196,11 +212,48 @@ async function main () {
     },
   );
 
+  const hashLogger = logger.child({ queue: HASH_QUEUE, jobName: "hash" });
+
+  const hashWorker = new Worker<HashJobData>(
+    HASH_QUEUE,
+    createHashProcessor({
+      mediaRepository,
+      preferencesService,
+      storage,
+      bucket: BUCKET,
+      logger: hashLogger,
+    }),
+    { connection, concurrency: 2 }, // streaming, IO-bound; keep it light
+  );
+
+  const organizeLogger = logger.child({ queue: ORGANIZE_QUEUE, jobName: "organize" });
+
+  const organizeWorker = new Worker<OrganizeJobData>(
+    ORGANIZE_QUEUE,
+    createOrganizeProcessor({
+      mediaRepository,
+      tagRuleRepository,
+      getIndexRoots: async userId =>
+        (await preferencesService.getPreferences(userId)).indexAllowedRoots,
+      logger: organizeLogger,
+      publishJobUpdate,
+    }),
+    {
+      connection,
+      concurrency: 1, // one retro run at a time; per-row work is cheap
+      // A partial organize run is resumable by re-running (it only adds missing
+      // tags), so a stalled job must fail, not respawn.
+      maxStalledCount: 0,
+    },
+  );
+
   ocrWorker.on("ready", () => ocrLogger.info({ queue: OCR_QUEUE }, "worker ready"));
   thumbWorker.on("ready", () => thumbLogger.info({ queue: THUMB_QUEUE }, "worker ready"));
   unpackWorker.on("ready", () => unpackLogger.info({ queue: _UNPACK_QUEUE }, "worker ready"));
   indexWorker.on("ready", () => indexLogger.info({ queue: _INDEX_QUEUE }, "worker ready"));
   deleteWorker.on("ready", () => deleteLogger.info({ queue: DELETE_QUEUE }, "worker ready"));
+  organizeWorker.on("ready", () => organizeLogger.info({ queue: ORGANIZE_QUEUE }, "worker ready"));
+  hashWorker.on("ready", () => hashLogger.info({ queue: HASH_QUEUE }, "worker ready"));
 
   // Live in-place indexing: a single chokidar watcher across all users' allowed
   // roots. mediaActionsService gives the watcher a delete path that also cleans
@@ -209,16 +262,21 @@ async function main () {
   const mediaActions = createMediaActionsService({
     repository: mediaRepository,
     bundleRepository,
-    s3Adapter,
+    storage,
     bucket: BUCKET,
     ocrQueue,
     thumbQueue,
+    listTagRules,
+    publishJobUpdate,
   });
   const indexWatcher = createIndexWatcher(
     {
       mediaRepository,
       thumbQueue,
       ocrQueue,
+      hashQueue,
+      listTagRules,
+      publishJobUpdate,
       deleteMedia: (userId, id) => mediaActions.deleteMedia(userId, id),
       regenerateThumbnail: (userId, id, roots) => mediaActions.regenerateThumbnail(userId, id, roots),
       logger: watchLogger,
@@ -456,15 +514,35 @@ async function main () {
     deleteLogger.error({ jobName: "delete", queue: DELETE_QUEUE, err }, "worker error"),
   );
 
-  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE, _INDEX_QUEUE, DELETE_QUEUE] }, "worker started");
+  organizeWorker.on("failed", (job, err) =>
+    organizeLogger.error(
+      { jobName: "organize", queue: ORGANIZE_QUEUE, jobId: job?.id ?? "unknown", userId: job?.data?.userId ?? null, err },
+      "organize job failed",
+    ),
+  );
+  organizeWorker.on("error", err =>
+    organizeLogger.error({ jobName: "organize", queue: ORGANIZE_QUEUE, err }, "worker error"),
+  );
+
+  hashWorker.on("failed", (job, err) =>
+    hashLogger.error(
+      { jobName: "hash", queue: HASH_QUEUE, jobId: job?.id ?? "unknown", mediaId: job?.data?.mediaId ?? "unknown", userId: job?.data?.userId ?? null, err },
+      "hash job failed",
+    ),
+  );
+  hashWorker.on("error", err =>
+    hashLogger.error({ jobName: "hash", queue: HASH_QUEUE, err }, "worker error"),
+  );
+
+  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE, _INDEX_QUEUE, DELETE_QUEUE, ORGANIZE_QUEUE, HASH_QUEUE] }, "worker started");
 
   const shutdown = async () => {
     logger.info("worker shutting down...");
     clearInterval(stallInterval);
     if (reconcileInterval) clearInterval(reconcileInterval);
     await indexWatcher.close().catch(err => watchLogger.warn({ err }, "index watcher close failed"));
-    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close(), indexWorker.close(), deleteWorker.close()]);
-    await Promise.allSettled([ocrQueue.close(), thumbQueue.close(), indexQueue.close(), deleteQueue.close()]);
+    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close(), indexWorker.close(), deleteWorker.close(), organizeWorker.close(), hashWorker.close()]);
+    await Promise.allSettled([ocrQueue.close(), thumbQueue.close(), indexQueue.close(), deleteQueue.close(), hashQueue.close()]);
     await publisher.quit();
   };
 

@@ -132,12 +132,7 @@ POSTGRES_URL=postgresql://vault:vault@localhost:5432/vault?schema=public
 JWT_SECRET=$JWT_SECRET
 JWT_REFRESH_SECRET=$JWT_REFRESH_SECRET
 
-S3_ENDPOINT=http://localhost:9000
-S3_PUBLIC_ENDPOINT=http://localhost:9000
-S3_REGION=us-east-1
-S3_ACCESS_KEY_ID=vault
-S3_SECRET_ACCESS_KEY=vaultvault
-S3_BUCKET=vault-media
+STORAGE_FS_PATH=/data/vault
 
 REDIS_URL=redis://localhost:6379
 EOF
@@ -151,17 +146,11 @@ set -a
 source "$ENV_FILE"
 set +a
 
-_env_val() { grep "^$1=" "$ENV_FILE" | cut -d= -f2-; }
-S3_ENDPOINT=$(_env_val S3_ENDPOINT)
-S3_ACCESS_KEY_ID=$(_env_val S3_ACCESS_KEY_ID)
-S3_SECRET_ACCESS_KEY=$(_env_val S3_SECRET_ACCESS_KEY)
-S3_BUCKET=$(_env_val S3_BUCKET)
-
 # ---------------------------------------------------------------------------
 # 4. Start infrastructure
 # ---------------------------------------------------------------------------
 step "Starting Docker infrastructure"
-$COMPOSE up -d postgres redis minio
+$COMPOSE up -d postgres redis
 ok "Containers started"
 
 # ---------------------------------------------------------------------------
@@ -187,40 +176,9 @@ wait_for() {
 
 wait_for "postgres" $COMPOSE exec -T postgres pg_isready -U vault -d vault
 wait_for "redis"    $COMPOSE exec -T redis redis-cli ping
-wait_for "minio"    $COMPOSE exec -T minio curl -sf http://localhost:9000/minio/health/live
 
 # ---------------------------------------------------------------------------
-# 6. Create MinIO bucket
-# ---------------------------------------------------------------------------
-step "Creating MinIO bucket"
-
-# Run from apps/api so Node resolves @aws-sdk/client-s3 from that workspace
-(cd "$ROOT/apps/api" && node --input-type=module <<EOF
-import { S3Client, CreateBucketCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
-
-const client = new S3Client({
-  endpoint: '$S3_ENDPOINT',
-  region: 'us-east-1',
-  credentials: {
-    accessKeyId: '$S3_ACCESS_KEY_ID',
-    secretAccessKey: '$S3_SECRET_ACCESS_KEY',
-  },
-  forcePathStyle: true,
-});
-
-try {
-  await client.send(new HeadBucketCommand({ Bucket: '$S3_BUCKET' }));
-  console.log('  Bucket already exists: $S3_BUCKET');
-} catch {
-  await client.send(new CreateBucketCommand({ Bucket: '$S3_BUCKET' }));
-  console.log('  Bucket created: $S3_BUCKET');
-}
-EOF
-)
-ok "MinIO bucket ready"
-
-# ---------------------------------------------------------------------------
-# 7. Generate Prisma client + migrate
+# 6. Generate Prisma client + migrate
 # ---------------------------------------------------------------------------
 step "Setting up database"
 
@@ -240,5 +198,4 @@ echo ""
 echo -e "  Start everything:  ${BOLD}pnpm run start${NC}"
 echo -e "    API              →  http://localhost:8000"
 echo -e "    Web              →  http://localhost:3000"
-echo -e "    MinIO console    →  http://localhost:9001"
 echo ""

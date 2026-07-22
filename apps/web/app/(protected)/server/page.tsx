@@ -34,10 +34,10 @@ function formatUptime(seconds: number): string {
 const isDev = process.env.NEXT_PUBLIC_NODE_ENV !== "production";
 
 export default function ServerPage() {
-  const [api,   setApi]   = useState<ServiceStatus>("checking");
-  const [db,    setDb]    = useState<ServiceStatus>("checking");
-  const [redis, setRedis] = useState<ServiceStatus>("checking");
-  const [minio, setMinio] = useState<ServiceStatus>("checking");
+  const [api,     setApi]     = useState<ServiceStatus>("checking");
+  const [db,      setDb]      = useState<ServiceStatus>("checking");
+  const [redis,   setRedis]   = useState<ServiceStatus>("checking");
+  const [storage, setStorage] = useState<ServiceStatus>("checking");
 
   const [ocrWorker,   setOcrWorker]   = useState<ServiceStatus>("checking");
   const [thumbWorker, setThumbWorker] = useState<ServiceStatus>("checking");
@@ -50,8 +50,6 @@ export default function ServerPage() {
   const [dbSizeBytes,    setDbSizeBytes]    = useState<number | null>(null);
   const [ocrCounts,      setOcrCounts]      = useState<QueueCounts | null>(null);
   const [thumbCounts,    setThumbCounts]    = useState<QueueCounts | null>(null);
-  const [minioConsoleUrl, setMinioConsoleUrl] = useState<string | null>(null);
-  const [storageDriver,  setStorageDriver]  = useState<"s3" | "fs" | null>(null);
   const [storagePath,    setStoragePath]    = useState<string | null>(null);
   const [storageBytes,   setStorageBytes]   = useState<number | null>(null);
   const [storageCount,   setStorageCount]   = useState<number | null>(null);
@@ -72,13 +70,13 @@ export default function ServerPage() {
     if (readiness.status === "fulfilled") {
       const { ok, body } = readiness.value as { ok: boolean; body: { services?: Record<string, string> } | null };
       const svc = body?.services;
-      setDb(    svc?.db    === "healthy" ? "healthy" : svc?.db    === "degraded" ? "degraded" : ok ? "healthy" : "unreachable");
-      setRedis( svc?.redis === "healthy" ? "healthy" : svc?.redis === "degraded" ? "degraded" : "unreachable");
-      setMinio( svc?.s3    === "healthy" ? "healthy" : svc?.s3    === "degraded" ? "degraded" : "unreachable");
+      setDb(     svc?.db      === "healthy" ? "healthy" : svc?.db      === "degraded" ? "degraded" : ok ? "healthy" : "unreachable");
+      setRedis(  svc?.redis   === "healthy" ? "healthy" : svc?.redis   === "degraded" ? "degraded" : "unreachable");
+      setStorage(svc?.storage === "healthy" ? "healthy" : svc?.storage === "degraded" ? "degraded" : "unreachable");
     } else {
       setDb("unreachable");
       setRedis("unreachable");
-      setMinio("unreachable");
+      setStorage("unreachable");
     }
 
     setLastChecked(new Date());
@@ -95,14 +93,12 @@ export default function ServerPage() {
     if (statusRes.status === "fulfilled") {
       const s = statusRes.value as {
         apiPort: number; corsOrigin: string; uptimeSeconds: number; memoryMB: number;
-        minioConsoleUrl: string | null; storageDriver?: "s3" | "fs"; storagePath?: string | null;
+        storagePath?: string | null;
       };
       setApiPort(String(s.apiPort));
       setCorsOrigin(s.corsOrigin ?? "");
       setUptimeSeconds(s.uptimeSeconds ?? null);
       setMemoryMB(s.memoryMB ?? null);
-      setMinioConsoleUrl(s.minioConsoleUrl ?? null);
-      setStorageDriver(s.storageDriver ?? null);
       setStoragePath(s.storagePath ?? null);
     }
     if (workersRes.status === "fulfilled") {
@@ -143,13 +139,11 @@ export default function ServerPage() {
     return () => es.close();
   }, [loadServerInfo]);
 
-  const storageName = storageDriver === "fs" ? "Filesystem" : "MinIO";
-
   const overviewServices: { name: string; status: ServiceStatus }[] = [
-    { name: "API",       status: api   },
-    { name: "Database",  status: db    },
-    { name: "Redis",     status: redis },
-    { name: storageName, status: minio },
+    { name: "API",        status: api     },
+    { name: "Database",   status: db      },
+    { name: "Redis",      status: redis   },
+    { name: "Filesystem", status: storage },
   ];
 
   return (
@@ -277,12 +271,9 @@ export default function ServerPage() {
             />
             <ServiceCard
               icon={<HardDrive className="h-4 w-4" />}
-              name={storageName}
-              detail={storageDriver === "fs" ? (storagePath ?? "Filesystem path") : "Port 9000"}
-              subDetail={storageDriver === "fs" ? "Filesystem" : undefined}
-              status={minio}
-              href={storageDriver === "fs" ? undefined : (minioConsoleUrl ?? undefined)}
-              linkLabel={storageDriver === "fs" ? undefined : "View storage"}
+              name="Filesystem"
+              detail={storagePath ?? "Filesystem path"}
+              status={storage}
             />
           </div>
         </div>

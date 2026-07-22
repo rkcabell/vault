@@ -1,21 +1,18 @@
-//File: apps/api/src/tests/unit/thumbWorker.test.ts
+//File: apps/api/src/tests/api/worker/thumbWorker.test.ts
 
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
-import { s3 } from "@/plugins/s3Client.js";
-import { createS3Adapter } from "@/adapters/s3Adapter.js";
 import { prisma } from "@vault/db";
 import { processThumb, type ThumbDeps } from "@/worker/thumbWorker.js";
+import type { StorageAdapter } from "@/adapters/storage/types.js";
 
 process.env.NODE_ENV = "test";
-process.env.S3_BUCKET = "test-bucket";
+process.env.STORAGE_BUCKET = "test-bucket";
 process.env.REDIS_URL = "redis://localhost:6379";
 process.env.THUMB_QUEUE = "thumb:queue";
 
-const originalSend = s3.send.bind(s3);
 const originalFindUnique = prisma.media.findUnique.bind(prisma.media);
 const originalUpdateMany = prisma.media.updateMany.bind(prisma.media);
 
@@ -27,20 +24,34 @@ function mockFindUnique (result: any) {
   (prisma.media as any).findUnique = async () => result;
 }
 
-function mockS3Send (fn: (cmd: any) => any) {
-  (s3 as any).send = async (cmd: any) => fn(cmd);
+/** Fake storage: serves `source` on read (null = missing), records calls. */
+function fakeStorage (source: Buffer | null): { storage: StorageAdapter; calls: string[] } {
+  const calls: string[] = [];
+  const storage = {
+    getObjectStream: async () => {
+      calls.push("get");
+      if (source === null) return null;
+      return { body: Readable.from(source), etag: null, contentLength: source.length, totalLength: source.length };
+    },
+    putObject: async () => { calls.push("put"); },
+    deleteIfPresent: async () => {},
+    objectExists: async () => source !== null,
+    presignPut: async () => "/api/storage/blob/x",
+    presignGet: async () => "/api/storage/blob/x",
+    usage: async () => ({ sizeBytes: 0, objectCount: 0 }),
+  } as unknown as StorageAdapter;
+  return { storage, calls };
 }
 
-function mockThumbDeps (): ThumbDeps {
+function mockThumbDeps (storage: StorageAdapter): ThumbDeps {
   return {
     prisma,
-    storage: createS3Adapter(s3),
+    storage,
     bucket: "test-bucket",
   };
 }
 
 afterEach(() => {
-  (s3 as any).send = originalSend;
   (prisma.media as any).findUnique = originalFindUnique;
   (prisma.media as any).updateMany = originalUpdateMany;
 });
@@ -56,11 +67,8 @@ test("processThumb marks READY when thumbnail already exists", async () => {
     return { count: 1 };
   });
 
-  mockS3Send(() => {
-    throw new Error("unexpected s3 call");
-  });
-
-  await processThumb(mockThumbDeps(), {
+  const { storage, calls } = fakeStorage(null);
+  await processThumb(mockThumbDeps(storage), {
     type: "thumb",
     mediaId: "media-1",
     userId: "user-1",
@@ -69,6 +77,7 @@ test("processThumb marks READY when thumbnail already exists", async () => {
     size: 128,
   });
 
+  assert.equal(calls.length, 0); // no storage traffic when already READY
   assert.deepEqual((updateArgs as { data: unknown }).data, {
     thumbnailKey: outKey,
     thumbState: "READY",
@@ -88,15 +97,6 @@ test("processThumb uploads a thumbnail and updates the record", async () => {
     .png()
     .toBuffer();
 
-  const seenCommands: string[] = [];
-  mockS3Send((cmd: any) => {
-    seenCommands.push(cmd.constructor.name);
-    if (cmd instanceof HeadObjectCommand) return {};
-    if (cmd instanceof GetObjectCommand) return { Body: Readable.from(imageBuffer) };
-    if (cmd instanceof PutObjectCommand) return {};
-    throw new Error("unexpected s3 command");
-  });
-
   mockFindUnique({ thumbnailKey: null, thumbState: "PENDING" });
 
   let updateArgs: unknown = null;
@@ -105,7 +105,8 @@ test("processThumb uploads a thumbnail and updates the record", async () => {
     return { count: 1 };
   });
 
-  await processThumb(mockThumbDeps(), {
+  const { storage, calls } = fakeStorage(imageBuffer);
+  await processThumb(mockThumbDeps(storage), {
     type: "thumb",
     mediaId: "media-2",
     userId: "user-2",
@@ -114,9 +115,8 @@ test("processThumb uploads a thumbnail and updates the record", async () => {
     size: 256,
   });
 
-  assert.ok(seenCommands.includes("HeadObjectCommand"));
-  assert.ok(seenCommands.includes("GetObjectCommand"));
-  assert.ok(seenCommands.includes("PutObjectCommand"));
+  assert.ok(calls.includes("get"));
+  assert.ok(calls.includes("put"));
   assert.deepEqual((updateArgs as { data: unknown }).data, {
     thumbnailKey: "thumbs/media-2.webp",
     thumbState: "READY",
@@ -125,17 +125,6 @@ test("processThumb uploads a thumbnail and updates the record", async () => {
 });
 
 test("processThumb marks FAILED when input cannot be decoded", async () => {
-  const invalidBuffer = Buffer.alloc(0);
-
-  const seenCommands: string[] = [];
-  mockS3Send((cmd: any) => {
-    seenCommands.push(cmd.constructor.name);
-    if (cmd instanceof HeadObjectCommand) return {};
-    if (cmd instanceof GetObjectCommand) return { Body: Readable.from(invalidBuffer) };
-    if (cmd instanceof PutObjectCommand) return {};
-    throw new Error("unexpected s3 command");
-  });
-
   mockFindUnique({ thumbnailKey: null, thumbState: "PENDING" });
 
   let updateArgs: unknown = null;
@@ -144,7 +133,8 @@ test("processThumb marks FAILED when input cannot be decoded", async () => {
     return { count: 1 };
   });
 
-  await processThumb(mockThumbDeps(), {
+  const { storage, calls } = fakeStorage(Buffer.alloc(0));
+  await processThumb(mockThumbDeps(storage), {
     type: "thumb",
     mediaId: "media-2b",
     userId: "user-2b",
@@ -153,9 +143,8 @@ test("processThumb marks FAILED when input cannot be decoded", async () => {
     size: 256,
   });
 
-  assert.ok(seenCommands.includes("HeadObjectCommand"));
-  assert.ok(seenCommands.includes("GetObjectCommand"));
-  assert.ok(!seenCommands.includes("PutObjectCommand"));
+  assert.ok(calls.includes("get"));
+  assert.ok(!calls.includes("put"));
 
   const data = (updateArgs as { data: { thumbState: string; thumbError?: string } }).data;
   assert.equal(data.thumbState, "FAILED");
@@ -164,17 +153,12 @@ test("processThumb marks FAILED when input cannot be decoded", async () => {
 });
 
 test("processThumb throws when the source object is missing", async () => {
-  mockS3Send((cmd: any) => {
-    if (cmd instanceof HeadObjectCommand) return {};
-    if (cmd instanceof GetObjectCommand) return { Body: null };
-    return {};
-  });
-
   mockFindUnique({ thumbnailKey: null, thumbState: "PENDING" });
   mockUpdate(() => ({} as any));
 
+  const { storage } = fakeStorage(null);
   await assert.rejects(
-    processThumb(mockThumbDeps(), {
+    processThumb(mockThumbDeps(storage), {
       type: "thumb",
       mediaId: "media-3",
       userId: "user-3",

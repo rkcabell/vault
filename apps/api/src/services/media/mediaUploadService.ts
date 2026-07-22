@@ -2,17 +2,18 @@ import crypto from "crypto";
 import type { FastifyBaseLogger } from "fastify";
 import type { Queue } from "bullmq";
 import type { OcrJobData } from "../ocrProcessingService.js";
-import type { S3Adapter } from "../../adapters/s3Adapter.js";
+import type { StorageAdapter } from "../../adapters/storage/types.js";
 import { deriveTitle } from "../../lib/media/deriveTitle.js";
 import { makeStorageKey } from "../../lib/media/keys.js";
-import { buildMimeTypeTag, normalizeMimeType } from "../../lib/tags/mimeTypeTag.js";
-import { normalizeTags } from "../../lib/tags/normalizeTags.js";
+import { normalizeMimeType } from "../../lib/tags/mimeTypeTag.js";
+import { evaluateRules, type TagRuleInput } from "../../lib/tags/rules/evaluateRules.js";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import {
   enqueueThumbBulk,
   type ThumbJob,
 } from "../../queues/enqueueThumbnail.js";
 import { enqueueOcrBulk } from "../../queues/enqueueOcr.js";
+import { enqueueHashBulk, type HashJobData } from "../../queues/enqueueHash.js";
 import { ocrSupported, thumbnailSupported, exceedsThumbnailSize } from "../../lib/media/processingSupport.js";
 
 /** Presigned PUT URL lifetime (10 minutes). Should comfortably cover client upload of large files. */
@@ -38,11 +39,19 @@ export type BatchUploadItem = {
 
 type MediaUploadDeps = {
   repository: MediaRepository;
-  s3Adapter: S3Adapter;
+  storage: StorageAdapter;
   bucket: string;
   thumbQueue: Queue<ThumbJob>;
   ocrQueue: Queue<OcrJobData>;
+  /** Stream-hash queue for items the thumb worker won't hash (non-thumbnailable
+   *  or too-large) — keeps contentHash coverage complete for dedup. Optional so
+   *  existing tests/fakes keep working. */
+  hashQueue?: Queue<HashJobData>;
   logger: FastifyBaseLogger;
+  /** The user's enabled Tag Organizer rules (see lib/tags/rules/evaluateRules). */
+  listTagRules: (userId: string) => Promise<TagRuleInput[]>;
+  /** Publishes a media event so other open library views (tabs) pick up the new items. */
+  publishJobUpdate?: (update: { userId: string; mediaId: string; field: string; value: string }) => void;
 };
 
 /**
@@ -55,19 +64,27 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
   /**
    * Create a single Media record with all states set to PENDING, then generate
    * a presigned S3 PUT URL for the client to upload the file directly.
-   * A MIME-type tag is automatically merged into the caller-supplied tags;
-   * duplicates are removed with Set deduplication before persisting.
+   * The user's Tag Organizer rules (type:, size buckets, …) are evaluated and
+   * merged into the caller-supplied tags; duplicates are removed before
+   * persisting.
    */
   const initUpload = async (userId: string, body: InitUploadInput) => {
     const id = crypto.randomUUID();
     const storageKey = makeStorageKey(userId, id, body.filename);
     const mimeType = normalizeMimeType(body.mimeType, body.filename);
-    const mimeTag = normalizeTags(buildMimeTypeTag(mimeType, body.filename))[0]!;
     const userTags = body.tags ?? [];
-    const includeMime = body.autoTagOnUpload !== false;
-    const uniqueTags = Array.from(new Set(includeMime ? [...userTags, mimeTag] : userTags));
-    // The MIME tag is auto unless the user also typed it (then user intent wins).
-    const autoTags = includeMime && !userTags.includes(mimeTag) ? [mimeTag] : [];
+    const includeAuto = body.autoTagOnUpload !== false;
+    const ruleTags = includeAuto
+      ? evaluateRules(await deps.listTagRules(userId), {
+          filename: body.filename,
+          mimeType,
+          sizeBytes: body.sizeBytes,
+          ingest: "upload",
+        })
+      : [];
+    // A rule tag is auto unless the user also typed it (then user intent wins).
+    const autoTags = ruleTags.filter(tag => !userTags.includes(tag));
+    const uniqueTags = Array.from(new Set([...userTags, ...ruleTags]));
 
     const media = await deps.repository.createMedia(
       {
@@ -86,7 +103,7 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
       { autoTags },
     );
 
-    const uploadUrl = await deps.s3Adapter.presignPut({
+    const uploadUrl = await deps.storage.presignPut({
       bucket: deps.bucket,
       key: storageKey,
       contentType: body.mimeType,
@@ -102,17 +119,28 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
    * Title is derived from filename when not provided by the caller.
    */
   const initBatchUploads = async (userId: string, items: BatchUploadItem[]) => {
+    // One rules fetch covers the whole batch.
+    const rules = items.some(item => item.autoTagOnUpload !== false)
+      ? await deps.listTagRules(userId)
+      : [];
     const autoTagsByItem: string[][] = [];
     const mediaItems = items.map(item => {
       const id = crypto.randomUUID();
       const storageKey = makeStorageKey(userId, id, item.filename);
       const mimeType = normalizeMimeType(item.mimeType, item.filename);
-      const mimeTag = normalizeTags(buildMimeTypeTag(mimeType, item.filename))[0]!;
       const userTags = item.tags ?? [];
-      const includeMime = item.autoTagOnUpload !== false;
-      const itemTags = Array.from(new Set(includeMime ? [...userTags, mimeTag] : userTags));
-      // The MIME tag is auto unless the user also typed it (then user intent wins).
-      autoTagsByItem.push(includeMime && !userTags.includes(mimeTag) ? [mimeTag] : []);
+      const includeAuto = item.autoTagOnUpload !== false;
+      const ruleTags = includeAuto
+        ? evaluateRules(rules, {
+            filename: item.filename,
+            mimeType,
+            sizeBytes: item.sizeBytes,
+            ingest: "upload",
+          })
+        : [];
+      const itemTags = Array.from(new Set([...userTags, ...ruleTags]));
+      // A rule tag is auto unless the user also typed it (then user intent wins).
+      autoTagsByItem.push(ruleTags.filter(tag => !userTags.includes(tag)));
       return {
         id,
         userId,
@@ -138,7 +166,7 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
       const chunk = mediaItems.slice(i, i + PRESIGN_CHUNK);
       const chunkSigned = await Promise.all(
         chunk.map(async item => {
-          const putUrl = await deps.s3Adapter.presignPut({
+          const putUrl = await deps.storage.presignPut({
             bucket: deps.bucket,
             key: item.storageKey,
             contentType: item.mimeType,
@@ -181,35 +209,57 @@ export function createMediaUploadService (deps: MediaUploadDeps) {
     const thumbnailable = mediaItems.filter(item => thumbnailSupported(item.mimeType));
     const thumbTooLarge = thumbnailable.filter(item => exceedsThumbnailSize(item.sizeBytes));
     const thumbItems = thumbnailable.filter(item => !exceedsThumbnailSize(item.sizeBytes));
+    // Items that skip the thumb job get a hash job instead, so contentHash
+    // coverage stays complete for dedup (the thumb worker hashes everything it
+    // processes as a side effect).
+    const hashItems = [...thumbUnsupported, ...thumbTooLarge];
 
     await Promise.all([
-      thumbItems.length > 0 && enqueueThumbBulk(
-        deps.thumbQueue,
-        thumbItems.map(item => ({
-          mediaId: item.id,
-          userId,
-          storageKey: item.storageKey,
-          size: 512,
-        })),
-      ),
-      ocrItems.length > 0 && enqueueOcrBulk(
-        deps.ocrQueue,
-        ocrItems.map(item => ({
-          mediaId: item.id,
-          userId,
-          storageKey: item.storageKey,
-        })),
-      ),
-      ocrUnsupported.length > 0 && deps.repository.markTextUnsupported(
-        ocrUnsupported.map(item => item.id),
-      ),
-      thumbUnsupported.length > 0 && deps.repository.markThumbUnsupported(
-        thumbUnsupported.map(item => item.id),
-      ),
-      thumbTooLarge.length > 0 && deps.repository.markThumbTooLarge(
-        thumbTooLarge.map(item => item.id),
-      ),
+      thumbItems.length > 0
+        ? enqueueThumbBulk(
+            deps.thumbQueue,
+            thumbItems.map(item => ({
+              mediaId: item.id,
+              userId,
+              storageKey: item.storageKey,
+              size: 512,
+            })),
+          )
+        : Promise.resolve(),
+      ocrItems.length > 0
+        ? enqueueOcrBulk(
+            deps.ocrQueue,
+            ocrItems.map(item => ({
+              mediaId: item.id,
+              userId,
+              storageKey: item.storageKey,
+            })),
+          )
+        : Promise.resolve(),
+      ocrUnsupported.length > 0
+        ? deps.repository.markTextUnsupported(ocrUnsupported.map(item => item.id))
+        : Promise.resolve(),
+      thumbUnsupported.length > 0
+        ? deps.repository.markThumbUnsupported(thumbUnsupported.map(item => item.id))
+        : Promise.resolve(),
+      thumbTooLarge.length > 0
+        ? deps.repository.markThumbTooLarge(thumbTooLarge.map(item => item.id))
+        : Promise.resolve(),
+      hashItems.length > 0 && deps.hashQueue
+        ? enqueueHashBulk(
+            deps.hashQueue,
+            hashItems.map(item => ({
+              mediaId: item.id,
+              userId,
+              storageKey: item.storageKey,
+            })),
+          )
+        : Promise.resolve(),
     ]);
+
+    // New items are live — other open library views learn of them from this
+    // event (the uploading tab navigates to /library and refetches itself).
+    deps.publishJobUpdate?.({ userId, mediaId: "*", field: "mediaCreated", value: String(mediaItems.length) });
 
     return { ok: true, count: mediaItems.length };
   };

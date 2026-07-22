@@ -112,7 +112,7 @@ async function buildApp(opts: BuildOpts = {}): Promise<FastifyInstance> {
       ?? (async () => ({ autoTagOnUpload: true, autoUnpackArchives: false })),
   });
 
-  (app as any).decorate("config", { REDIS_URL: "redis://localhost:6379" });
+  (app as any).decorate("config", { REDIS_URL: "redis://localhost:6379", STORAGE_FS_PATH: "/data/vault" });
   await app.register(mediaRoutes);
   appsToClose.push(app);
   return app;
