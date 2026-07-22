@@ -24,38 +24,6 @@ services:
       timeout: 3s
       retries: 20
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    env_file: ../../.env.prod
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-vault}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - minio:/data
-    restart: unless-stopped
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    env_file: ../../.env.prod
-    entrypoint: >
-      /bin/sh -c "
-        mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
-        mc mb --ignore-existing local/$${S3_BUCKET:-vault-media};
-        echo 'MinIO bucket ready';
-      "
-
   api:
     build:
       context: ../..
@@ -67,8 +35,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+    environment:
+      STORAGE_FS_PATH: /data/vault
+    volumes:
+      - vault-data:/data/vault
     ports:
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
@@ -116,13 +86,15 @@ services:
       target: jobs
     command: [ "node", "apps/api/dist/worker/ocr.js" ]
     env_file: ../../.env.prod
+    environment:
+      STORAGE_FS_PATH: /data/vault
+    volumes:
+      - vault-data:/data/vault
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     restart: unless-stopped
     deploy:
       resources:
@@ -136,13 +108,15 @@ services:
       target: jobs
     command: [ "node", "apps/api/dist/worker/thumb.js" ]
     env_file: ../../.env.prod
+    environment:
+      STORAGE_FS_PATH: /data/vault
+    volumes:
+      - vault-data:/data/vault
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     restart: unless-stopped
     deploy:
       resources:
@@ -151,5 +125,5 @@ services:
 
 volumes:
   pgdata:
-  minio:
+  vault-data:
   nginx-cache:

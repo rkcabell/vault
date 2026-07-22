@@ -1,19 +1,19 @@
 import fp from "fastify-plugin";
 import IORedis from "ioredis";
 import EventEmitter from "node:events";
+import { isMediaEventField, type MediaEvent, type MediaEventField } from "@vault/types";
 
-export type JobUpdateEvent = {
-  mediaId: string;
-  userId: string;
-  field: "textState" | "thumbState" | "tagsUpdated";
-  value: "READY" | "ERROR" | "FAILED" | "UNSUPPORTED" | "updated";
-};
+export type JobUpdateEvent = MediaEvent & { userId: string };
+export type { MediaEventField };
 
 declare module "fastify" {
   interface FastifyInstance {
     jobEvents: EventEmitter;
   }
 }
+
+/** Per-item state values; count fields (mediaDeleted/mediaCreated) carry a numeric string. */
+const STATE_VALUES = new Set(["READY", "ERROR", "FAILED", "UNSUPPORTED", "updated"]);
 
 export default fp(
   async app => {
@@ -33,10 +33,13 @@ export default fp(
       try {
         const payload = JSON.parse(message) as { mediaId?: string; field?: string; value?: string };
         if (!payload.mediaId || !payload.field || !payload.value) return;
-        const field = payload.field;
-        const value = payload.value;
-        if (field !== "textState" && field !== "thumbState" && field !== "tagsUpdated") return;
-        if (value !== "READY" && value !== "ERROR" && value !== "FAILED" && value !== "UNSUPPORTED" && value !== "updated") return;
+        const { field, value } = payload;
+        if (!isMediaEventField(field)) return;
+        if (field === "mediaDeleted" || field === "mediaCreated") {
+          if (!/^\d+$/.test(value)) return;
+        } else if (!STATE_VALUES.has(value)) {
+          return;
+        }
         emitter.emit("update", {
           mediaId: payload.mediaId,
           userId,

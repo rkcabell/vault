@@ -5,6 +5,7 @@ import { z } from "zod";
 import { passwordSchema } from "@vault/types";
 import { createAuthService, AuthError } from "../services/authService.js";
 import { UserRepository } from "../repositories/userRepository.js";
+import { TagRuleRepository } from "../repositories/tagRuleRepository.js";
 import { createPasswordHasher } from "../adapters/passwordHasher.js";
 import { createJwtAdapter } from "../adapters/jwtAdapter.js";
 
@@ -41,10 +42,13 @@ function parseRegistration(body: unknown) {
 }
 
 export const authRoutes: FastifyPluginAsync = async app => {
+  const tagRuleRepository = new TagRuleRepository(app.prisma);
   const authService = createAuthService({
     userRepository: new UserRepository(app.prisma),
     passwordHasher: createPasswordHasher(),
     jwt: createJwtAdapter(app.jwt),
+    // New accounts start with the default Tag Organizer rules.
+    seedUserDefaults: userId => tagRuleRepository.seedDefaults(userId),
   });
 
   const cookieConfig = {
@@ -86,6 +90,12 @@ export const authRoutes: FastifyPluginAsync = async app => {
     },
     async (req, reply) => {
       if (reply.sent) return;
+
+      // Self-hosted lock: once the owner has created their account, set
+      // DISABLE_REGISTRATION=true so nobody else on the network can register.
+      if (app.config.DISABLE_REGISTRATION) {
+        return reply.forbidden("Registration is disabled on this server.");
+      }
 
       const parsed = parseRegistration(req.body);
       if ("error" in parsed) return reply.badRequest(parsed.error);

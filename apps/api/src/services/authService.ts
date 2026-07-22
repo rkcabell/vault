@@ -15,6 +15,9 @@ export type AuthServiceDeps = {
   userRepository: UserRepository;
   passwordHasher?: PasswordHasher;
   jwt?: JwtAdapter;
+  /** Seeds per-user defaults (e.g. the built-in tag rules) after registration.
+   *  Failures are swallowed — a missing default set must not fail signup. */
+  seedUserDefaults?: (userId: string) => Promise<void>;
 };
 
 export function createAuthService (deps: AuthServiceDeps) {
@@ -40,6 +43,8 @@ export function createAuthService (deps: AuthServiceDeps) {
 
     const hash = await passwordHasher.hash(password);
     const user = await deps.userRepository.createUser({ email, passwordHash: hash });
+
+    await deps.seedUserDefaults?.(user.id).catch(() => {});
 
     // New account: tokenVersion starts at 0 (the column default).
     const tokens: AuthTokens = {

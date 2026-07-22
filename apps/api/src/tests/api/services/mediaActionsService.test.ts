@@ -64,7 +64,7 @@ function makeS3 (overrides: {
     deleteIfPresent: overrides.deleteIfPresent ?? (async () => {}),
     presignGet: overrides.presignGet ?? (async () => "https://example.com/presigned"),
     getObjectStream: overrides.getObjectStream ?? (async () => ({ body: makeReadableStream(), etag: null, contentLength: null })),
-  } as unknown as Parameters<typeof createMediaActionsService>[0]["s3Adapter"];
+  } as unknown as Parameters<typeof createMediaActionsService>[0]["storage"];
 }
 
 function makeQueue (overrides: {
@@ -101,7 +101,7 @@ function makeService (repoOverrides = {}, s3Overrides = {}, ocrQueueOverrides = 
   return createMediaActionsService({
     repository: makeRepo(repoOverrides),
     bundleRepository: makeBundleRepo(),
-    s3Adapter: makeS3(s3Overrides),
+    storage: makeS3(s3Overrides),
     bucket: "test-bucket",
     ocrQueue: makeQueue(ocrQueueOverrides),
     thumbQueue: makeThumbQueue(thumbQueueOverrides),
@@ -461,7 +461,7 @@ test("regenerateThumbnail: in-place item carries sourcePath and allowedRoots", a
   assert.deepEqual(job.allowedRoots, ["C:\\nas"]);
 });
 
-test("regenerateThumbnail: unsupported type enqueues no job and marks it FAILED", async () => {
+test("regenerateThumbnail: unsupported type enqueues no job and marks it UNSUPPORTED", async () => {
   const thumbJobs: unknown[] = [];
   let markedUnsupported: string[] | null = null;
   let thumbReset = false;
@@ -481,7 +481,7 @@ test("regenerateThumbnail: unsupported type enqueues no job and marks it FAILED"
   assert.equal(thumbJobs.length, 0, "no thumb job enqueued for unsupported type");
   assert.equal(thumbReset, false, "thumb state not reset to PENDING");
   assert.deepEqual(markedUnsupported as string[] | null, ["media-1"]);
-  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(result, { ok: true, queued: false });
 });
 
 // ── regenerateThumbnailsBatch ─────────────────────────────────────────────────
@@ -857,7 +857,7 @@ test("unpackArchive: only enqueues thumb/OCR for compatible entries, marks the r
       setSourceMedia: async () => {},
       deleteBundle: async () => {},
     } as unknown as Parameters<typeof createMediaActionsService>[0]["bundleRepository"],
-    s3Adapter: {
+    storage: {
       // Hand the unpacker a real zip stream.
       getObjectStream: async () => ({ body: Readable.from(zip), etag: null, contentLength: null }),
       // Drain each extracted entry stream so unzipper advances to the next.
@@ -868,7 +868,7 @@ test("unpackArchive: only enqueues thumb/OCR for compatible entries, marks the r
           body.resume();
         });
       },
-    } as unknown as Parameters<typeof createMediaActionsService>[0]["s3Adapter"],
+    } as unknown as Parameters<typeof createMediaActionsService>[0]["storage"],
     bucket: "test-bucket",
     ocrQueue: { addBulk: async (jobs: { data: { mediaId: string } }[]) => { ocrBulks.push(jobs.map(j => j.data)); } } as unknown as Parameters<typeof createMediaActionsService>[0]["ocrQueue"],
     thumbQueue: { addBulk: async (jobs: { data: { mediaId: string } }[]) => { thumbBulks.push(jobs.map(j => j.data)); } } as unknown as Parameters<typeof createMediaActionsService>[0]["thumbQueue"],
@@ -914,12 +914,12 @@ const castThumb = (q: ObQueue) => q as unknown as Parameters<typeof createMediaA
 const castUnpack = (q: ObQueue) => q as unknown as Parameters<typeof createMediaActionsService>[0]["unpackQueue"];
 const castIndex = (q: ObQueue) => q as unknown as Parameters<typeof createMediaActionsService>[0]["indexQueue"];
 
-test("abortProcessing: pauses, drains, cleans, then resumes every wired queue", async () => {
+test("abortProcessing: pauses, drains, cleans, then resumes the index queue only", async () => {
   const log: Record<string, QueueCalls> = {};
   const svc = createMediaActionsService({
     repository: makeRepo(),
     bundleRepository: makeBundleRepo(),
-    s3Adapter: makeS3(),
+    storage: makeS3(),
     bucket: "test-bucket",
     ocrQueue: makeAbortQueue("ocr", log),
     thumbQueue: castThumb(makeAbortQueue("thumb", log)),
@@ -929,12 +929,16 @@ test("abortProcessing: pauses, drains, cleans, then resumes every wired queue", 
 
   const result = await svc.abortProcessing();
   assert.equal(result.ok, true);
-  assert.deepEqual(result.cleared.sort(), ["index", "ocr", "thumb", "unpack"]);
-  for (const name of ["index", "ocr", "thumb", "unpack"]) {
-    assert.equal(log[name].paused, true, `${name} paused`);
-    assert.equal(log[name].drained, true, `${name} drained`);
-    assert.deepEqual(log[name].cleaned.sort(), ["completed", "failed"], `${name} cleaned terminal`);
-    assert.equal(log[name].resumed, true, `${name} resumed`);
+  // Only the index queue (the producer) is drained — thumb/ocr jobs already
+  // enqueued are left to finish so no thumbnails or text are lost mid-walk.
+  assert.deepEqual(result.cleared, ["index"]);
+  assert.equal(log["index"].paused, true, "index paused");
+  assert.equal(log["index"].drained, true, "index drained");
+  assert.deepEqual(log["index"].cleaned.sort(), ["completed", "failed"], "index cleaned terminal");
+  assert.equal(log["index"].resumed, true, "index resumed");
+  for (const name of ["ocr", "thumb", "unpack"]) {
+    assert.equal(log[name].paused, false, `${name} untouched`);
+    assert.equal(log[name].drained, false, `${name} untouched`);
   }
 });
 
@@ -945,7 +949,7 @@ test("abortProcessing: bumps the index-abort epoch so an in-flight walk stops", 
   const svc = createMediaActionsService({
     repository: makeRepo(),
     bundleRepository: makeBundleRepo(),
-    s3Adapter: makeS3(),
+    storage: makeS3(),
     bucket: "test-bucket",
     ocrQueue: makeAbortQueue("ocr", log),
     thumbQueue: castThumb(makeAbortQueue("thumb", log)),
@@ -958,20 +962,21 @@ test("abortProcessing: bumps the index-abort epoch so an in-flight walk stops", 
   assert.equal(incrKey, "vault:index:abort-epoch");
 });
 
-test("abortProcessing: still drains queues when no redis is wired (signal skipped)", async () => {
+test("abortProcessing: still drains the index queue when no redis is wired (signal skipped)", async () => {
   const log: Record<string, QueueCalls> = {};
   const svc = createMediaActionsService({
     repository: makeRepo(),
     bundleRepository: makeBundleRepo(),
-    s3Adapter: makeS3(),
+    storage: makeS3(),
     bucket: "test-bucket",
     ocrQueue: makeAbortQueue("ocr", log),
     thumbQueue: castThumb(makeAbortQueue("thumb", log)),
+    indexQueue: castIndex(makeAbortQueue("index", log)),
     // no redis
   });
 
   const result = await svc.abortProcessing();
-  assert.deepEqual(result.cleared.sort(), ["ocr", "thumb"]);
+  assert.deepEqual(result.cleared, ["index"]);
 });
 
 test("abortProcessing: never obliterates (no active jobs are yanked mid-process)", async () => {
@@ -979,35 +984,36 @@ test("abortProcessing: never obliterates (no active jobs are yanked mid-process)
   const q = { pause: async () => {}, drain: async () => {}, clean: async () => {}, resume: async () => {},
     obliterate: async () => { obliterated = true; } } as unknown as ObQueue;
   const svc = createMediaActionsService({
-    repository: makeRepo(), bundleRepository: makeBundleRepo(), s3Adapter: makeS3(), bucket: "b",
-    ocrQueue: q, thumbQueue: castThumb(q),
+    repository: makeRepo(), bundleRepository: makeBundleRepo(), storage: makeS3(), bucket: "b",
+    ocrQueue: q, thumbQueue: castThumb(q), indexQueue: castIndex(q),
   });
   await svc.abortProcessing();
   assert.equal(obliterated, false, "must not call obliterate — that causes the Missing-key worker error");
 });
 
-test("abortProcessing: skips optional queues that aren't wired", async () => {
+test("abortProcessing: no-ops cleanly when the index queue isn't wired", async () => {
   const log: Record<string, QueueCalls> = {};
   const svc = createMediaActionsService({
     repository: makeRepo(),
     bundleRepository: makeBundleRepo(),
-    s3Adapter: makeS3(),
+    storage: makeS3(),
     bucket: "test-bucket",
     ocrQueue: makeAbortQueue("ocr", log),
     thumbQueue: castThumb(makeAbortQueue("thumb", log)),
-    // unpackQueue + indexQueue intentionally omitted
+    // indexQueue intentionally omitted
   });
 
   const result = await svc.abortProcessing();
-  assert.deepEqual(result.cleared.sort(), ["ocr", "thumb"]);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.cleared, []);
 });
 
-test("abortProcessing: a failing queue is still resumed and doesn't block the others", async () => {
+test("abortProcessing: a failing drain still resumes the queue (never left paused)", async () => {
   const log: Record<string, QueueCalls> = {};
   const svc = createMediaActionsService({
     repository: makeRepo(),
     bundleRepository: makeBundleRepo(),
-    s3Adapter: makeS3(),
+    storage: makeS3(),
     bucket: "test-bucket",
     ocrQueue: makeAbortQueue("ocr", log),
     thumbQueue: castThumb(makeAbortQueue("thumb", log)),
@@ -1016,7 +1022,7 @@ test("abortProcessing: a failing queue is still resumed and doesn't block the ot
 
   const result = await svc.abortProcessing();
   assert.equal(result.ok, true);
-  // index drain threw → not reported, but it must still be resumed (not left paused).
-  assert.deepEqual(result.cleared.sort(), ["ocr", "thumb"]);
+  // index drain threw → not reported as cleared, but it must still be resumed.
+  assert.deepEqual(result.cleared, []);
   assert.equal(log["index"].resumed, true, "failing queue is resumed in finally");
 });

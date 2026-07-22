@@ -51,7 +51,7 @@ test("createUnpackProcessor: returns early when media is not found", async () =>
      
     bundleRepository: {} as any,
      
-    s3Adapter: {} as any,
+    storage: {} as any,
     bucket: "test-bucket",
     ocrQueue: NOOP_QUEUE,
     thumbQueue: NOOP_QUEUE,
@@ -84,7 +84,7 @@ test("createUnpackProcessor: returns early when archive is already linked to a b
      
     bundleRepository: {} as any,
      
-    s3Adapter: {} as any,
+    storage: {} as any,
     bucket: "test-bucket",
     ocrQueue: NOOP_QUEUE,
     thumbQueue: NOOP_QUEUE,
@@ -125,7 +125,7 @@ test("createUnpackProcessor: logs bundleId after successful extraction", async (
       updateBundle: async () => {},
      
     } as any,
-    s3Adapter: {
+    storage: {
       getObjectStream: async () => ({ body: Readable.from([zipBuffer]) }),
       // drain the entry stream so unzipper can advance past the single entry
        

@@ -9,6 +9,8 @@ import { requireAuth } from "../utils/authGuard.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import { readObjectBuffer } from "../adapters/storage/getObjectBuffer.js";
 import { normalizeExtensions } from "../lib/media/extensions.js";
+import { canonicalizeAbsPath, overlapsStoragePath } from "../lib/media/indexRoots.js";
+import { BUILD_DIR_NAMES, BUILD_DIR_SUFFIXES, CONTENT_EXTENSIONS } from "../lib/media/contentFilters.js";
 
 /**
  * Find the .env the process is actually reading from. pnpm 10 pre-loads the
@@ -121,15 +123,6 @@ async function nearestReadableDir (start: string): Promise<string> {
 export const serverRoutes: FastifyPluginAsync = async (app) => {
   app.get("/status", { preHandler: [requireAuth] }, async () => {
     const mem = process.memoryUsage();
-    const driver = app.config.STORAGE_DRIVER;
-
-    // MinIO console link only applies to the S3 backend.
-    let minioConsoleUrl: string | null = null;
-    if (driver === "s3" && app.config.S3_PUBLIC_ENDPOINT) {
-      const publicUrl = new URL(app.config.S3_PUBLIC_ENDPOINT);
-      publicUrl.port = "9001";
-      minioConsoleUrl = `${publicUrl.origin}/browser/${app.config.S3_BUCKET}`;
-    }
 
     return {
       env:            app.config.NODE_ENV,
@@ -137,10 +130,8 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
       corsOrigin:     app.config.CORS_ORIGIN,
       uptimeSeconds:  process.uptime(),
       memoryMB:       Math.round(mem.rss / 1024 / 1024),
-      storageDriver:  driver,
-      storageEndpoint: driver === "s3" ? app.config.S3_PUBLIC_ENDPOINT ?? null : null,
-      storagePath:    driver === "fs" ? app.config.STORAGE_FS_PATH ?? null : null,
-      minioConsoleUrl,
+      storageDriver:  "fs",
+      storagePath:    app.config.STORAGE_FS_PATH,
       // Whether the server can open a native file manager on the host. Drives
       // the "Open in File Explorer" button visibility on the media detail page.
       localExplorer:  app.config.LOCAL_EXPLORER,
@@ -148,7 +139,7 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/storage", { preHandler: [requireAuth] }, async () => {
-    const { sizeBytes, objectCount } = await app.storage.usage({ bucket: app.config.S3_BUCKET });
+    const { sizeBytes, objectCount } = await app.storage.usage({ bucket: app.config.STORAGE_BUCKET });
 
     const [{ db_size }] = await app.prisma.$queryRaw<[{ db_size: bigint }]>`
       SELECT pg_database_size(current_database()) AS db_size
@@ -161,7 +152,7 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
   // storage backend is reachable and writable. Surfaces typed errors so the
   // settings UI can show an actionable message (EACCES, ENOSPC, S3 auth, ...).
   app.post("/storage/test", { preHandler: [requireAuth] }, async (_req, reply) => {
-    const bucket = app.config.S3_BUCKET;
+    const bucket = app.config.STORAGE_BUCKET;
     // Flat key (no slash) so the fs adapter creates no subdirectory to clean up.
     const key = `_healthcheck-${randomUUID()}.txt`;
     const payload = Buffer.from(`vault-storage-test ${new Date().toISOString()}`);
@@ -177,42 +168,32 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
         throw new Error("READBACK_FAILED: object not readable after write");
       }
       await app.storage.deleteIfPresent({ bucket, key });
-      return { ok: true, driver: app.config.STORAGE_DRIVER, durationMs: Date.now() - started };
+      return { ok: true, driver: "fs", durationMs: Date.now() - started };
     } catch (err) {
       const code = (err as { code?: string }).code ?? null;
       const message = err instanceof Error ? err.message : String(err);
-      app.log.warn({ err, driver: app.config.STORAGE_DRIVER }, "storage self-test failed");
+      app.log.warn({ err }, "storage self-test failed");
       // Best-effort cleanup; ignore failures.
       await app.storage.deleteIfPresent({ bucket, key }).catch(() => {});
-      return reply.code(503).send({ ok: false, driver: app.config.STORAGE_DRIVER, code, message });
+      return reply.code(503).send({ ok: false, driver: "fs", code, message });
     }
   });
 
-  // Current storage config for pre-filling the settings form. The secret is
-  // never returned (only whether one is set); everything else is non-sensitive
-  // for a self-hosted admin.
+  // Current storage config for pre-filling the settings form.
   app.get("/storage-config", { preHandler: [requireAuth] }, async () => {
     const c = app.config;
     return {
-      driver: c.STORAGE_DRIVER,
-      fsPath: c.STORAGE_FS_PATH ?? null,
-      s3: {
-        endpoint: c.S3_ENDPOINT ?? null,
-        publicEndpoint: c.S3_PUBLIC_ENDPOINT ?? null,
-        region: c.S3_REGION ?? null,
-        bucket: c.S3_BUCKET ?? null,
-        accessKeyId: c.S3_ACCESS_KEY_ID ?? null,
-        hasSecret: !!c.S3_SECRET_ACCESS_KEY,
-      },
+      driver: "fs" as const,
+      fsPath: c.STORAGE_FS_PATH,
       // Writing the env file only makes sense where it's the source of truth.
       // In production the env comes from the container/compose, so disable it.
       canApply: c.NODE_ENV !== "production",
     };
   });
 
-  // Write the chosen storage backend to the .env file the API loaded, so the
-  // user can switch backends and just restart (we deliberately do NOT auto-restart
-  // — a process can't reliably restart itself across the multi-process dev setup).
+  // Write the storage path to the .env file the API loaded, so the user can
+  // repoint storage and just restart (we deliberately do NOT auto-restart —
+  // a process can't reliably restart itself across the multi-process dev setup).
   // Dev / bare-metal only: in production the env is owned by the deployment.
   app.patch("/storage-config", { preHandler: [requireAuth] }, async (req, reply) => {
     if (app.config.NODE_ENV === "production") {
@@ -221,53 +202,13 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
       );
     }
 
-    const body = (req.body ?? {}) as {
-      driver?: unknown;
-      fsPath?: unknown;
-      s3?: {
-        endpoint?: unknown; publicEndpoint?: unknown; region?: unknown;
-        bucket?: unknown; accessKeyId?: unknown; secretAccessKey?: unknown;
-      };
-    };
-    const driver = body.driver;
-    if (driver !== "s3" && driver !== "fs") return reply.badRequest("driver must be 's3' or 'fs'");
-
-    const updates: Record<string, string> = { STORAGE_DRIVER: driver };
-
-    if (driver === "fs") {
-      const fsPath = typeof body.fsPath === "string" ? body.fsPath.trim() : "";
-      if (!fsPath) return reply.badRequest("fsPath is required for fs mode");
-      if (!(fsPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(fsPath))) {
-        return reply.badRequest("fsPath must be an absolute path");
-      }
-      updates.STORAGE_FS_PATH = fsPath;
-    } else {
-      const s3 = body.s3 ?? {};
-      const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-      const endpoint = str(s3.endpoint);
-      const publicEndpoint = str(s3.publicEndpoint);
-      const accessKeyId = str(s3.accessKeyId);
-      const bucket = str(s3.bucket) || "vault-media";
-      const region = str(s3.region) || "us-east-1";
-      const isUrl = (u: string) => {
-        try { const x = new URL(u); return x.protocol === "http:" || x.protocol === "https:"; }
-        catch { return false; }
-      };
-      if (!isUrl(endpoint)) return reply.badRequest("s3.endpoint must be a valid http(s) URL");
-      if (!isUrl(publicEndpoint)) return reply.badRequest("s3.publicEndpoint must be a valid http(s) URL");
-      if (!accessKeyId) return reply.badRequest("s3.accessKeyId is required");
-      // Keep the existing secret when the field is left blank.
-      const secret = str(s3.secretAccessKey) || app.config.S3_SECRET_ACCESS_KEY || "";
-      if (!secret) return reply.badRequest("s3.secretAccessKey is required");
-      Object.assign(updates, {
-        S3_ENDPOINT: endpoint,
-        S3_PUBLIC_ENDPOINT: publicEndpoint,
-        S3_REGION: region,
-        S3_ACCESS_KEY_ID: accessKeyId,
-        S3_SECRET_ACCESS_KEY: secret,
-        S3_BUCKET: bucket,
-      });
+    const body = (req.body ?? {}) as { fsPath?: unknown };
+    const fsPath = typeof body.fsPath === "string" ? body.fsPath.trim() : "";
+    if (!fsPath) return reply.badRequest("fsPath is required");
+    if (!(fsPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(fsPath))) {
+      return reply.badRequest("fsPath must be an absolute path");
     }
+    const updates: Record<string, string> = { STORAGE_FS_PATH: fsPath };
 
     const envPath = resolveEnvPath();
     let content = "";
@@ -285,11 +226,13 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
       throw err;
     }
 
-    return { ok: true, restartRequired: true, driver, envPath };
+    return { ok: true, restartRequired: true, driver: "fs", envPath };
   });
 
   // Current in-place indexing allow-list + filetype blacklist, for pre-filling
-  // the settings form.
+  // the settings form. `skipInfo` describes what the built-in skipNonContent
+  // filter actually does, so the UI can show the real lists instead of a
+  // hardcoded copy that drifts out of sync.
   app.get("/index-config", { preHandler: [requireAuth] }, async (req) => {
     const prefs = await app.preferencesService.getPreferences(req.userId!);
     return {
@@ -297,6 +240,11 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
       blacklist: prefs.indexBlacklistExtensions,
       excludeFolders: prefs.indexExcludeFolders,
       skipNonContent: prefs.indexSkipNonContent,
+      skipInfo: {
+        buildDirNames: [...BUILD_DIR_NAMES].sort(),
+        buildDirSuffixes: [...BUILD_DIR_SUFFIXES],
+        contentExtensions: [...CONTENT_EXTENSIONS].sort(),
+      },
     };
   });
 
@@ -323,7 +271,18 @@ export const serverRoutes: FastifyPluginAsync = async (app) => {
 
     const rootsResult = toAbsolutePaths(body.roots, "root");
     if (!Array.isArray(rootsResult)) return reply.badRequest(rootsResult.error);
-    const unique = rootsResult;
+    // Canonicalize (resolves separators + drive-letter case on Windows) and
+    // re-dedupe, so `E:/data` and `e:\data` can't be saved as two roots.
+    const unique = Array.from(new Set(rootsResult.map(canonicalizeAbsPath)));
+
+    // An index root inside Vault-managed storage (or containing it) would make
+    // the indexer catalog Vault's own blobs/thumbnails as documents.
+    const clash = unique.find(root => overlapsStoragePath(root, app.config.STORAGE_FS_PATH));
+    if (clash) {
+      return reply.badRequest(
+        `Indexing root overlaps Vault's own storage folder (${app.config.STORAGE_FS_PATH}): ${clash}`,
+      );
+    }
 
     // blacklist is optional; when omitted the existing value is left untouched.
     let blacklist: string[] | undefined;

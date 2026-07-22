@@ -7,8 +7,6 @@ import {
   type OcrProcessingDeps,
 } from "@/services/ocrProcessingService.js";
 import { TextJobError } from "@/lib/text/processTextJob.js";
-import { createS3Adapter } from "@/adapters/s3Adapter.js";
-import type { S3Client } from "@aws-sdk/client-s3";
 import type { Logger } from "pino";
 
 const logger = {
@@ -61,7 +59,7 @@ function makeDeps (opts: {
   addTagIfAbsent?: (_id: string, _tag: string) => Promise<void>;
   upsertDocument?: (args: unknown) => Promise<void>;
   enqueueOcr?: () => Promise<void>;
-  s3Send?: () => Promise<unknown>;
+  onStorageRead?: () => void;
   textDeps?: OcrProcessingDeps["textDeps"];
   publishJobUpdate?: OcrProcessingDeps["publishJobUpdate"];
 } = {}): OcrProcessingDeps {
@@ -74,7 +72,15 @@ function makeDeps (opts: {
     documentRepository: {
       upsertDocument: opts.upsertDocument ?? (async () => {}),
     } as unknown as OcrProcessingDeps["documentRepository"],
-    storage: createS3Adapter({ send: opts.s3Send ?? (async () => ({})) } as unknown as S3Client),
+    storage: {
+      getObjectStream: async () => { opts.onStorageRead?.(); return null; },
+      putObject: async () => {},
+      deleteIfPresent: async () => {},
+      objectExists: async () => true,
+      presignPut: async () => "/api/storage/blob/x",
+      presignGet: async () => "/api/storage/blob/x",
+      usage: async () => ({ sizeBytes: 0, objectCount: 0 }),
+    } as unknown as OcrProcessingDeps["storage"],
     bucket: "test-bucket",
     enqueueOcr: opts.enqueueOcr ?? (async () => {}),
     logger,
@@ -149,15 +155,15 @@ test("isTransientError: non-error values → false", () => {
 
 // ── processOcrJob ─────────────────────────────────────────────────────────────
 
-test("processOcrJob: returns early without touching S3 when media is not found", async () => {
-  let s3Called = false;
+test("processOcrJob: returns early without touching storage when media is not found", async () => {
+  let storageCalled = false;
   const deps = makeDeps({
     findForOcr: async () => null,
-    s3Send: async () => { s3Called = true; return {}; },
+    onStorageRead: () => { storageCalled = true; },
   });
 
   await processOcrJob(deps, { mediaId: "missing" });
-  assert.equal(s3Called, false);
+  assert.equal(storageCalled, false);
 });
 
 test("processOcrJob: returns early when textState is ERROR", async () => {
@@ -186,12 +192,12 @@ test("processOcrJob: returns early when textState is UNSUPPORTED", async () => {
   assert.equal(upsertCalled, false);
 });
 
-test("processOcrJob: throws SOURCE_NOT_READY when S3 object is absent", async () => {
+test("processOcrJob: throws SOURCE_NOT_READY when the source object is absent", async () => {
   const deps = makeDeps({
     findForOcr: async () => ({
       id: "m1", textState: "PENDING", storageKey: "missing/key", sizeBytes: 0, mimeType: "image/png",
     }),
-    s3Send: async () => { throw new Error("Not Found"); },
+    textDeps: { getObjectBuffer: async () => null } as unknown as OcrProcessingDeps["textDeps"],
   });
 
   await assert.rejects(
@@ -298,7 +304,7 @@ test("processOcrJob: oversized text file is skipped (UNSUPPORTED), no extraction
 
   await processOcrJob(deps, { mediaId: "bigtxt" });
 
-  assert.equal(textStateSet, "FAILED");
+  assert.equal(textStateSet, "UNSUPPORTED");
   assert.equal(upsertCalled, false, "no document upserted for oversized text");
   assert.equal(bufferRead, false, "oversized file is never read into memory");
 });

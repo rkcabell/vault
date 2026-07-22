@@ -28,28 +28,5 @@ services:
     ports:
       - '6379:6379'
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: vault
-      MINIO_ROOT_PASSWORD: vaultvault
-    ports:
-      - '9000:9000'
-      - '9001:9001'
-    volumes:
-      - minio:/data
-
-  jobs:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile
-      target: jobs
-    depends_on:
-      - postgres
-      - redis
-      - minio
-
 volumes:
   pgdata:
-  minio:

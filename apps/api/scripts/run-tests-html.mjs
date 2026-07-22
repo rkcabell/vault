@@ -10,6 +10,13 @@ import { join, resolve, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
+// Mark the run as a test environment so app code can disable dev-only behavior
+// (e.g. the pino file transport in logger.ts, whose worker thread can't resolve
+// fileTransport.mjs under the tsx loader). Spawned test files inherit this env.
+// Without it, whichever files happen to construct a logger crash with
+// ERR_MODULE_NOT_FOUND — "random" failures the serial runner never showed.
+process.env.NODE_ENV ??= "test";
+
 // Resolve tsx from this script's own node_modules so it works regardless of cwd.
 // import.meta.resolve returns a file:// URL which --import accepts on all platforms.
 const TSX_ESM = import.meta.resolve("tsx/esm");

@@ -28,13 +28,13 @@ function makeS3 (overrides: {
 } = {}) {
   return {
     getObjectStream: overrides.getObjectStream ?? (async () => null),
-  } as unknown as Parameters<typeof createMediaReadService>[0]["s3Adapter"];
+  } as unknown as Parameters<typeof createMediaReadService>[0]["storage"];
 }
 
 function makeService (repoOverrides = {}, s3Overrides = {}) {
   return createMediaReadService({
     repository: makeRepo(repoOverrides),
-    s3Adapter: makeS3(s3Overrides),
+    storage: makeS3(s3Overrides),
     bucket: "test-bucket",
     logger,
   });

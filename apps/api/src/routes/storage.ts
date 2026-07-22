@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { Readable } from "node:stream";
 import { requireAuth } from "../utils/authGuard.js";
 import { InvalidStorageKeyError } from "../adapters/storage/fsAdapter.js";
+import { parseRangeHeader } from "../lib/http/range.js";
 
 /**
  * Storage proxy routes — the transfer path for the filesystem backend.
@@ -75,7 +76,7 @@ export const storageRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       await app.storage.putObject({
-        bucket: app.config.S3_BUCKET,
+        bucket: app.config.STORAGE_BUCKET,
         key,
         body: req.body as Readable,
         contentType,
@@ -94,18 +95,39 @@ export const storageRoutes: FastifyPluginAsync = async (app) => {
 
     let res;
     try {
-      res = await app.storage.getObjectStream({ bucket: app.config.S3_BUCKET, key });
+      res = await app.storage.getObjectStream({ bucket: app.config.STORAGE_BUCKET, key });
     } catch (err) {
       if (err instanceof InvalidStorageKeyError) return reply.badRequest("Invalid object key");
       throw err;
     }
     if (!res) return reply.notFound();
 
-    // Stream inline with an inferred content type so previews render in-browser;
-    // long-lived caching is safe because object keys are content-addressed per upload.
-    if (res.contentLength != null) reply.header("content-length", String(res.contentLength));
+    reply.header("accept-ranges", "bytes");
     reply.header("content-type", contentTypeForKey(key));
     reply.header("cache-control", "private, max-age=3600");
+
+    // Honor single-range requests (video seeking, large-file partial reads).
+    const size = res.totalLength ?? res.contentLength;
+    const rangeHeader = req.headers.range;
+    if (rangeHeader && size != null) {
+      const range = parseRangeHeader(rangeHeader, size);
+      if (range === "unsatisfiable") {
+        res.body.destroy();
+        reply.header("content-range", `bytes */${size}`);
+        return reply.code(416).send();
+      }
+      if (range) {
+        // The un-ranged stream is lazy (not yet opened) — swap it for a ranged one.
+        res.body.destroy();
+        const ranged = await app.storage.getObjectStream({ bucket: app.config.STORAGE_BUCKET, key, range });
+        if (!ranged) return reply.notFound();
+        reply.header("content-range", `bytes ${range.start}-${range.end}/${size}`);
+        reply.header("content-length", String(range.end - range.start + 1));
+        return reply.code(206).send(ranged.body);
+      }
+    }
+
+    if (res.contentLength != null) reply.header("content-length", String(res.contentLength));
     return reply.send(res.body);
   });
 };

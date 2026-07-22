@@ -10,12 +10,17 @@ import {
 } from "@/lib/media/deleting";
 import { emitTagsUpdated } from "@/lib/tags";
 import { emitBundlesUpdated } from "@/lib/bundles";
+import { emitMediaListUpdated } from "@/lib/media/events";
 import { toast } from "@/components/ui/Toaster";
 
 const POLL_MS = 1500;
+// Consecutive failed status polls before giving up on tracking the job. The
+// poll silently swallowing errors forever was exactly how the library ended up
+// stale with no signal — after ~12 s of failures, surface it and stop.
+const MAX_POLL_MISSES = 8;
 
 function isTerminal (s: DeleteStatus | null): boolean {
-  return !!s && (s.done || s.state === "failed");
+  return !!s && (s.done || s.state === "failed" || s.state === "lost");
 }
 
 interface DeleteProgressContextType {
@@ -38,6 +43,7 @@ export function DeleteProgressProvider ({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<DeleteStatus | null>(null);
   const jobIdRef = useRef<string | null>(null);
   const toastedJobRef = useRef<string | null>(null);
+  const pollMissesRef = useRef(0);
 
   const applyStatus = useCallback((next: DeleteStatus | null) => {
     setStatus(next);
@@ -48,7 +54,10 @@ export function DeleteProgressProvider ({ children }: { children: ReactNode }) {
       toastedJobRef.current = next.jobId;
       emitTagsUpdated();
       emitBundlesUpdated();
-      if (next.state === "failed") {
+      emitMediaListUpdated();
+      if (next.state === "lost") {
+        toast("Lost track of the delete job — the list has been refreshed to reconcile.", { variant: "error" });
+      } else if (next.state === "failed") {
         toast("Delete failed. Check the server logs.", { variant: "error" });
       } else if (next.aborted) {
         toast(`Delete stopped — removed ${next.deleted} of ${next.total}.`, { variant: "default" });
@@ -78,7 +87,21 @@ export function DeleteProgressProvider ({ children }: { children: ReactNode }) {
     const id = setInterval(() => {
       const jobId = jobIdRef.current;
       if (!jobId) return;
-      void getDeleteStatus(jobId).then(s => { if (s) applyStatus(s); });
+      void getDeleteStatus(jobId).then(s => {
+        if (s) {
+          pollMissesRef.current = 0;
+          applyStatus(s);
+          return;
+        }
+        // Failed poll (network error / job evicted). Swallowing these forever
+        // is how the grid stayed stale with no signal — give up after a bound
+        // and fire the reconcile side effects so views refetch.
+        pollMissesRef.current += 1;
+        if (pollMissesRef.current >= MAX_POLL_MISSES) {
+          pollMissesRef.current = 0;
+          applyStatus({ ...status, jobId, state: "lost" });
+        }
+      });
     }, POLL_MS);
     return () => clearInterval(id);
   }, [status, applyStatus]);
@@ -87,6 +110,7 @@ export function DeleteProgressProvider ({ children }: { children: ReactNode }) {
     const { jobId } = await startBulkDelete(input);
     jobIdRef.current = jobId;
     toastedJobRef.current = null;
+    pollMissesRef.current = 0;
     const total = "ids" in input ? input.ids.length : 0;
     applyStatus({ jobId, state: "active", done: false, aborted: false, total, deleted: 0, failed: 0 });
     return { jobId };

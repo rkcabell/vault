@@ -8,11 +8,11 @@ import prismaPlugin from "./plugins/prisma.js";
 import jwtPlugin from "./plugins/jwt.js";
 import { authRoutes } from "./routes/auth.js";
 import { profileRoutes } from "./routes/profile.js";
-import s3Plugin from "./plugins/s3.js";
 import storagePlugin from "./plugins/storage.js";
 import mediaServicesPlugin from "./plugins/mediaServices.js";
 import { mediaRoutes } from "./routes/media.js";
 import { tagsRoutes } from "./routes/tags.js";
+import { tagRulesRoutes } from "./routes/tagRules.js";
 import { remindersRoutes } from "./routes/reminders.js";
 import { bundlesRoutes } from "./routes/bundles.js";
 import { preferencesRoutes } from "./routes/preferences.js";
@@ -84,8 +84,7 @@ async function main () {
   await app.register(jwtPlugin);
   await app.register(authRoutes, { prefix: "/api/auth" });
   await app.register(profileRoutes, { prefix: "/api/profile" });
-  await app.register(s3Plugin); // S3/MinIO client (s3 mode only)
-  await app.register(storagePlugin); // app.storage adapter (s3 or filesystem)
+  await app.register(storagePlugin); // app.storage filesystem adapter
   await app.register(preferencesPlugin);
   // register redis before mediaServices
   await app.register(redisPlugin);
@@ -93,6 +92,7 @@ async function main () {
   await app.register(queueEventsPlugin); // shared QueueEvents → jobEvents emitter for SSE
   await app.register(mediaRoutes, { prefix: "/api/media" });
   await app.register(tagsRoutes, { prefix: "/api/tags" });
+  await app.register(tagRulesRoutes, { prefix: "/api/tag-rules" });
   await app.register(remindersRoutes, { prefix: "/api/reminders" });
   await app.register(bundlesRoutes, { prefix: "/api/bundles" });
   await app.register(preferencesRoutes, { prefix: "/api/preferences" });

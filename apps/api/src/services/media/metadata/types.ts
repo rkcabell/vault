@@ -1,5 +1,5 @@
 import type { FastifyBaseLogger } from "fastify";
-import type { S3Adapter } from "../../../adapters/s3Adapter.js";
+import type { StorageAdapter } from "../../../adapters/storage/types.js";
 
 export type ImageGps = {
   latitude: number;
@@ -75,7 +75,7 @@ export type ExtractArgs = {
     rawText?: string | null;
     pages?: unknown | null;
   } | null;
-  s3Adapter: S3Adapter;
+  storage: StorageAdapter;
   bucket: string;
   logger: FastifyBaseLogger;
 };

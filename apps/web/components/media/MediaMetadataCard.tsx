@@ -24,8 +24,11 @@ export function MediaMetadataCard (props: {
   localPath?: string | null
   onSaveTitle: (title: string) => Promise<void>
   busy: boolean
+  /** When set (and canReveal), the Path row becomes a click-to-reveal button. */
+  onRevealPath?: () => void
+  canReveal?: boolean
 }) {
-  const { media, metadata, localPath, onSaveTitle, busy } = props
+  const { media, metadata, localPath, onSaveTitle, busy, onRevealPath, canReveal } = props
   const title = media.title || media.filename || 'Media details'
 
   const [isEditingTitle, setIsEditingTitle] = useState(false)
@@ -124,7 +127,26 @@ export function MediaMetadataCard (props: {
 
   addRow(generalRows, 'ID', media.id, 'break-all')
   addRow(generalRows, 'Filename', media.filename, 'break-all')
-  addRow(generalRows, 'Path', localPath, 'break-all')
+  if (localPath && canReveal && onRevealPath) {
+    generalRows.push({
+      label: 'Path',
+      value: (
+        <button
+          type='button'
+          onClick={onRevealPath}
+          disabled={busy}
+          title='Reveal in file explorer'
+          className='max-w-full cursor-pointer break-all text-right underline-offset-2 hover:underline focus-visible:underline disabled:cursor-default disabled:opacity-50'
+          style={{ overflowWrap: 'anywhere' }}
+        >
+          {localPath}
+        </button>
+      ),
+      valueClassName: 'break-all',
+    })
+  } else {
+    addRow(generalRows, 'Path', localPath, 'break-all')
+  }
   addRow(generalRows, 'Size', sizeLabel)
   addRow(generalRows, 'Type', media.mimeType, 'break-all')
   const ext = media.filename?.includes('.') ? media.filename.split('.').pop()?.toUpperCase() : null

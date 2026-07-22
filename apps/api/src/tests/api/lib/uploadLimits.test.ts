@@ -10,6 +10,7 @@ import {
 } from "@/lib/media/uploadLimits.js";
 
 const MB = 1024 * 1024;
+const GB = 1024 * MB;
 
 // ── classifyUploadKind — photo ────────────────────────────────────────────────
 
@@ -121,19 +122,24 @@ test("classifyUploadKind: unknown MIME with unknown extension is other", () => {
 
 // ── uploadLimitForKind ────────────────────────────────────────────────────────
 
-test("uploadLimitForKind: photo limit is 50 MB", () => {
+test("uploadLimitForKind: photo limit is 2 GB", () => {
   assert.equal(uploadLimitForKind("photo"), PHOTO_UPLOAD_LIMIT_BYTES);
-  assert.equal(uploadLimitForKind("photo"), 50 * MB);
+  assert.equal(uploadLimitForKind("photo"), 2 * GB);
 });
 
-test("uploadLimitForKind: document limit is 250 MB", () => {
+test("uploadLimitForKind: document limit is 2 GB", () => {
   assert.equal(uploadLimitForKind("document"), DOCUMENT_UPLOAD_LIMIT_BYTES);
-  assert.equal(uploadLimitForKind("document"), 250 * MB);
+  assert.equal(uploadLimitForKind("document"), 2 * GB);
 });
 
-test("uploadLimitForKind: other limit is 500 MB", () => {
+test("uploadLimitForKind: other limit is 2 GB", () => {
   assert.equal(uploadLimitForKind("other"), HARD_UPLOAD_LIMIT_BYTES);
-  assert.equal(uploadLimitForKind("other"), 500 * MB);
+  assert.equal(uploadLimitForKind("other"), 2 * GB);
+});
+
+test("uploadLimitForKind: all kinds share the same limit (client/server contract)", () => {
+  assert.equal(uploadLimitForKind("photo"), uploadLimitForKind("document"));
+  assert.equal(uploadLimitForKind("document"), uploadLimitForKind("other"));
 });
 
 // ── getUploadSizeError ────────────────────────────────────────────────────────
@@ -180,7 +186,7 @@ test("getUploadSizeError: returns error message 1 byte over the photo limit", ()
   });
   assert.ok(result !== null);
   assert.ok(result.includes("photo.jpg"));
-  assert.ok(result.includes("50 MB"));
+  assert.ok(result.includes("2 GB"));
   assert.ok(result.includes("photos"));
 });
 
@@ -192,7 +198,7 @@ test("getUploadSizeError: returns error message 1 byte over the document limit",
   });
   assert.ok(result !== null);
   assert.ok(result.includes("report.pdf"));
-  assert.ok(result.includes("250 MB"));
+  assert.ok(result.includes("2 GB"));
   assert.ok(result.includes("documents"));
 });
 
@@ -204,7 +210,7 @@ test("getUploadSizeError: returns error message 1 byte over the hard limit for o
   });
   assert.ok(result !== null);
   assert.ok(result.includes("clip.mp4"));
-  assert.ok(result.includes("500 MB"));
+  assert.ok(result.includes("2 GB"));
   assert.ok(result.includes("files"));
 });
 
@@ -218,7 +224,7 @@ test("getUploadSizeError: error message includes the exact filename", () => {
 });
 
 test("getUploadSizeError: classifies via extension when MIME is octet-stream", () => {
-  // .pdf extension → document → 250 MB limit
+  // .pdf extension → document → 2 GB limit
   const underLimit = getUploadSizeError({
     filename: "file.pdf",
     mimeType: "application/octet-stream",
@@ -231,5 +237,5 @@ test("getUploadSizeError: classifies via extension when MIME is octet-stream", (
     mimeType: "application/octet-stream",
     sizeBytes: DOCUMENT_UPLOAD_LIMIT_BYTES + 1,
   });
-  assert.ok(overLimit?.includes("250 MB"));
+  assert.ok(overLimit?.includes("2 GB"));
 });

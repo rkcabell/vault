@@ -19,18 +19,20 @@ interface PrismaMockOpts {
   txTagUpdate?: (_args: unknown) => Promise<unknown>;
   txTagDelete?: (_args: unknown) => Promise<unknown>;
   txTagDeleteMany?: (_args: unknown) => Promise<unknown>;
+  txTagUpdateMany?: (_args: unknown) => Promise<unknown>;
 }
 
 function makePrisma({
   tagFindMany = async () => [],
   tagCount = async () => 0,
   tagUpdateMany = async () => ({}),
-  txQueryRaw = async () => [],
+  txQueryRaw = async () => [{ count: 0n }],
   txExecuteRaw = async () => 0,
   txTagFindUnique = async () => null,
   txTagUpdate = async () => ({}),
   txTagDelete = async () => ({}),
   txTagDeleteMany = async () => ({}),
+  txTagUpdateMany = async () => ({}),
 }: PrismaMockOpts = {}) {
   // The tx object passed into interactive ($transaction(fn)) callbacks.
   const tx = {
@@ -41,6 +43,7 @@ function makePrisma({
       update: txTagUpdate,
       delete: txTagDelete,
       deleteMany: txTagDeleteMany,
+      updateMany: txTagUpdateMany,
     },
   };
 
@@ -214,7 +217,13 @@ test("DELETE /:tag: unauthenticated returns 401", async () => {
 // ── PATCH /:tag — rename ───────────────────────────────────────────────────────
 
 test("PATCH /:tag: renames tag and returns affected count", async () => {
-  const app = await buildApp({ txExecuteRaw: async () => 7 });
+  // renameTag runs two UPDATEs: dedupe rows carrying both names (2), then
+  // replace on the rest (5) — affected is their sum over disjoint row sets.
+  const executeResults = [2, 5];
+  const app = await buildApp({
+    txExecuteRaw: async () => executeResults.shift() ?? 0,
+    txQueryRaw: async () => [{ count: 7n }],
+  });
 
   const res = await app.inject({
     method: "PATCH",

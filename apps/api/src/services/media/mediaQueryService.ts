@@ -12,6 +12,8 @@ const SORT_OPTIONS = [
   "size_desc",
   "size_asc",
   "mimeType_asc",
+  "starred_first",
+  "fileDate_desc",
 ] as const;
 
 export const MEDIA_SORT_OPTIONS = SORT_OPTIONS;
@@ -43,6 +45,15 @@ function buildOrderBy (sort?: typeof SORT_OPTIONS[number]) {
       return [{ sizeBytes: "desc" as const }, { id: "desc" as const }];
     case "mimeType_asc":
       return [{ mimeType: "asc" as const }, { id: "asc" as const }];
+    case "starred_first":
+      // All levels share a direction so the raw path can keyset-paginate with
+      // a single row-value comparison (see mediaRepository._listMediaRaw).
+      return [{ starred: "desc" as const }, { createdAt: "desc" as const }, { id: "desc" as const }];
+    case "fileDate_desc":
+      // The file's own date (EXIF/PDF/mtime), nullable. The repository routes
+      // this sort through the raw keyset path, which orders NULLS LAST; the
+      // plain "desc" keeps the orderBy shape derivable like every other sort.
+      return [{ fileDate: "desc" as const }, { id: "desc" as const }];
     default:
       return [{ createdAt: "desc" as const }, { id: "desc" as const }];
   }

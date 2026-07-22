@@ -9,7 +9,7 @@ import { ChevronDown, ChevronRight, Tag, Folder, Loader2, Search, X, MoreVertica
 import { cn } from '@/lib/utils';
 import { Badge } from '@/ui/Badge';
 import type { Route } from "next";
-import { emitTagsUpdated, partitionTagsByOrigin } from '@/lib/tags';
+import { emitTagsUpdated, partitionTagsByOrigin, tagNamespace } from '@/lib/tags';
 import type { TagOrigin } from '@vault/types';
 import { BUNDLES_UPDATED_EVENT } from '@/lib/bundles';
 import { ConfirmPopover } from '@/components/ui/ConfirmPopover';
@@ -98,6 +98,18 @@ function SidebarSection({
 
 const PAGE_SIZE = 30;
 
+// Facet groups render in this order; namespaces not listed follow alphabetically.
+const FACET_ORDER = ['type', 'folder', 'source'];
+
+// Time browsing lives in the library's "Year" sort (year/month section breaks)
+// now — the year:/month: tags still exist and stay searchable/deep-linkable,
+// they just don't render as sidebar facet groups anymore.
+const HIDDEN_FACETS = new Set(['year', 'month']);
+
+function facetLabel (namespace: string): string {
+  return namespace.charAt(0).toUpperCase() + namespace.slice(1);
+}
+
 export function Sidebar({ tags, tagsError, isLoading = false, className }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -125,6 +137,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
   const [isFetchingBundles, setIsFetchingBundles] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(true);
   const [tagSearch, setTagSearch] = useState('');
+  const [collapsedFacets, setCollapsedFacets] = useState<Set<string>>(new Set());
   const { ratio: tagsSplitRatio, isDragging: isDraggingSplit, containerRef: splitContainerRef, onPointerDown: startSplitDrag, onKeyDown: splitKeyDown } = useSplitDrag({
     storageKey: 'vault.sidebar.tagsSplitRatio.v2',
     defaultRatio: 0.40,
@@ -142,6 +155,15 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
   }, [searchParams]);
 
   const isTagSelected = (tagName: string) => includedTags.has(tagName);
+
+  const toggleFacet = (namespace: string) => {
+    setCollapsedFacets(prev => {
+      const next = new Set(prev);
+      if (next.has(namespace)) next.delete(namespace);
+      else next.add(namespace);
+      return next;
+    });
+  };
 
   const cycleTag = (tagName: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -288,6 +310,37 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
     }
   }, []); // stable — all mutable state accessed via refs
 
+  // Visible tags grouped for the facet sidebar: plain tags first (user-made
+  // before auto), then one collapsible group per namespace (`type:`, `year:`,
+  // `folder:` …) so the auto-tag axes read as facets instead of one flat cloud.
+  const { plainTags, facetGroups } = useMemo(() => {
+    const visible = (displayedTags ?? []).filter(t =>
+      !optimisticallyDeletedTags.has(t.name) &&
+      (!tagSearch || t.name.toLowerCase().includes(tagSearch.toLowerCase()))
+    );
+    const plain: TagItem[] = [];
+    const byNamespace = new Map<string, TagItem[]>();
+    for (const tag of visible) {
+      const ns = tagNamespace(tag.name);
+      if (!ns) { plain.push(tag); continue; }
+      if (HIDDEN_FACETS.has(ns)) continue;
+      const group = byNamespace.get(ns);
+      if (group) group.push(tag);
+      else byNamespace.set(ns, [tag]);
+    }
+    const rank = (ns: string) => {
+      const i = FACET_ORDER.indexOf(ns);
+      return i === -1 ? FACET_ORDER.length : i;
+    };
+    const groups = [...byNamespace.entries()].sort(
+      ([a], [b]) => rank(a) - rank(b) || a.localeCompare(b),
+    );
+    return {
+      plainTags: partitionTagsByOrigin(plain, t => t.origin === 'AUTO'),
+      facetGroups: groups,
+    };
+  }, [displayedTags, optimisticallyDeletedTags, tagSearch]);
+
   // IntersectionObserver: fire when sentinel scrolls into the tags container.
   // Re-runs when the sentinel mounts/unmounts (hasMoreTags) and after the first
   // tags arrive (displayedTags.length) — the sentinel doesn't exist on first
@@ -302,6 +355,87 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [fetchMoreTags, hasMoreTags, displayedTags.length]);
+
+  // One tag row, shared by the plain list and the facet groups. `label` is the
+  // display text (the value half inside a namespace group, the full name
+  // otherwise); every action still operates on the full tag name.
+  const renderTagRow = (tag: TagItem, label: string) => {
+    const isRenaming = renamingTag === tag.name;
+    const selected = isTagSelected(tag.name);
+    const isAuto = tag.origin === 'AUTO';
+    return (
+      <div
+        key={tag.id}
+        className={cn(
+          'group flex min-w-0 items-center gap-1 rounded-md transition-colors',
+          selected ? 'bg-primary/10' : 'hover:bg-accent',
+        )}
+      >
+        {/* Name button or rename input */}
+        {isRenaming ? (
+          <input
+            ref={renameInputRef}
+            value={renameValue}
+            onChange={e => setRenameValue(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
+              if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+            }}
+            onBlur={() => void commitRename()}
+            disabled={isRenamingSaving}
+            className="flex-1 min-w-0 rounded border border-ring bg-background px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring ml-2"
+          />
+        ) : (
+          <button
+            onClick={() => cycleTag(tag.name)}
+            title={selected ? `Clear filter "${tag.name}"` : `Filter by "${tag.name}"`}
+            className={cn(
+              'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              selected ? 'text-primary font-medium' : 'text-muted-foreground hover:text-accent-foreground',
+            )}
+          >
+            {!selected && tag.color && (
+              <span className="shrink-0 h-2 w-2 rounded-full" style={{ background: tag.color }} />
+            )}
+            <span className={cn('truncate', isAuto && !selected ? 'italic opacity-70 pr-1.5' : 'pr-px')}>{label}</span>
+            {tag.count !== undefined && (
+              <Badge variant="secondary" className="ml-auto shrink-0 h-5 px-1.5 text-xs">
+                {tag.count}
+              </Badge>
+            )}
+          </button>
+        )}
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
+            <button
+              className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Actions for ${tag.name}`}
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" side="right">
+            <DropdownMenuItem
+              onClick={e => { e.stopPropagation(); startRename(tag); }}
+              disabled={!!deletingTag}
+            >
+              <Pencil className="mr-2 h-4 w-4" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={e => { e.stopPropagation(); requestDeleteTag(tag, e); }}
+              disabled={deletingTag === tag.name}
+              className="text-destructive focus:text-destructive"
+            >
+              <Trash className="mr-2 h-4 w-4" />
+              {deletingTag === tag.name ? 'Deleting…' : 'Delete Tag'}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  };
 
   if (isLoading) {
     return (
@@ -375,7 +509,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                 <div className="px-3 py-2 text-sm text-muted-foreground">
                   No tags yet
                 </div>
-              ) : displayedTags.filter(t => !optimisticallyDeletedTags.has(t.name) && (!tagSearch || t.name.toLowerCase().includes(tagSearch.toLowerCase()))).length === 0 ? (
+              ) : plainTags.length === 0 && facetGroups.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-muted-foreground">
                   No matching tags
                 </div>
@@ -384,86 +518,33 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
                   ref={tagsScrollRef}
                   className="vault-scrollbar min-h-0 flex-1 overflow-y-auto space-y-1 pr-0.5"
                 >
-                  {partitionTagsByOrigin(
-                    displayedTags.filter(t =>
-                      !optimisticallyDeletedTags.has(t.name) &&
-                      (!tagSearch || t.name.toLowerCase().includes(tagSearch.toLowerCase()))
-                    ),
-                    t => t.origin === 'AUTO',
-                  ).map((tag) => {
-                    const isRenaming = renamingTag === tag.name;
-                    const selected = isTagSelected(tag.name);
-                    const isAuto = tag.origin === 'AUTO';
+                  {plainTags.map(tag => renderTagRow(tag, tag.name))}
+                  {facetGroups.map(([namespace, groupTags]) => {
+                    const collapsed = collapsedFacets.has(namespace);
                     return (
-                      <div
-                        key={tag.id}
-                        className={cn(
-                          'group flex min-w-0 items-center gap-1 rounded-md transition-colors',
-                          selected ? 'bg-primary/10' : 'hover:bg-accent',
+                      <div key={namespace}>
+                        <button
+                          onClick={() => toggleFacet(namespace)}
+                          aria-expanded={!collapsed}
+                          className={cn(
+                            'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide',
+                            'text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors',
+                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                          )}
+                        >
+                          {collapsed ? (
+                            <ChevronRight className="h-3 w-3 shrink-0" />
+                          ) : (
+                            <ChevronDown className="h-3 w-3 shrink-0" />
+                          )}
+                          <span className="truncate">{facetLabel(namespace)}</span>
+                          <span className="ml-auto shrink-0 text-[10px] font-normal opacity-70">{groupTags.length}</span>
+                        </button>
+                        {!collapsed && (
+                          <div className="ml-2 space-y-1 border-l border-border/50 pl-1">
+                            {groupTags.map(tag => renderTagRow(tag, tag.name.slice(namespace.length + 1)))}
+                          </div>
                         )}
-                      >
-                        {/* Name button or rename input */}
-                        {isRenaming ? (
-                          <input
-                            ref={renameInputRef}
-                            value={renameValue}
-                            onChange={e => setRenameValue(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
-                              if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
-                            }}
-                            onBlur={() => void commitRename()}
-                            disabled={isRenamingSaving}
-                            className="flex-1 min-w-0 rounded border border-ring bg-background px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring ml-2"
-                          />
-                        ) : (
-                          <button
-                            onClick={() => cycleTag(tag.name)}
-                            title={selected ? `Clear filter "${tag.name}"` : `Filter by "${tag.name}"`}
-                            className={cn(
-                              'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                              selected ? 'text-primary font-medium' : 'text-muted-foreground hover:text-accent-foreground',
-                            )}
-                          >
-                            {!selected && tag.color && (
-                              <span className="shrink-0 h-2 w-2 rounded-full" style={{ background: tag.color }} />
-                            )}
-                            <span className={cn('truncate pr-px', isAuto && !selected && 'italic opacity-70')}>{tag.name}</span>
-                            {tag.count !== undefined && (
-                              <Badge variant="secondary" className="ml-auto shrink-0 h-5 px-1.5 text-xs">
-                                {tag.count}
-                              </Badge>
-                            )}
-                          </button>
-                        )}
-
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
-                            <button
-                              className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              aria-label={`Actions for ${tag.name}`}
-                            >
-                              <MoreVertical className="h-4 w-4" />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" side="right">
-                            <DropdownMenuItem
-                              onClick={e => { e.stopPropagation(); startRename(tag); }}
-                              disabled={!!deletingTag}
-                            >
-                              <Pencil className="mr-2 h-4 w-4" />
-                              Rename
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={e => { e.stopPropagation(); requestDeleteTag(tag, e); }}
-                              disabled={deletingTag === tag.name}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash className="mr-2 h-4 w-4" />
-                              {deletingTag === tag.name ? 'Deleting…' : 'Delete Tag'}
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
                       </div>
                     );
                   })}

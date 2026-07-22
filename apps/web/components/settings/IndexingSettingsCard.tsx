@@ -2,16 +2,38 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
+import { usePreferences } from "@/hooks/usePreferences";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { CheckCircle2, XCircle, FolderPlus, Loader2, Save, X } from "lucide-react";
 import { DirectoryPicker } from "./DirectoryPicker";
 
 type IndexConfig = { roots: string[]; blacklist: string[]; excludeFolders: string[]; skipNonContent: boolean };
+/** What the built-in skipNonContent filter does, reported by the API so the UI never drifts. */
+type SkipInfo = { buildDirNames: string[]; buildDirSuffixes: string[]; contentExtensions: string[] };
 type SaveResult = { ok: boolean; message: string };
 
 function isAbsolutePath (value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+/**
+ * The top-most allowed root: prefer roots that are not nested inside another
+ * allowed root, then the shallowest path, keeping config order on ties. The
+ * exclude-folder picker starts here — exclusions only have an effect inside
+ * the allowed roots, so that is where browsing should begin.
+ */
+function highestAllowedRoot (roots: string[]): string | undefined {
+  if (roots.length === 0) return undefined;
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const isInside = (child: string, parent: string) => {
+    const c = norm(child);
+    const p = norm(parent);
+    return c !== p && c.startsWith(p + "/");
+  };
+  const topLevel = roots.filter(r => !roots.some(other => other !== r && isInside(r, other)));
+  const depth = (p: string) => norm(p).split("/").length;
+  return [...topLevel].sort((a, b) => depth(a) - depth(b))[0] ?? roots[0];
 }
 
 /** Normalize a typed extension: lowercase, strip leading dots, trim. */
@@ -24,7 +46,9 @@ function normalizeExt (value: string): string {
  * and take effect immediately — no restart required.
  */
 export function IndexingSettingsCard () {
+  const { prefs, updatePreferences, isLoaded: prefsLoaded } = usePreferences();
   const [config, setConfig] = useState<IndexConfig | null>(null);
+  const [skipInfo, setSkipInfo] = useState<SkipInfo | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [roots, setRoots] = useState<string[]>([]);
   const [blacklist, setBlacklist] = useState<string[]>([]);
@@ -40,13 +64,14 @@ export function IndexingSettingsCard () {
     let cancelled = false;
     apiFetch("/api/server/index-config", { credentials: "include" })
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((c: IndexConfig) => {
+      .then((c: IndexConfig & { skipInfo?: SkipInfo }) => {
         if (cancelled) return;
         setConfig({ roots: c.roots, blacklist: c.blacklist ?? [], excludeFolders: c.excludeFolders ?? [], skipNonContent: c.skipNonContent ?? true });
         setRoots(c.roots);
         setBlacklist(c.blacklist ?? []);
         setExcludeFolders(c.excludeFolders ?? []);
         setSkipNonContent(c.skipNonContent ?? true);
+        setSkipInfo(c.skipInfo ?? null);
       })
       .catch(() => !cancelled && setLoadError(true));
     return () => { cancelled = true; };
@@ -125,6 +150,11 @@ export function IndexingSettingsCard () {
       JSON.stringify(excludeFolders) !== JSON.stringify(config.excludeFolders) ||
       skipNonContent !== config.skipNonContent);
 
+  // No allowed folders = indexing is off; the dependent options have no effect
+  // until at least one folder is whitelisted, so present them disabled.
+  const indexingEnabled = roots.length > 0;
+  const dimWhenDisabled = indexingEnabled ? "" : "opacity-50";
+
   return (
     <Card>
       <CardHeader className="pb-4">
@@ -143,9 +173,14 @@ export function IndexingSettingsCard () {
             Allowed folders
           </span>
           {roots.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No folders whitelisted for indexing
-            </p>
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">
+                No folders whitelisted for indexing
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Add an allowed folder to enable the indexing options below.
+              </p>
+            </div>
           ) : (
             <ul className="space-y-1.5">
               {roots.map(root => (
@@ -171,7 +206,7 @@ export function IndexingSettingsCard () {
           </Button>
         </div>
 
-        <div className="space-y-2">
+        <div className={`space-y-2 ${dimWhenDisabled}`}>
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Excluded folders
           </span>
@@ -188,8 +223,9 @@ export function IndexingSettingsCard () {
                   <span className="break-all font-mono text-sm">{folder}</span>
                   <button
                     onClick={() => removeExcludeFolder(folder)}
+                    disabled={!indexingEnabled}
                     aria-label={`Remove ${folder}`}
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
+                    className="shrink-0 text-muted-foreground hover:text-destructive disabled:pointer-events-none"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -197,18 +233,18 @@ export function IndexingSettingsCard () {
               ))}
             </ul>
           )}
-          <Button variant="outline" size="sm" onClick={() => setExcludePickerOpen(true)} className="gap-1.5">
+          <Button variant="outline" size="sm" disabled={!indexingEnabled} onClick={() => setExcludePickerOpen(true)} className="gap-1.5">
             <FolderPlus className="h-4 w-4" />
             Exclude folder…
           </Button>
         </div>
 
-        <div className="space-y-2">
+        <div className={`space-y-2 ${dimWhenDisabled}`}>
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Excluded filetypes
           </span>
           <p className="text-xs text-muted-foreground">
-            Add file extensions to skip
+            Add file extensions to skip. Applies on top of the built-in skip filter below.
           </p>
           {blacklist.length > 0 && (
             <ul className="flex flex-wrap gap-1.5">
@@ -220,8 +256,9 @@ export function IndexingSettingsCard () {
                   .{ext}
                   <button
                     onClick={() => removeExt(ext)}
+                    disabled={!indexingEnabled}
                     aria-label={`Remove .${ext}`}
-                    className="text-muted-foreground hover:text-destructive"
+                    className="text-muted-foreground hover:text-destructive disabled:pointer-events-none"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -232,32 +269,79 @@ export function IndexingSettingsCard () {
           <div className="flex items-center gap-2">
             <input
               value={extInput}
+              disabled={!indexingEnabled}
               onChange={e => setExtInput(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addExt(); } }}
               placeholder="Add extension, e.g. tmp"
               className="w-48 rounded-md border border-border bg-card px-1.5 py-1.5 font-mono text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             />
-            <Button variant="outline" size="sm" onClick={addExt} disabled={!normalizeExt(extInput)}>
+            <Button variant="outline" size="sm" onClick={addExt} disabled={!indexingEnabled || !normalizeExt(extInput)}>
               Add
             </Button>
           </div>
         </div>
 
-        <label className="flex items-start gap-3 rounded-md border border-border px-3 py-2.5">
-          <input
-            type="checkbox"
-            checked={skipNonContent}
-            onChange={e => { setSkipNonContent(e.target.checked); setSaveResult(null); }}
-            className="mt-0.5 h-4 w-4 shrink-0"
-          />
-          <span className="space-y-0.5">
-            <span className="block text-sm font-medium">Skip build &amp; dependency files</span>
-            <span className="block text-xs text-muted-foreground">
-              Ignore dependency/build folders (node_modules, dist, vpkgs) and non-content files
-              (binaries, source code, build artifacts)
+        <div className={`rounded-md border border-border px-3 py-2.5 ${dimWhenDisabled}`}>
+          <label className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={skipNonContent}
+              disabled={!indexingEnabled}
+              onChange={e => { setSkipNonContent(e.target.checked); setSaveResult(null); }}
+              className="mt-0.5 h-4 w-4 shrink-0"
+            />
+            <span className="space-y-0.5">
+              <span className="block text-sm font-medium">Skip build &amp; dependency files</span>
+              <span className="block text-xs text-muted-foreground">
+                Skips common developer folders (node_modules, .git, dist, vcpkg, caches, and more)
+                and indexes only recognized content types — images, documents, text, video, audio,
+                and archives. Source code, binaries, and unrecognized file types are skipped.
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+          {skipInfo && (
+            <details className="ml-7 mt-1.5">
+              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                What gets skipped?
+              </summary>
+              <div className="mt-2 space-y-2">
+                <div>
+                  <p className="text-xs font-medium">Skipped folders</p>
+                  <p className="break-words font-mono text-xs text-muted-foreground">
+                    {skipInfo.buildDirNames.join(", ")}
+                    {skipInfo.buildDirSuffixes.length > 0 &&
+                      `, *${skipInfo.buildDirSuffixes.join(", *")}`}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium">Only these file types are indexed</p>
+                  <p className="break-words font-mono text-xs text-muted-foreground">
+                    {skipInfo.contentExtensions.map(e => `.${e}`).join(", ")}
+                  </p>
+                </div>
+              </div>
+            </details>
+          )}
+        </div>
+
+        <div className={`rounded-md border border-border px-3 py-2.5 ${dimWhenDisabled}`}>
+          <label className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={prefs.ignoreHiddenFiles}
+              disabled={!indexingEnabled || !prefsLoaded}
+              onChange={e => updatePreferences({ ignoreHiddenFiles: e.target.checked })}
+              className="mt-0.5 h-4 w-4 shrink-0"
+            />
+            <span className="space-y-0.5">
+              <span className="block text-sm font-medium">Ignore hidden files</span>
+              <span className="block text-xs text-muted-foreground">
+                Skip dotfiles and hidden folders (e.g. .DS_Store, .immich). Applies and saves
+                immediately.
+              </span>
+            </span>
+          </label>
+        </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" onClick={handleSave} disabled={saving || !isDirty} className="gap-1.5">
@@ -293,7 +377,7 @@ export function IndexingSettingsCard () {
 
       {excludePickerOpen && (
         <DirectoryPicker
-          initialPath={excludeFolders[0] ?? roots[0]}
+          initialPath={highestAllowedRoot(roots) ?? excludeFolders[0]}
           onSelect={addExcludeFolder}
           onClose={() => setExcludePickerOpen(false)}
         />

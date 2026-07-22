@@ -1,28 +1,23 @@
-import { createS3Adapter } from "../adapters/s3Adapter.js";
 import { createFsAdapter } from "../adapters/storage/fsAdapter.js";
-import { s3 } from "../plugins/s3Client.js";
 import { parseAllowedRoots } from "../lib/media/indexRoots.js";
 import type { StorageAdapter } from "../adapters/storage/types.js";
 
 /**
  * Build the storage adapter for a standalone worker process from environment
  * variables (workers don't have access to the Fastify `app.config`). Mirrors
- * the API's `plugins/storage.ts` selection so workers and the API always agree
- * on the active backend.
+ * the API's `plugins/storage.ts` so workers and the API always agree on the
+ * blob location.
  */
 export function createWorkerStorage (): StorageAdapter {
-  if (process.env.STORAGE_DRIVER === "fs") {
-    const basePath = process.env.STORAGE_FS_PATH;
-    if (!basePath) throw new Error("STORAGE_FS_PATH env var is required when STORAGE_DRIVER=fs");
-    // Workers never presign (no browser-facing URLs), so apiBaseUrl is irrelevant here.
-    return createFsAdapter({ basePath });
-  }
-  return createS3Adapter(s3);
+  const basePath = process.env.STORAGE_FS_PATH || "/data/vault";
+  // Workers never presign (no browser-facing URLs), so apiBaseUrl is irrelevant here.
+  return createFsAdapter({ basePath });
 }
 
-/** Key namespace / S3 bucket. The fs adapter ignores it, so it has a default. */
+/** Key namespace prefix. Inert on the filesystem backend (kept so the shared
+ *  bucket-threading in services doesn't churn; removed with the key-scheme rework). */
 export function workerBucket (): string {
-  return process.env.S3_BUCKET ?? "vault-media";
+  return process.env.STORAGE_BUCKET ?? "vault-media";
 }
 
 /**

@@ -31,6 +31,38 @@ model User {
   reminders    Reminder[]
   bundles      Bundle[]
   tags         Tag[]
+  tagRules     TagRule[]
+}
+
+// A deterministic auto-tagging rule (the Tag Organizer). Rules are evaluated by
+// the pure evaluateRules() engine (apps/api/src/lib/tags/rules/) at every ingest
+// site and by the retroactive organize worker. `matcher` is a per-source JSON
+// config validated by Zod at the API boundary; `tagTemplate` is the tag to
+// apply, with `{value}` substituted by the rule's computed value (e.g.
+// "type:{value}" → "type:pdf"). No AI/ML — sources are file facts only.
+model TagRule {
+  id          String        @id @default(cuid())
+  userId      String
+  name        String
+  source      TagRuleSource
+  matcher     Json          @default("{}")
+  tagTemplate String
+  priority    Int           @default(0)
+  enabled     Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, priority])
+}
+
+enum TagRuleSource {
+  MIME
+  EXTENSION
+  FILENAME
+  PATH_SEGMENT
+  FILE_DATE
+  SIZE
 }
 
 model Tag {
@@ -68,10 +100,16 @@ model Media {
   sizeBytes       Float
   title           String
   tags            String[]
+  starred         Boolean          @default(false)
+  starredAt       DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   thumbnailKey    String?
   contentHash     String?
+  // The file's own date (EXIF capture → PDF created → filesystem mtime; see
+  // lib/tags/rules/fileDate.ts) — NOT the ingest time. Powers the "Year" sort.
+  // Null when nothing trustworthy exists (e.g. an upload with no embedded date).
+  fileDate        DateTime?
   linkedBundleId  String?
   linkedBundle    Bundle?          @relation("ArchiveLink", fields: [linkedBundleId], references: [id], onDelete: SetNull)
   isExtractedFromArchive Boolean   @default(false)
@@ -89,6 +127,7 @@ model Media {
   @@index([tags], type: Gin)
   @@index([userId, contentHash])
   @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, fileDate(sort: Desc)])
   @@index([userId, title(sort: Asc)])
   @@index([userId, sizeBytes(sort: Desc)])
   @@index([userId, mimeType(sort: Asc)])

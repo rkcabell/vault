@@ -3,7 +3,6 @@ import type { Logger } from "pino";
 import type { DocumentRepository } from "../repositories/documentRepository.js";
 import type { MediaRepository } from "../repositories/mediaRepository.js";
 import type { StorageAdapter } from "../adapters/storage/types.js";
-import { waitUntilObjectExists } from "../adapters/s3ObjectProbe.js";
 import {
   processTextJob,
   TextJobError,
@@ -146,20 +145,9 @@ export async function processOcrJob (deps: OcrProcessingDeps, data: OcrJobData) 
 
   try {
 
-  // S3 objects can lag after upload; in-place files already exist on disk, so
-  // the propagation probe only applies to managed sources.
-  if (!sourcePath) {
-    const exists = await waitUntilObjectExists(storage, bucket, key, {
-      maxTries: 8,
-      baseDelayMs: 1000,
-      sleep,
-    });
-    if (!exists) {
-      logger.warn({ ...logContext, key }, "source not ready");
-      throw new TextJobError("SOURCE_NOT_READY", `Source not ready for key=${key}`);
-    }
-  }
-
+  // A filesystem write is visible as soon as the atomic rename lands, so no
+  // post-upload propagation probe is needed (that was an S3-only concern). A
+  // genuinely missing source surfaces as SOURCE_NOT_READY from the read below.
   if (media.mimeType?.startsWith("application/pdf") && !forceOcr) {
     try {
       logger.info({ ...logContext, key }, "pdf extraction start");

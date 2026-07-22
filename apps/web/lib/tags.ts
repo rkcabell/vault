@@ -1,4 +1,4 @@
-export { normalizeTag, normalizeTags, TagValidationError, TAG_RULES } from "@vault/types";
+export { normalizeTag, normalizeTags, tagNamespace, TagValidationError, TAG_RULES } from "@vault/types";
 export type { TagValidationErrorCode, TagOrigin } from "@vault/types";
 
 import type { TagOrigin } from "@vault/types";

@@ -34,7 +34,9 @@ export type DeleteTagResponse = z.infer<typeof DeleteTagResponseSchema>;
 
 const MAX_TAG_LENGTH = 48;
 const MAX_TAGS = 30;
-const ALLOWED_CHARS = /^[a-z0-9-]+$/;
+// `:` separates an optional namespace from the tag value (e.g. `year:2023`,
+// `source:index`) — the 2nd retrieval axis. At most one, never at an edge.
+const ALLOWED_CHARS = /^[a-z0-9-]+(:[a-z0-9-]+)?$/;
 
 export const TAG_RULES = { MAX_TAG_LENGTH, MAX_TAGS };
 
@@ -93,12 +95,18 @@ export function normalizeTag(tag: unknown): string {
   if (!ALLOWED_CHARS.test(normalized)) {
     throw new TagValidationError(
       "INVALID_CHARS",
-      "Tags may only contain lowercase letters, digits, and dashes",
+      "Tags may only contain lowercase letters, digits, dashes, and one ':' namespace separator",
       normalized,
     );
   }
 
   return normalized;
+}
+
+/** Namespace half of a `namespace:value` tag, or null for a plain tag. */
+export function tagNamespace(tag: string): string | null {
+  const i = tag.indexOf(":");
+  return i > 0 ? tag.slice(0, i) : null;
 }
 
 export function normalizeTags(input: unknown): string[] {

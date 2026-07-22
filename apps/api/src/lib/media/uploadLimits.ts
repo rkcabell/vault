@@ -1,8 +1,14 @@
 const MB = 1024 * 1024;
+const GB = 1024 * MB;
 
-export const PHOTO_UPLOAD_LIMIT_BYTES = 50 * MB;
-export const DOCUMENT_UPLOAD_LIMIT_BYTES = 250 * MB;
-export const HARD_UPLOAD_LIMIT_BYTES = 500 * MB;
+// One 2 GB cap for every kind — matches the web client (lib/media/uploadLimits.ts),
+// the upload page's "2 GB max per file" text, and the big-file storage path
+// (Range streaming, Float sizeBytes, 2 GiB thumbnail cap). These MUST stay in
+// sync with the client: a lower server cap rejects a file the client accepted,
+// which fails the whole batch-init and stamps that error onto every queued file.
+export const PHOTO_UPLOAD_LIMIT_BYTES = 2 * GB;
+export const DOCUMENT_UPLOAD_LIMIT_BYTES = 2 * GB;
+export const HARD_UPLOAD_LIMIT_BYTES = 2 * GB;
 
 const DOCUMENT_MIME_PREFIXES = [
   "application/pdf",
@@ -96,9 +102,8 @@ export function getUploadSizeError (args: {
   const limit = uploadLimitForKind(kind);
 
   if (sizeBytes > limit) {
-    const limitLabel = kind === "photo" ? "50 MB" : kind === "document" ? "250 MB" : "500 MB";
     const label = kind === "photo" ? "photos" : kind === "document" ? "documents" : "files";
-    return `${filename} exceeds the ${label} limit (${limitLabel} max).`;
+    return `${filename} exceeds the ${label} limit (2 GB max).`;
   }
 
   return null;

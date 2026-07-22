@@ -14,6 +14,7 @@ import { enqueueUnpack, type UnpackJob, UNPACK_QUEUE } from "../queues/enqueueUn
 import { buildRedisConnection } from "../lib/config/redis.js";
 import type { PrismaClient } from "@prisma/client";
 import { isUnderAllowedRoot } from "../lib/media/indexRoots.js";
+import { parseRangeHeader } from "../lib/http/range.js";
 
 type MinLogger = { warn: (obj: object, msg: string) => void };
 
@@ -83,7 +84,7 @@ const FALLBACK_WEBP_BASE64 =
 const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
 
 export const mediaRoutes: FastifyPluginAsync = async app => {
-  const { uploadService, queryService, readService, actionsService, indexService, deleteService } = app.mediaServices;
+  const { uploadService, queryService, readService, actionsService, indexService, deleteService, dedupService } = app.mediaServices;
   let unpackQueue: Queue<UnpackJob> | null = null;
   const getUnpackQueue = () => {
     if (!unpackQueue) {
@@ -271,6 +272,18 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
   });
 
 
+  // GET /media/duplicates - byte-identical groups (same SHA-256 contentHash)
+  // for the review page, plus how many READY items still lack a hash.
+  app.get("/duplicates", { preHandler: [requireAuth] }, async req => {
+    return dedupService.listDuplicateGroups(req.userId!);
+  });
+
+  // POST /media/duplicates/scan - backfill contentHash: enqueue a streaming
+  // hash job for every READY item that doesn't have one yet.
+  app.post("/duplicates/scan", { preHandler: [requireAuth] }, async req => {
+    return dedupService.startScan(req.userId!);
+  });
+
   // GET /media/storage - data for the storage treemap. Returns the largest
   // files exactly plus a stratified, byte-weighted sample of the long tail so
   // the payload/DOM stay small at tens of thousands of files. top/sample are
@@ -442,6 +455,19 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     },
   );
 
+  // POST /media/:id/star — toggle starred (mirrors POST /bundles/:id/star)
+  app.post<{ Params: { id: string } }>(
+    "/:id/star",
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const { id } = paramsSchema.parse(req.params);
+      const starred = await actionsService.toggleStar(req.userId!, id);
+      if (starred === null) return reply.notFound();
+      req.log.info({ mediaId: id, starred }, "media star toggled");
+      return { ok: true, starred };
+    },
+  );
+
   // POST /media/bulk-download - zip and stream selected items
   app.post(
     "/bulk-download",
@@ -494,17 +520,44 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
 
       const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
       const allowedRoots = prefs?.indexAllowedRoots ?? [];
-      const result = await readService.getSourceStream(userId, id, allowedRoots);
-      if (!result) return reply.notFound();
 
-      if (result.contentLength != null) reply.header("content-length", String(result.contentLength));
-      reply.type(result.mimeType);
+      // Honor single-range requests so video seeking works on indexed originals.
+      // Size is needed to validate the range, so probe with an un-ranged open
+      // first (the stream is lazy — destroying it before reading is free).
+      let range: { start: number; end: number } | undefined;
+      const probe = await readService.getSourceStream(userId, id, allowedRoots);
+      if (!probe) return reply.notFound();
+
+      reply.header("accept-ranges", "bytes");
+      reply.type(probe.mimeType);
       reply.header(
         "content-disposition",
-        `inline; filename="${result.filename.replace(/["\\]/g, "_")}"`,
+        `inline; filename="${probe.filename.replace(/["\\]/g, "_")}"`,
       );
       reply.header("cache-control", "private, max-age=3600");
-      return reply.send(result.body);
+
+      const size = probe.totalLength;
+      if (req.headers.range && size != null) {
+        const parsed = parseRangeHeader(req.headers.range, size);
+        if (parsed === "unsatisfiable") {
+          probe.body.destroy();
+          reply.header("content-range", `bytes */${size}`);
+          return reply.code(416).send();
+        }
+        if (parsed) range = parsed;
+      }
+
+      if (range) {
+        probe.body.destroy();
+        const result = await readService.getSourceStream(userId, id, allowedRoots, range);
+        if (!result) return reply.notFound();
+        reply.header("content-range", `bytes ${range.start}-${range.end}/${size}`);
+        reply.header("content-length", String(range.end - range.start + 1));
+        return reply.code(206).send(result.body);
+      }
+
+      if (probe.contentLength != null) reply.header("content-length", String(probe.contentLength));
+      return reply.send(probe.body);
     },
   );
 
@@ -721,14 +774,10 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     }
 
     // Compute the local filesystem path for "Open in File Explorer".
-    // In-place indexed items have sourcePath; fs-stored uploads live at
-    // STORAGE_FS_PATH/storageKey. S3 items have no local path.
-    let localPath: string | null = null;
-    if (detail.media.sourcePath) {
-      localPath = detail.media.sourcePath;
-    } else if (app.config.STORAGE_DRIVER === "fs") {
-      localPath = path.join(app.config.STORAGE_FS_PATH, detail.media.storageKey);
-    }
+    // In-place indexed items have sourcePath; managed uploads live at
+    // STORAGE_FS_PATH/storageKey.
+    const localPath: string = detail.media.sourcePath
+      ?? path.join(app.config.STORAGE_FS_PATH, detail.media.storageKey);
 
     return reply.send({ ...detail, localPath });
   });
@@ -764,11 +813,9 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
           return reply.forbidden("Source path is no longer within an allowed root.");
         }
         revealPath = media.sourcePath;
-      } else if (app.config.STORAGE_DRIVER === "fs") {
+      } else {
         // Vault-managed filesystem upload: construct the storage path.
         revealPath = path.join(app.config.STORAGE_FS_PATH, media.storageKey);
-      } else {
-        return reply.badRequest("File is stored in S3 and has no local path.");
       }
 
       // Fail loudly if the file is gone — otherwise Explorer silently falls back

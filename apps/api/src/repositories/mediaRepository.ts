@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Prisma, type PrismaClient, type TagOrigin } from "@prisma/client";
 import { THUMBNAIL_TOO_LARGE_REASON, THUMBNAIL_UNSUPPORTED_REASON } from "../lib/media/processingSupport.js";
+import { normalizeTags } from "../lib/tags/normalizeTags.js";
 
 export type MediaListFilters = {
   userId: string;
@@ -113,7 +114,11 @@ export class MediaRepository {
    * unbounded IN list is materialised. Keyset pagination is used in that path.
    */
   async listMedia (filters: MediaListFilters) {
-    if (filters.tags?.length || filters.excludeTags?.length || filters.queryText) return this._listMediaRaw(filters);
+    // fileDate is nullable; Prisma cursor pagination over a nullable order
+    // column is unreliable, so that sort always takes the raw keyset path
+    // (which orders NULLS LAST with a null-aware cursor comparison).
+    const isFileDateSort = "fileDate" in (filters.orderBy[0] ?? {});
+    if (isFileDateSort || filters.tags?.length || filters.excludeTags?.length || filters.queryText) return this._listMediaRaw(filters);
     return this._listMediaOrm(filters);
   }
 
@@ -158,8 +163,8 @@ export class MediaRepository {
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       select: {
         id: true, title: true, filename: true,
-        thumbState: true, textState: true, createdAt: true,
-        tags: true, mimeType: true, sizeBytes: true,
+        thumbState: true, textState: true, createdAt: true, fileDate: true,
+        tags: true, mimeType: true, sizeBytes: true, starred: true,
       },
     });
   }
@@ -213,8 +218,17 @@ export class MediaRepository {
     const { orderBy, take, cursor } = filters;
 
     // Derive sort column and direction from the Prisma orderBy structure.
-    // buildOrderBy always puts the primary column first; the tiebreaker id second.
+    // buildOrderBy always puts the primary column first; the tiebreaker id last.
     const [[sortField, sortDir]] = Object.entries(orderBy[0]) as [[string, "asc" | "desc"]];
+
+    // "Starred first" is a three-level sort (starred DESC, createdAt DESC, id
+    // DESC). All directions match, so the keyset condition can use a Postgres
+    // row-value comparison instead of the generic two-level expansion below.
+    const isStarredSort = sortField === "starred";
+    // fileDate is the one nullable sort column: it orders NULLS LAST and needs
+    // a null-aware keyset comparison (the generic row expansion below never
+    // matches once the cursor or row value is NULL).
+    const isFileDateSort = sortField === "fileDate";
 
     // Map camelCase field names to quoted Postgres column identifiers.
     // These come from a closed enum in buildOrderBy — never from user input.
@@ -223,49 +237,72 @@ export class MediaRepository {
       title: "title",
       sizeBytes: '"sizeBytes"',
       mimeType: '"mimeType"',
+      fileDate: '"fileDate"',
     };
     const col = COL[sortField] ?? '"createdAt"';
     const dir = sortDir === "asc" ? "ASC" : "DESC";
     const cmp = sortDir === "asc" ? ">" : "<";
 
-    // Keyset cursor: look up the cursor row's sort-column value by PK (fast).
-    let cursorSortVal: unknown = null;
-    let cursorId: string | null = null;
+    // Keyset cursor: look up the cursor row's sort-column value(s) by PK (fast).
+    let cursorRow: Record<string, unknown> | null = null;
     if (cursor) {
-      const row = await this.prisma.media.findFirst({
+      cursorRow = await this.prisma.media.findFirst({
         where: { id: cursor },
-        select: { id: true, [sortField]: true },
+        select: isStarredSort
+          ? { id: true, starred: true, createdAt: true }
+          : { id: true, [sortField]: true },
       }) as Record<string, unknown> | null;
-      if (!row) return [];
-      cursorSortVal = row[sortField];
-      cursorId = row.id as string;
+      if (!cursorRow) return [];
     }
 
     // Build shared WHERE conditions.
     const { conditions, params, p: pAfterFilters } = this._buildMediaFilterConditions(filters);
     let p = pAfterFilters;
 
-    if (cursorId !== null) {
-      // Keyset: (col, id) cmp (cursorColVal, cursorId). $p is reused for col equality.
-      conditions.push(`(m.${col} ${cmp} $${p} OR (m.${col} = $${p} AND m.id ${cmp} $${p + 1}))`);
-      params.push(cursorSortVal, cursorId);
-      p += 2;
+    if (cursorRow !== null) {
+      if (isStarredSort) {
+        conditions.push(`(m.starred, m."createdAt", m.id) < ($${p}, $${p + 1}, $${p + 2})`);
+        params.push(cursorRow.starred, cursorRow.createdAt, cursorRow.id);
+        p += 3;
+      } else if (isFileDateSort && cursorRow[sortField] === null) {
+        // Cursor sits inside the trailing NULL block — compare by id alone.
+        conditions.push(`(m.${col} IS NULL AND m.id ${cmp} $${p})`);
+        params.push(cursorRow.id);
+        p += 1;
+      } else if (isFileDateSort) {
+        // Cursor in the non-null block: rows after it are strictly-past values,
+        // same-value/later-id ties, and the entire trailing NULL block.
+        conditions.push(`(m.${col} ${cmp} $${p} OR (m.${col} = $${p} AND m.id ${cmp} $${p + 1}) OR m.${col} IS NULL)`);
+        params.push(cursorRow[sortField], cursorRow.id);
+        p += 2;
+      } else {
+        // Keyset: (col, id) cmp (cursorColVal, cursorId). $p is reused for col equality.
+        conditions.push(`(m.${col} ${cmp} $${p} OR (m.${col} = $${p} AND m.id ${cmp} $${p + 1}))`);
+        params.push(cursorRow[sortField], cursorRow.id);
+        p += 2;
+      }
     }
 
     params.push(take);
 
+    const orderSql = isStarredSort
+      ? `m.starred DESC, m."createdAt" DESC, m.id DESC`
+      : isFileDateSort
+        ? `m.${col} ${dir} NULLS LAST, m.id ${dir}`
+        : `m.${col} ${dir}, m.id ${dir}`;
+
     const sql = `
-      SELECT m.id, m.title, m.filename, m."thumbState", m."textState", m."createdAt", m.tags, m."mimeType", m."sizeBytes"
+      SELECT m.id, m.title, m.filename, m."thumbState", m."textState", m."createdAt", m."fileDate", m.tags, m."mimeType", m."sizeBytes", m.starred
       FROM "Media" m
       WHERE ${conditions.join(" AND ")}
-      ORDER BY m.${col} ${dir}, m.id ${dir}
+      ORDER BY ${orderSql}
       LIMIT $${p}
     `;
 
     return this.prisma.$queryRawUnsafe<Array<{
       id: string; title: string; filename: string;
       thumbState: string; textState: string;
-      createdAt: Date; tags: string[]; mimeType: string; sizeBytes: number;
+      createdAt: Date; fileDate: Date | null; tags: string[]; mimeType: string; sizeBytes: number; starred: boolean;
     }>>(sql, ...params);
   }
 
@@ -512,6 +549,64 @@ export class MediaRepository {
     }
   }
 
+  /** Total media rows the organize worker will consider for a user. */
+  async countMediaForOrganize (userId: string): Promise<number> {
+    return this.prisma.media.count({ where: { userId } });
+  }
+
+  /** One keyset page of media rows for the organize worker, with the extracted
+   *  metadata joined in (EXIF/PDF dates live there). Ordered by id so the
+   *  worker can resume from the last id of the previous page. */
+  async listMediaForOrganize (userId: string, afterId: string | null, limit: number) {
+    const rows = await this.prisma.media.findMany({
+      where: { userId, ...(afterId ? { id: { gt: afterId } } : {}) },
+      orderBy: { id: "asc" },
+      take: limit,
+      select: {
+        id: true,
+        title: true,
+        filename: true,
+        mimeType: true,
+        sizeBytes: true,
+        sourcePath: true,
+        isExtractedFromArchive: true,
+        tags: true,
+        fileDate: true,
+        extractedMetadata: { select: { data: true } },
+      },
+    });
+    return rows.map(({ extractedMetadata, ...row }) => ({
+      ...row,
+      metadata: extractedMetadata?.data ?? null,
+    }));
+  }
+
+  /** Append tags to a media row, skipping any already present. Raw SQL so the
+   *  append + dedup is one atomic statement — a concurrent tag edit can't
+   *  produce `['a','a']` the way a read-modify-write could. Does NOT touch
+   *  Tag.count; callers run ensureAutoTagRows + reconcileTagCounts afterwards. */
+  async addTagsToMedia (userId: string, mediaId: string, tags: string[]): Promise<void> {
+    if (tags.length === 0) return;
+    await this.prisma.$executeRaw`
+      UPDATE "Media" m
+      SET tags = m.tags || ARRAY(
+        SELECT t FROM unnest(${tags}::text[]) AS t
+        WHERE NOT t = ANY(m.tags)
+      )
+      WHERE m."id" = ${mediaId} AND m."userId" = ${userId}
+    `;
+  }
+
+  /** Ensure a Tag row exists for each name (origin AUTO, count 0 — the caller's
+   *  reconcileTagCounts pass sets real counts). Existing rows are untouched. */
+  async ensureAutoTagRows (userId: string, names: string[]): Promise<void> {
+    if (names.length === 0) return;
+    await this.prisma.tag.createMany({
+      data: names.map(name => ({ userId, name, count: 0, origin: "AUTO" as const })),
+      skipDuplicates: true,
+    });
+  }
+
   async findMediaForTitleUpdate (userId: string, id: string) {
     return this.findMediaForUpdate(userId, id);
   }
@@ -578,6 +673,11 @@ export class MediaRepository {
   /** Append `tagName` to the media item's tags if not already present, and keep the Tag
    *  table count in sync. No-ops if the tag is already on the item. */
   async addTagIfAbsent (mediaId: string, tagName: string): Promise<void> {
+    // Worker-applied tags ("has-text", "duplicate") must obey the same ruleset
+    // as user tags — a raw literal here would bypass the lowercase invariant
+    // the tag filter and count machinery assume.
+    [tagName] = normalizeTags(tagName);
+    if (!tagName) return;
     await this.prisma.$transaction(async tx => {
       const media = await tx.media.findUnique({
         where: { id: mediaId },
@@ -602,10 +702,59 @@ export class MediaRepository {
     await this.prisma.media.update({ where: { id: mediaId }, data: { contentHash: hash } });
   }
 
+  /** Persist the resolved file date (EXIF capture → PDF created → fs mtime). */
+  async setFileDate (mediaId: string, fileDate: Date): Promise<void> {
+    await this.prisma.media.update({ where: { id: mediaId }, data: { fileDate } });
+  }
+
   async findDuplicateByHash (userId: string, hash: string, excludeId: string): Promise<{ id: string } | null> {
     return this.prisma.media.findFirst({
       where: { userId, contentHash: hash, id: { not: excludeId } },
       select: { id: true },
+    });
+  }
+
+  /** All members of duplicate contentHash groups (2+ items sharing a hash).
+   *  Ordered by hash so the dedup service can assemble groups in one walk. */
+  async listDuplicateMembers (userId: string) {
+    const groups = await this.prisma.media.groupBy({
+      by: ["contentHash"],
+      where: { userId, contentHash: { not: null } },
+      having: { contentHash: { _count: { gt: 1 } } },
+    });
+    const hashes = groups.map(g => g.contentHash).filter((h): h is string => h !== null);
+    if (hashes.length === 0) return [];
+    return this.prisma.media.findMany({
+      where: { userId, contentHash: { in: hashes } },
+      orderBy: [{ contentHash: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: {
+        id: true, title: true, filename: true, mimeType: true, sizeBytes: true,
+        sourcePath: true, createdAt: true, thumbState: true, thumbnailKey: true,
+        contentHash: true,
+      },
+    });
+  }
+
+  /** READY items still lacking a contentHash (candidates for a dedup scan).
+   *  Non-READY rows are skipped — their source bytes may not exist yet. */
+  async countUnhashed (userId: string): Promise<number> {
+    return this.prisma.media.count({
+      where: { userId, contentHash: null, sourceState: "READY" },
+    });
+  }
+
+  /** One keyset page of unhashed READY rows for dedup-scan enqueueing. */
+  async listUnhashedPage (userId: string, afterId: string | null, limit: number) {
+    return this.prisma.media.findMany({
+      where: {
+        userId,
+        contentHash: null,
+        sourceState: "READY",
+        ...(afterId ? { id: { gt: afterId } } : {}),
+      },
+      orderBy: { id: "asc" },
+      take: limit,
+      select: { id: true, storageKey: true, sourcePath: true },
     });
   }
 
@@ -678,6 +827,7 @@ export class MediaRepository {
         createdAt: true,
         updatedAt: true,
         tags: true,
+        starred: true,
         thumbState: true,
         thumbError: true,
         textState: true,
@@ -816,7 +966,6 @@ export class MediaRepository {
     return result.count;
   }
 
-  /** Marks textState PENDING → FAILED for items whose MIME type is not supported for text extraction. */
   /**
    * Given a list of absolute source paths, return the subset already indexed by
    * this user. Used by the index worker to skip files that already have a Media
@@ -829,6 +978,26 @@ export class MediaRepository {
       select: { sourcePath: true },
     });
     return new Set(rows.map(r => r.sourcePath).filter((p): p is string => p !== null));
+  }
+
+  /**
+   * Set fileDate on already-indexed rows that still have it NULL (rows created
+   * before the column existed). Only NULL columns are written — mtime is the
+   * lowest-precedence date source, so an EXIF/PDF-derived value is never
+   * overwritten. Used by the index worker when a scan encounters files it
+   * would otherwise skip as already indexed.
+   */
+  async backfillFileDates (userId: string, items: { sourcePath: string; fileDate: Date }[]): Promise<void> {
+    if (items.length === 0) return;
+    await this.prisma.$executeRaw`
+      UPDATE "Media" m
+      SET "fileDate" = (v."fileDate"::timestamptz AT TIME ZONE 'UTC')
+      FROM (
+        SELECT unnest(${items.map(i => i.sourcePath)}::text[]) AS "sourcePath",
+               unnest(${items.map(i => i.fileDate.toISOString())}::text[]) AS "fileDate"
+      ) v
+      WHERE m."userId" = ${userId} AND m."sourcePath" = v."sourcePath" AND m."fileDate" IS NULL
+    `;
   }
 
   /** The Media id for an in-place item at this exact source path, or null. Used
@@ -1005,19 +1174,22 @@ export class MediaRepository {
    */
   async renameTag (userId: string, oldName: string, newName: string): Promise<number> {
     return this.prisma.$transaction(async tx => {
-      const affected = await tx.$executeRaw`
+      // Rows that already carry BOTH names would get a duplicate from
+      // array_replace, so drop the old name from those first.
+      const merged = await tx.$executeRaw`
+        UPDATE "Media"
+        SET "tags" = array_remove("tags", ${oldName})
+        WHERE "userId" = ${userId} AND ${oldName} = ANY("tags") AND ${newName} = ANY("tags")
+      `;
+      const replaced = await tx.$executeRaw`
         UPDATE "Media"
         SET "tags" = array_replace("tags", ${oldName}, ${newName})
         WHERE "userId" = ${userId} AND ${oldName} = ANY("tags")
       `;
-      // Rename the Tag row. If newName already exists, merge counts then delete old.
+      // Rename the Tag row. If newName already exists, merge then delete old.
       const existing = await tx.tag.findUnique({ where: { userId_name: { userId, name: newName } } });
       const oldRow   = await tx.tag.findUnique({ where: { userId_name: { userId, name: oldName } } });
       if (existing && oldRow) {
-        await tx.tag.update({
-          where: { userId_name: { userId, name: newName } },
-          data: { count: existing.count + oldRow.count },
-        });
         await tx.tag.delete({ where: { userId_name: { userId, name: oldName } } });
       } else if (oldRow) {
         await tx.tag.update({
@@ -1025,8 +1197,35 @@ export class MediaRepository {
           data: { name: newName },
         });
       }
-      return affected;
+      // Recount from committed rows — summing the two counts overstates when any
+      // item carried both tags.
+      const [{ count }] = await tx.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*) AS count FROM "Media"
+        WHERE "userId" = ${userId} AND ${newName} = ANY("tags")
+      `;
+      await tx.tag.updateMany({
+        where: { userId, name: newName },
+        data: { count: Number(count) },
+      });
+      return merged + replaced;
     });
+  }
+
+  /** Toggle the star on a media item (mirrors bundleRepository.toggleStar).
+   *  Returns the new starred state, or null when the item isn't the user's. */
+  async toggleStar (id: string, userId: string): Promise<boolean | null> {
+    const media = await this.prisma.media.findFirst({
+      where: { id, userId },
+      select: { starred: true },
+    });
+    if (!media) return null;
+
+    const next = !media.starred;
+    await this.prisma.media.update({
+      where: { id },
+      data: { starred: next, starredAt: next ? new Date() : null },
+    });
+    return next;
   }
 
   /** Set or clear the color on a tag row. */
