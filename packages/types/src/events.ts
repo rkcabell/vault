@@ -16,6 +16,15 @@ export const MEDIA_EVENT_FIELDS = [
   /** Items entered the library (index batch / unpack / upload finalize);
    *  `value` is a count. `mediaId` is "*" for bulk events. */
   "mediaCreated",
+  /** An in-place item's source file vanished from disk. The row is kept intact
+   *  in case this is half of a move, so the item should be shown as missing
+   *  rather than removed from the list. `value` is a count; `mediaId` is "*"
+   *  for bulk events (a removed directory). */
+  "mediaMissing",
+  /** A missing item's file was found again at a new path and the existing row
+   *  was repointed at it — no id changed, but the filename/title may have.
+   *  `value` is a count. */
+  "mediaMoved",
 ] as const;
 
 export type MediaEventField = (typeof MEDIA_EVENT_FIELDS)[number];

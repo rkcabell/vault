@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/Button";
 import { CheckCircle2, XCircle, FolderPlus, Loader2, Save, X } from "lucide-react";
 import { DirectoryPicker } from "./DirectoryPicker";
+import { ReconcileCheck } from "./ReconcileCheck";
 
 type IndexConfig = { roots: string[]; blacklist: string[]; excludeFolders: string[]; skipNonContent: boolean };
 /** What the built-in skipNonContent filter does, reported by the API so the UI never drifts. */
@@ -348,6 +349,12 @@ export function IndexingSettingsCard () {
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Save
           </Button>
+        </div>
+
+        {/* Reconciles the *saved* config, so it sits below Save rather than
+            among the unsaved editors above it. */}
+        <div className="border-t border-border pt-4">
+          <ReconcileCheck enabled={indexingEnabled} />
         </div>
 
         {saveResult && (

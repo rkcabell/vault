@@ -37,6 +37,10 @@ export interface MediaItem {
   starred?: boolean;
   /** Resolved file date (EXIF/PDF/mtime) — powers the Year sort's dividers. */
   fileDate?: string | null;
+  /** ISO date the source file was found to have vanished, or null while it is
+   *  present. The item is kept — tags, title and all — because the file may
+   *  simply have moved, so the card is dimmed rather than removed. */
+  missingSince?: string | null;
 }
 
 interface MediaCardProps {
@@ -171,6 +175,9 @@ export function MediaCard({
 }: MediaCardProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  // The file is gone from disk but the item is deliberately kept, because a
+  // move looks exactly like a delete until the file turns up somewhere else.
+  const isMissing = !!media?.missingSince;
   const id = media?.id;
   const q = searchParams.get("q") ?? searchParams.get("search");
   const mediaHref = (id ? `/media/${id}` : "/media") as Route;
@@ -334,7 +341,7 @@ export function MediaCard({
   if (variant === 'list') {
     return (
       <Card
-        className={cn('rounded-none shadow-none bg-transparent border-0 border-b border-border/40 hover:bg-muted/50 transition-colors', isSelectMode && 'cursor-pointer select-none', className)}
+        className={cn('rounded-none shadow-none bg-transparent border-0 border-b border-border/40 hover:bg-muted/50 transition-colors', isSelectMode && 'cursor-pointer select-none', isMissing && 'opacity-60', className)}
         style={isSelectMode && isSelected ? { outline: '2px solid var(--color-selection, #06b6d4)', outlineOffset: '0px' } : undefined}
         onClick={isSelectMode ? handleSelectClick : undefined}
       >
@@ -457,6 +464,16 @@ export function MediaCard({
                     </Link>
                   )}
                 </div>
+                {!isRenaming && isMissing && (
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 gap-1 text-xs"
+                    title="This file is no longer at its indexed location. Vault keeps the item in case it was moved."
+                  >
+                    <Ban className="h-3 w-3" aria-hidden />
+                    Missing
+                  </Badge>
+                )}
                 {!isRenaming && (
                   <>
                     {media.starred && (
@@ -534,7 +551,7 @@ export function MediaCard({
 
   return (
     <Card
-      className={cn('group flex flex-col overflow-hidden hover:shadow-lg transition-shadow', isSelectMode && 'select-none', className)}
+      className={cn('group flex flex-col overflow-hidden hover:shadow-lg transition-shadow', isSelectMode && 'select-none', isMissing && 'opacity-60', className)}
       style={isSelectMode && isSelected ? { outline: '2px solid var(--color-selection, #06b6d4)', outlineOffset: '0px' } : undefined}
     >
       {isSelectMode ? (
@@ -604,6 +621,15 @@ export function MediaCard({
                   style={media.starred ? { fill: "var(--color-star, #fbbf24)", color: "var(--color-star, #fbbf24)" } : undefined}
                 />
               </button>
+            )}
+            {isMissing && (
+              <span
+                title="This file is no longer at its indexed location. Vault keeps the item in case it was moved."
+                className="absolute bottom-1 right-1 z-10 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] leading-none text-white"
+              >
+                <Ban className="h-3 w-3" aria-hidden />
+                Missing
+              </span>
             )}
           </div>
         </Link>

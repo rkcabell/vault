@@ -1,15 +1,12 @@
-import { lstat, readdir } from "node:fs/promises";
-import path from "node:path";
 import type { Job, Processor } from "bullmq";
 import type { IndexJobData, IndexJobProgress } from "../queues/enqueueIndex.js";
-import { assertUnderAllowedRoot, isExcludedFolder } from "../lib/media/indexRoots.js";
+import { assertUnderAllowedRoot } from "../lib/media/indexRoots.js";
 import { normalizeExtensions } from "../lib/media/extensions.js";
-import { isBuildDir, isNonContentFile, isJunkDir, isJunkFile } from "../lib/media/contentFilters.js";
+import { walkFiles } from "./indexWalk.js";
 import {
   type DiscoveredFile,
   type IndexCoreDeps,
   indexFiles,
-  isBlacklisted,
 } from "./indexCore.js";
 
 type IndexLogger = {
@@ -32,55 +29,6 @@ type IndexWorkerDeps = IndexCoreDeps & {
 
 /** How many discovered files to insert + enqueue per batch. */
 const BATCH_SIZE = 200;
-
-/**
- * Walk a directory yielding regular files. Symlinks are never followed or
- * indexed — that both prevents directory-loop hangs and stops a symlink from
- * pointing the source read outside the allow-listed root. Files whose extension
- * is blacklisted are skipped (the user's "don't index these filetypes" list);
- * directories on the exclude-list (and everything beneath them) are skipped.
- */
-async function* walk (
-  dir: string,
-  recursive: boolean,
-  ignoreHidden: boolean,
-  blacklist: string[],
-  excludeFolders: string[],
-  skipNonContent: boolean,
-  stats: { filtered: number },
-): AsyncGenerator<DiscoveredFile> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return; // unreadable directory — skip rather than abort the whole scan
-  }
-  for (const entry of entries) {
-    if (ignoreHidden && entry.name.startsWith(".")) continue;
-    const full = path.join(dir, entry.name);
-    let st;
-    try {
-      st = await lstat(full);
-    } catch {
-      continue;
-    }
-    if (st.isSymbolicLink()) continue;
-    if (st.isDirectory()) {
-      if (isJunkDir(entry.name)) continue;
-      if (isExcludedFolder(full, excludeFolders)) continue;
-      if (skipNonContent && isBuildDir(entry.name)) continue;
-      if (recursive) yield* walk(full, recursive, ignoreHidden, blacklist, excludeFolders, skipNonContent, stats);
-    } else if (st.isFile()) {
-      // File-level filters — count each pass-over so the scan can report how many
-      // files were seen but deliberately not indexed (explains the on-disk gap).
-      if (isJunkFile(entry.name)) { stats.filtered++; continue; }
-      if (st.size === 0) { stats.filtered++; continue; } // empty placeholders/stubs — no content
-      if (isBlacklisted(entry.name, blacklist)) { stats.filtered++; continue; }
-      if (skipNonContent && isNonContentFile(entry.name)) { stats.filtered++; continue; }
-      yield { absPath: full, name: entry.name, size: st.size, mtimeMs: st.mtimeMs };
-    }
-  }
-}
 
 export function createIndexProcessor (deps: IndexWorkerDeps): Processor<IndexJobData> {
   return async (job: Job<IndexJobData>) => {
@@ -133,7 +81,8 @@ export function createIndexProcessor (deps: IndexWorkerDeps): Processor<IndexJob
       return isAborted();
     };
 
-    for await (const file of walk(root, recursive, ignoreHidden, blacklist, excludeFolders, skipNonContent, stats)) {
+    const filters = { recursive, ignoreHidden, blacklist, excludeFolders, skipNonContent };
+    for await (const file of walkFiles(root, filters, stats)) {
       batch.push(file);
       progress.scanned++;
       if (await tick()) { aborted = true; break; }

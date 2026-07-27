@@ -29,6 +29,15 @@ export type Preferences = {
    *  directories (node_modules, dist, .git…) and non-content file types
    *  (binaries, source code, build artifacts). Documents/images/media stay. */
   indexSkipNonContent: boolean;
+  /** How long after a file disappears Vault still treats a matching new file as
+   *  that same item moved or renamed, rather than a new one. Moves arrive as an
+   *  unrelated unlink + add pair, and a directory move spreads that pair over
+   *  however long the OS takes to drain the events. */
+  moveDetectionWindowSeconds: number;
+  /** How long a missing item is kept before it is deleted for real. Until then
+   *  it stays in the library (flagged missing) with all its tags and metadata,
+   *  so an unmounted drive or a slow move never costs the user anything. */
+  missingFileGraceDays: number;
 };
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -52,4 +61,6 @@ export const DEFAULT_PREFERENCES: Preferences = {
   indexBlacklistExtensions: [],
   indexExcludeFolders: [],
   indexSkipNonContent: true,
+  moveDetectionWindowSeconds: 120,
+  missingFileGraceDays: 7,
 };

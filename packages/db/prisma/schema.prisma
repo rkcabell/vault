@@ -95,10 +95,24 @@ model Media {
   // storage at `storageKey` (normal upload). For in-place rows Vault reads the
   // source read-only and never writes to or deletes from this path.
   sourcePath      String?
+  // Set when an in-place source stopped existing at `sourcePath`. The row is
+  // kept intact (tags, title, starred, bundles, reminders, extracted text) so a
+  // move or rename — which the OS reports as an unrelated unlink + add pair —
+  // can be rematched to it instead of destroying the user's metadata. A sweeper
+  // hard-deletes rows still missing after `missingFileGraceDays`.
+  missingSince    DateTime?
+  // Last known filesystem mtime of the source, in epoch ms. Deliberately
+  // separate from `fileDate`, which starts as mtime but gets upgraded to the
+  // embedded EXIF/PDF date — so fileDate cannot be trusted to identify a moved
+  // file. Float because an epoch-ms value overflows Prisma's 32-bit Int.
+  sourceMtimeMs   Float?
   filename        String
   mimeType        String
   sizeBytes       Float
   title           String
+  // True once the user has renamed the item themselves. A move/rename then
+  // preserves their title instead of re-deriving one from the new filename.
+  titleIsUserEdited Boolean        @default(false)
   tags            String[]
   starred         Boolean          @default(false)
   starredAt       DateTime?
@@ -126,6 +140,8 @@ model Media {
   @@unique([userId, sourcePath])
   @@index([tags], type: Gin)
   @@index([userId, contentHash])
+  // Drives move rematching (recent tombstones) and the missing-file sweeper.
+  @@index([userId, missingSince])
   @@index([userId, createdAt(sort: Desc)])
   @@index([userId, fileDate(sort: Desc)])
   @@index([userId, title(sort: Asc)])

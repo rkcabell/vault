@@ -49,6 +49,41 @@ export function isBlacklisted (name: string, blacklist: string[]): boolean {
   return blacklist.includes(extOf(name));
 }
 
+/** Which derived artifacts a file's type and size call for. */
+export type DerivationPlan = {
+  /** Enqueue a thumbnail job (which hashes the source as a side effect). */
+  thumb: boolean;
+  /** Enqueue a stream-hash job instead — the thumb job won't run to do it. */
+  hash: boolean;
+  /** Enqueue OCR / text extraction. */
+  ocr: boolean;
+  /** Type the thumbnailer cannot render at all. */
+  thumbUnsupported: boolean;
+  /** Renderable type, but too big to buffer. */
+  thumbTooLarge: boolean;
+};
+
+/**
+ * Decide what work a file needs, from its type and size alone.
+ *
+ * Shared by initial indexing and by the reconcile sweep's "bytes changed under
+ * us" path so a re-derivation queues exactly what a first index would have. The
+ * hash fallback matters: the thumb worker hashes everything it processes, so
+ * anything that skips the thumb job needs an explicit hash job or its
+ * `contentHash` — and therefore dedup — silently stays empty.
+ */
+export function planDerivations (mimeType: string, sizeBytes: number): DerivationPlan {
+  const renderable = thumbnailSupported(mimeType);
+  const tooLarge = renderable && exceedsThumbnailSize(sizeBytes);
+  return {
+    thumb: renderable && !tooLarge,
+    hash: !renderable || tooLarge,
+    ocr: ocrSupported(mimeType),
+    thumbUnsupported: !renderable,
+    thumbTooLarge: tooLarge,
+  };
+}
+
 /**
  * Index a set of discovered files: skip already-indexed paths, create Media rows
  * that reference each file in place (sourcePath set, sourceState READY), and
@@ -132,6 +167,9 @@ export async function indexFiles (
       title: deriveTitle(file.name),
       tags: autoTags,
       fileDate,
+      // Kept separate from fileDate, which the thumb worker upgrades to the
+      // embedded EXIF/PDF date. Move detection needs the untouched mtime.
+      sourceMtimeMs: file.mtimeMs && file.mtimeMs > 0 ? file.mtimeMs : null,
       sourceState: "READY", // the original already exists on disk
       thumbState: "PENDING",
       textState: "PENDING",
@@ -140,17 +178,13 @@ export async function indexFiles (
 
     // Thumbnail: supported type AND small enough to load into memory. Too-large
     // files are marked UNSUPPORTED rather than enqueued — the worker can't buffer a
-    // >2 GiB source, so the job would only fail. Items that skip the thumb job
-    // get a hash job instead so contentHash coverage stays complete for dedup
-    // (the thumb worker hashes as a side effect for everything it processes).
-    if (!thumbnailSupported(mimeType) || exceedsThumbnailSize(file.size)) {
-      if (!thumbnailSupported(mimeType)) thumbUnsupportedIds.push(id);
-      else thumbTooLargeIds.push(id);
-      hashItems.push({ mediaId: id, userId, storageKey, sourcePath: file.absPath, allowedRoots });
-    } else {
-      thumbItems.push({ mediaId: id, userId, storageKey, sourcePath: file.absPath, allowedRoots });
-    }
-    if (ocrSupported(mimeType)) ocrItems.push({ mediaId: id, userId, storageKey, allowedRoots });
+    // >2 GiB source, so the job would only fail.
+    const plan = planDerivations(mimeType, file.size);
+    if (plan.thumb) thumbItems.push({ mediaId: id, userId, storageKey, sourcePath: file.absPath, allowedRoots });
+    if (plan.hash) hashItems.push({ mediaId: id, userId, storageKey, sourcePath: file.absPath, allowedRoots });
+    if (plan.thumbUnsupported) thumbUnsupportedIds.push(id);
+    if (plan.thumbTooLarge) thumbTooLargeIds.push(id);
+    if (plan.ocr) ocrItems.push({ mediaId: id, userId, storageKey, allowedRoots });
     else textUnsupportedIds.push(id);
   }
 

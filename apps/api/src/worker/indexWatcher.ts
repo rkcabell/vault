@@ -3,10 +3,17 @@ import { lstat } from "node:fs/promises";
 import chokidar, { type FSWatcher } from "chokidar";
 import type { IndexConfig } from "../services/preferencesService.js";
 import type { MediaRepository } from "../repositories/mediaRepository.js";
-import { isUnderAllowedRoot, isExcludedFolder } from "../lib/media/indexRoots.js";
+import { isUnderAllowedRoot, isExcludedFolder, canonicalizeAbsPath } from "../lib/media/indexRoots.js";
 import { normalizeExtensions } from "../lib/media/extensions.js";
 import { isBuildDir, isNonContentFile, isJunkDir, isJunkFile } from "../lib/media/contentFilters.js";
+import { matchIdentity, type IncomingFile } from "../lib/media/matchIdentity.js";
+import { hashFileStreaming } from "../lib/media/hashFile.js";
+import { deriveTitle } from "../lib/media/deriveTitle.js";
 import { type IndexCoreDeps, indexFiles, isBlacklisted } from "./indexCore.js";
+
+/** Cap on ids per tombstone UPDATE, so moving a directory of 100k files does
+ *  not build a single unbounded `IN` list. Mirrors the scan's batching. */
+const MISSING_BATCH_SIZE = 500;
 
 type WatchLogger = {
   info: (obj: object, msg: string) => void;
@@ -28,6 +35,13 @@ export type IndexWatcherDeps = IndexCoreDeps & {
   logger: WatchLogger;
   /** Override the file stat used on `add` — defaults to fs.lstat. Test seam. */
   statFile?: (absPath: string) => Promise<StatLike>;
+  /** Stream-hash a file to break a tie between move candidates. Only called
+   *  when cheap metadata was inconclusive. Defaults to a streaming sha256;
+   *  returns null if the file cannot be read. Test seam. */
+  hashFile?: (absPath: string) => Promise<string | null>;
+  /** Current time in epoch ms — injectable so tests can drive the
+   *  move-detection window without sleeping. */
+  now?: () => number;
 };
 
 /** First config whose allowed roots contain `absPath` (single-user in practice). */
@@ -48,13 +62,91 @@ function isFiltered (absPath: string, config: IndexConfig): boolean {
 }
 
 /**
+ * Serialize async work so events are applied one at a time in arrival order.
+ *
+ * Move detection reads and writes the same tombstone set from both the `unlink`
+ * and `add` handlers, and chokidar fires them concurrently. Without this, the
+ * two halves of a move can interleave — both sides observing a state neither
+ * has finished writing — and a rematch is missed or applied twice. Rejections
+ * are contained so one failed event cannot poison the rest of the chain.
+ */
+function createSerialQueue (): <T>(fn: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = tail.then(fn, fn);
+    tail = run.catch(() => undefined);
+    return run;
+  };
+}
+
+/**
  * The filesystem-event handlers, decoupled from chokidar so they can be unit
  * tested with injected deps + a fake config list. `getConfigs` is read fresh on
  * every event so settings changes (re-synced by the watcher) take effect without
  * re-wiring handlers.
+ *
+ * The handlers returned here are serialized against each other — see
+ * {@link createSerialQueue}.
  */
 export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: () => IndexConfig[]) {
   const statFile = deps.statFile ?? (async (p: string) => lstat(p));
+  const hashFile = deps.hashFile ?? hashFileStreaming;
+  const now = deps.now ?? (() => Date.now());
+
+  /** Start of the window in which a vanished file may still turn up elsewhere
+   *  and be recognised as the same item. */
+  const moveWindowStart = (config: IndexConfig): Date =>
+    new Date(now() - config.moveDetectionWindowSeconds * 1000);
+
+  /**
+   * Try to explain a newly-appeared file as an already-known item that moved or
+   * was renamed. Returns true when it did, meaning the caller must not index it
+   * as new. Hashing happens only to break a genuine tie — hashing every added
+   * file would cost more than the re-index this exists to avoid.
+   */
+  const rematchMovedFile = async (
+    config: IndexConfig,
+    absPath: string,
+    incoming: IncomingFile,
+  ): Promise<boolean> => {
+    const candidates = await deps.mediaRepository.findMoveCandidates(
+      config.userId,
+      moveWindowStart(config),
+    );
+    // The overwhelmingly common case: nothing recently went missing, so this is
+    // simply a new file and we have done one indexed lookup to find that out.
+    if (candidates.length === 0) return false;
+
+    let result = matchIdentity(incoming, candidates);
+    if (result.kind === "ambiguous") {
+      const contentHash = await hashFile(absPath);
+      result = contentHash
+        ? matchIdentity({ ...incoming, contentHash }, result.candidates)
+        : { kind: "none" };
+    }
+    if (result.kind !== "matched") return false;
+
+    const matched = result.candidate;
+    await deps.mediaRepository.applyMove(config.userId, matched.id, {
+      sourcePath: canonicalizeAbsPath(absPath),
+      filename: incoming.basename,
+      sizeBytes: incoming.sizeBytes,
+      mtimeMs: incoming.mtimeMs,
+      // A title the user typed is theirs to keep; an auto-derived one should
+      // follow the new filename.
+      ...(matched.titleIsUserEdited ? {} : { title: deriveTitle(incoming.basename) }),
+    });
+    // Deliberately no thumb/OCR re-enqueue: the bytes did not change, so the
+    // existing thumbnail and extracted text are still correct.
+    deps.publishJobUpdate?.({
+      userId: config.userId, mediaId: matched.id, field: "mediaMoved", value: "1",
+    });
+    deps.logger.info(
+      { userId: config.userId, mediaId: matched.id, path: absPath, via: result.via },
+      "watch: matched moved file to existing item",
+    );
+    return true;
+  };
 
   const onAdd = async (absPath: string): Promise<void> => {
     try {
@@ -70,7 +162,47 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
       // or a followed symlink, and skip empty placeholders.
       if (st.isDirectory?.() || st.isSymbolicLink?.()) return;
       if (st.size === 0) return;
-      const file = { absPath, name: path.basename(absPath), size: st.size, mtimeMs: st.mtimeMs };
+      const name = path.basename(absPath);
+      const canonical = canonicalizeAbsPath(absPath);
+      const atSamePath = await deps.mediaRepository.findIdentityBySourcePath(config.userId, canonical);
+
+      // A tombstoned row at this exact path means the file came back where it
+      // was — a drive remounting, or a deletion the user undid. Revive it. This
+      // has to be handled before anything else: the bytes may differ from what
+      // we last saw, in which case no identity match would fire and the row
+      // would stay marked missing forever while `indexFiles` skipped the path
+      // as already-indexed.
+      if (atSamePath?.missingSince) {
+        await deps.mediaRepository.applyMove(config.userId, atSamePath.id, {
+          sourcePath: canonical,
+          filename: name,
+          sizeBytes: st.size,
+          mtimeMs: st.mtimeMs ?? null,
+        });
+        // Unlike a move, the content here may genuinely have changed while we
+        // were not watching, so the thumbnail cannot be trusted.
+        await deps.regenerateThumbnail(config.userId, atSamePath.id, config.allowedRoots);
+        deps.publishJobUpdate?.({
+          userId: config.userId, mediaId: atSamePath.id, field: "mediaMoved", value: "1",
+        });
+        deps.logger.info({ userId: config.userId, path: absPath }, "watch: missing file reappeared");
+        return;
+      }
+
+      // Before creating anything: is this a file we already know, that simply
+      // moved? Creating a new row here is what used to destroy the user's tags,
+      // title, starred state, bundles, reminders and extracted text. A live row
+      // already sitting on this path rules a move out.
+      if (!atSamePath) {
+        const moved = await rematchMovedFile(config, absPath, {
+          basename: name,
+          sizeBytes: st.size,
+          mtimeMs: st.mtimeMs ?? null,
+        });
+        if (moved) return;
+      }
+
+      const file = { absPath, name, size: st.size, mtimeMs: st.mtimeMs };
       const { indexed } = await indexFiles(deps, config.userId, [file], config.allowedRoots);
       if (indexed > 0) deps.logger.info({ userId: config.userId, path: absPath }, "watch: indexed new file");
     } catch (err) {
@@ -82,7 +214,9 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
     try {
       const config = resolveConfig(absPath, getConfigs());
       if (!config || isFiltered(absPath, config)) return;
-      const id = await deps.mediaRepository.findIdBySourcePath(config.userId, absPath);
+      // Canonical form is what indexFiles stored — on Windows that includes an
+      // upper-cased drive letter, which a raw resolve does not guarantee.
+      const id = await deps.mediaRepository.findIdBySourcePath(config.userId, canonicalizeAbsPath(absPath));
       if (!id) return void (await onAdd(absPath)); // changed before we ever saw an add
       // Refresh the thumbnail to reflect the edited bytes. Text re-extraction on
       // change is intentionally deferred — doing it correctly needs mime-aware,
@@ -94,14 +228,76 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
     }
   };
 
+  /**
+   * Handle the reverse event ordering: on some platforms, and across
+   * filesystems, the move's `add` lands before its `unlink`. By the time we get
+   * here a bare new row already exists for the destination, holding none of the
+   * user's metadata. Transplant the vanished row onto that path and drop the
+   * bare one, so the surviving row is the one with the history and the id.
+   *
+   * Returns true when the disappearance was resolved as a move.
+   */
+  const adoptAlreadyIndexedTarget = async (
+    config: IndexConfig,
+    vanished: { id: string; basename: string; sizeBytes: number; mtimeMs: number | null; contentHash: string | null; titleIsUserEdited: boolean },
+  ): Promise<boolean> => {
+    const recent = await deps.mediaRepository.findRecentlyIndexed(
+      config.userId,
+      moveWindowStart(config),
+    );
+    const targets = recent.filter(r => r.id !== vanished.id);
+    if (targets.length === 0) return false;
+
+    // The file is gone, so there is nothing left to hash — an unresolved tie
+    // just falls through to a tombstone, which loses nothing.
+    const result = matchIdentity(vanished, targets);
+    if (result.kind !== "matched") return false;
+
+    const target = result.candidate;
+    // Order matters: the bare row occupies (userId, sourcePath), so it has to go
+    // before the surviving row can take that path. deleteMedia also clears the
+    // thumbnail it may already have derived.
+    await deps.deleteMedia(config.userId, target.id);
+    await deps.mediaRepository.applyMove(config.userId, vanished.id, {
+      sourcePath: target.sourcePath,
+      filename: target.filename,
+      sizeBytes: target.sizeBytes,
+      mtimeMs: target.mtimeMs,
+      ...(vanished.titleIsUserEdited ? {} : { title: deriveTitle(target.filename) }),
+    });
+    deps.publishJobUpdate?.({
+      userId: config.userId, mediaId: vanished.id, field: "mediaMoved", value: "1",
+    });
+    deps.logger.info(
+      { userId: config.userId, mediaId: vanished.id, absorbed: target.id, via: result.via },
+      "watch: reclaimed moved item indexed out of order",
+    );
+    return true;
+  };
+
   const onUnlink = async (absPath: string): Promise<void> => {
     try {
       for (const config of getConfigs()) {
         if (!isUnderAllowedRoot(absPath, config.allowedRoots)) continue;
-        const id = await deps.mediaRepository.findIdBySourcePath(config.userId, absPath);
-        if (id) {
-          await deps.deleteMedia(config.userId, id);
-          deps.logger.info({ userId: config.userId, path: absPath }, "watch: removed deleted file");
+        const vanished = await deps.mediaRepository.findIdentityBySourcePath(
+          config.userId,
+          canonicalizeAbsPath(absPath),
+        );
+        if (!vanished) continue;
+
+        if (await adoptAlreadyIndexedTarget(config, vanished)) continue;
+
+        // Not (yet) explained as a move. Tombstone rather than delete: the
+        // matching `add` may still be in flight, the drive may just be
+        // unmounted, and everything the user attached to this item is
+        // irreplaceable. The sweeper deletes it for real once the grace period
+        // passes without the file coming back.
+        const marked = await deps.mediaRepository.markMissing(config.userId, [vanished.id]);
+        if (marked > 0) {
+          deps.publishJobUpdate?.({
+            userId: config.userId, mediaId: vanished.id, field: "mediaMissing", value: "1",
+          });
+          deps.logger.info({ userId: config.userId, path: absPath }, "watch: marked file missing");
         }
       }
     } catch (err) {
@@ -113,10 +309,28 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
     try {
       for (const config of getConfigs()) {
         if (!isUnderAllowedRoot(absPath, config.allowedRoots)) continue;
-        const ids = await deps.mediaRepository.findIdsBySourcePathPrefix(config.userId, absPath);
-        for (const id of ids) await deps.deleteMedia(config.userId, id);
-        if (ids.length > 0) {
-          deps.logger.info({ userId: config.userId, path: absPath, count: ids.length }, "watch: removed deleted folder");
+        const ids = await deps.mediaRepository.findIdsBySourcePathPrefix(
+          config.userId,
+          canonicalizeAbsPath(absPath),
+        );
+        if (ids.length === 0) continue;
+        // Tombstone the whole subtree in one pass; the `add` storm that follows
+        // a directory move then rematches each file individually.
+        let marked = 0;
+        for (let i = 0; i < ids.length; i += MISSING_BATCH_SIZE) {
+          marked += await deps.mediaRepository.markMissing(
+            config.userId,
+            ids.slice(i, i + MISSING_BATCH_SIZE),
+          );
+        }
+        if (marked > 0) {
+          deps.publishJobUpdate?.({
+            userId: config.userId, mediaId: "*", field: "mediaMissing", value: String(marked),
+          });
+          deps.logger.info(
+            { userId: config.userId, path: absPath, count: marked },
+            "watch: marked folder contents missing",
+          );
         }
       }
     } catch (err) {
@@ -124,7 +338,15 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
     }
   };
 
-  return { onAdd, onChange, onUnlink, onUnlinkDir };
+  // Every handler goes through one queue so the two halves of a move are applied
+  // in a deterministic order no matter which the OS reports first.
+  const serial = createSerialQueue();
+  return {
+    onAdd: (p: string) => serial(() => onAdd(p)),
+    onChange: (p: string) => serial(() => onChange(p)),
+    onUnlink: (p: string) => serial(() => onUnlink(p)),
+    onUnlinkDir: (p: string) => serial(() => onUnlinkDir(p)),
+  };
 }
 
 export type IndexWatcher = {

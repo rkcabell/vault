@@ -34,6 +34,9 @@ interface BuildOpts {
     regenerateThumbnailsBatch?: (_u: string, _ids: string[], _roots?: string[]) => Promise<unknown>;
     enqueueTextExtractionBatch?: (_u: string, _ids: string[], _roots?: string[]) => Promise<unknown>;
   };
+  deleteService?: {
+    startDelete?: (_u: string, _input: unknown) => Promise<{ jobId: string }>;
+  };
   prisma?: {
     userFindUnique?: (_a: unknown) => Promise<unknown>;
     mediaFindMany?: (_a: unknown) => Promise<unknown[]>;
@@ -49,7 +52,8 @@ function makeMediaServices({
   queryService: qs = {},
   readService: rs = {},
   actionsService: as_svc = {},
-}: Pick<BuildOpts, "uploadService" | "queryService" | "readService" | "actionsService"> = {}) {
+  deleteService: ds = {},
+}: Pick<BuildOpts, "uploadService" | "queryService" | "readService" | "actionsService" | "deleteService"> = {}) {
   return {
     uploadService: {
       initUpload: us.initUpload ?? (async () => ({ id: "m-1", uploadUrl: "https://s3.test/" })),
@@ -76,6 +80,9 @@ function makeMediaServices({
       regenerateThumbnail: as_svc.regenerateThumbnail ?? (async () => null),
       regenerateThumbnailsBatch: as_svc.regenerateThumbnailsBatch ?? (async () => ({ queued: 0, missing: 0 })),
       enqueueTextExtractionBatch: as_svc.enqueueTextExtractionBatch ?? (async () => ({ queued: 0, missing: 0 })),
+    },
+    deleteService: {
+      startDelete: ds.startDelete ?? (async () => ({ jobId: "job-1" })),
     },
   };
 }
@@ -698,4 +705,58 @@ test("GET /:id/thumbnail: unauthenticated returns 401", async () => {
   const app = await buildApp();
   const res = await app.inject({ method: "GET", url: `/${ID}/thumbnail` });
   assert.equal(res.statusCode, 401);
+});
+
+// ── Missing-file filter ────────────────────────────────────────────────────────
+//
+// The list and bulk-delete routes must agree on every filter. They parse their
+// query params in two separate Zod schemas, and neither is `.strict()`, so a
+// filter added to one and forgotten in the other is dropped silently — which on
+// the delete side turns "delete the 3 items on screen" into "delete everything".
+
+test("GET /: forwards missing=only to the query service", async () => {
+  let seen: Record<string, unknown> | null = null;
+  const app = await buildApp({
+    queryService: {
+      listMedia: async (_u, opts) => { seen = opts as Record<string, unknown>; return { items: [], nextCursor: null }; },
+    },
+  });
+  const res = await app.inject({ method: "GET", url: "/?missing=only", headers: AUTH });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(seen!.missing, "only");
+});
+
+test("GET /: rejects a missing value other than 'only'", async () => {
+  const app = await buildApp();
+  const res = await app.inject({ method: "GET", url: "/?missing=all", headers: AUTH });
+  assert.equal(res.statusCode, 500); // ZodError — not silently ignored
+});
+
+test("DELETE /: carries missing=only into the delete job filters", async () => {
+  let seen: { filters?: Record<string, unknown> } | null = null;
+  const app = await buildApp({
+    deleteService: {
+      startDelete: async (_u, input) => { seen = input as { filters?: Record<string, unknown> }; return { jobId: "job-1" }; },
+    },
+  });
+  const res = await app.inject({ method: "DELETE", url: "/?missing=only", headers: AUTH });
+
+  assert.equal(res.statusCode, 202);
+  // Without this the job would match every item the user owns, not just the
+  // missing ones the user was looking at when they hit "delete all".
+  assert.equal(seen!.filters!.missing, "only");
+});
+
+test("DELETE /: an unfiltered delete still passes no missing filter", async () => {
+  let seen: { filters?: Record<string, unknown> } | null = null;
+  const app = await buildApp({
+    deleteService: {
+      startDelete: async (_u, input) => { seen = input as { filters?: Record<string, unknown> }; return { jobId: "job-1" }; },
+    },
+  });
+  const res = await app.inject({ method: "DELETE", url: "/", headers: AUTH });
+
+  assert.equal(res.statusCode, 202);
+  assert.equal(seen!.filters!.missing, undefined);
 });

@@ -10,6 +10,7 @@ import { createMediaQueryService } from "../services/media/mediaQueryService.js"
 import { createMediaReadService } from "../services/media/mediaReadService.js";
 import { createMediaActionsService } from "../services/media/mediaActionsService.js";
 import { createIndexService } from "../services/media/indexService.js";
+import { createReconcileService } from "../services/media/reconcileService.js";
 import { createDeleteJobService } from "../services/media/deleteJobService.js";
 import { createDedupService } from "../services/media/dedupService.js";
 import type { OcrJobData } from "../services/ocrProcessingService.js";
@@ -18,6 +19,8 @@ import type { UnpackJob } from "../queues/enqueueUnpack.js";
 import { UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
 import type { IndexJobData } from "../queues/enqueueIndex.js";
 import { INDEX_QUEUE } from "../queues/enqueueIndex.js";
+import type { ReconcileJobData } from "../queues/enqueueReconcile.js";
+import { RECONCILE_QUEUE } from "../queues/enqueueReconcile.js";
 import type { DeleteJobData } from "../queues/enqueueDelete.js";
 import { DELETE_QUEUE } from "../queues/enqueueDelete.js";
 import type { OrganizeJobData } from "../queues/enqueueOrganize.js";
@@ -34,6 +37,7 @@ type MediaServices = {
   readService: ReturnType<typeof createMediaReadService>;
   actionsService: ReturnType<typeof createMediaActionsService>;
   indexService: ReturnType<typeof createIndexService>;
+  reconcileService: ReturnType<typeof createReconcileService>;
   deleteService: ReturnType<typeof createDeleteJobService>;
   organizeService: ReturnType<typeof createOrganizeJobService>;
   dedupService: ReturnType<typeof createDedupService>;
@@ -52,6 +56,7 @@ export default fp(
     const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, { connection: redisConnection });
     const unpackQueue = new Queue<UnpackJob>(UNPACK_QUEUE, { connection: redisConnection });
     const indexQueue = new Queue<IndexJobData>(INDEX_QUEUE, { connection: redisConnection });
+    const reconcileQueue = new Queue<ReconcileJobData>(RECONCILE_QUEUE, { connection: redisConnection });
     const deleteQueue = new Queue<DeleteJobData>(DELETE_QUEUE, { connection: redisConnection });
     const organizeQueue = new Queue<OrganizeJobData>(ORGANIZE_QUEUE, { connection: redisConnection });
     const hashQueue = new Queue<HashJobData>(HASH_QUEUE, { connection: redisConnection });
@@ -111,6 +116,10 @@ export default fp(
         indexQueue,
         logger: app.log,
       }),
+      reconcileService: createReconcileService({
+        reconcileQueue,
+        logger: app.log,
+      }),
       deleteService: createDeleteJobService({
         deleteQueue,
         logger: app.log,
@@ -139,6 +148,7 @@ export default fp(
         thumbQueue.close(),
         unpackQueue.close(),
         indexQueue.close(),
+        reconcileQueue.close(),
         deleteQueue.close(),
         organizeQueue.close(),
         hashQueue.close(),

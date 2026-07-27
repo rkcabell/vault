@@ -9,6 +9,10 @@ export type DeleteJobFilters = {
   thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
   textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
   excludeUnpacked?: boolean;
+  /** "only" restricts the job to items whose source file has vanished — the
+   *  library's "Missing files" view. This MUST be carried through: without it a
+   *  select-all delete launched from that view would match the whole library. */
+  missing?: "only";
 };
 
 /**

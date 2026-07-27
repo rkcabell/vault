@@ -21,6 +21,12 @@ const preferencesSchema = z
     lightTheme: z.enum(["default", "latte", "sandstone", "mist", "lavender", "dream", "cotton-candy", "mint", "garden"]).optional(),
     darkTheme: z.enum(["new-moon", "matrix", "charcoal", "solarized"]).optional(),
     exploreBucketColors: z.record(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
+    // Lower bound keeps a directory move's event burst inside the window; upper
+    // bound keeps the tombstone candidate set small enough to scan per add.
+    moveDetectionWindowSeconds: z.number().int().min(30).max(3600).optional(),
+    // Minimum 1 day: anything shorter risks sweeping away a still-unmounted
+    // drive's items before the user has a chance to notice they went missing.
+    missingFileGraceDays: z.number().int().min(1).max(365).optional(),
   })
   .strict();
 

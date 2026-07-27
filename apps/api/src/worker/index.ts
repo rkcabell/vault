@@ -1,7 +1,6 @@
 import "dotenv/config";
 
 import path from "node:path";
-import { access } from "node:fs/promises";
 import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 
@@ -10,15 +9,15 @@ import { createOcrProcessor, type OcrJobData } from "./ocrWorker.js";
 import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumbWorker.js";
 import { createUnpackProcessor } from "./unpackWorker.js";
 import { createIndexProcessor } from "./indexWorker.js";
+import { createReconcileProcessor } from "./reconcileWorker.js";
 import { createDeleteProcessor } from "./deleteWorker.js";
 import { createOrganizeProcessor } from "./organizeWorker.js";
 import { createHashProcessor } from "./hashWorker.js";
 import { createIndexWatcher } from "./indexWatcher.js";
 import { createMediaActionsService } from "../services/media/mediaActionsService.js";
-import { isUnderAllowedRoot } from "../lib/media/indexRoots.js";
 import { readIndexAbortEpoch } from "../lib/media/indexAbort.js";
 import { readDeleteAbortEpoch } from "../lib/media/deleteAbort.js";
-import { enqueueIndex } from "../queues/enqueueIndex.js";
+import { enqueueReconcile, reconcileJobId } from "../queues/enqueueReconcile.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
 import { TagRuleRepository } from "../repositories/tagRuleRepository.js";
@@ -35,6 +34,8 @@ import type { UnpackJob } from "../queues/enqueueUnpack.js";
 import { UNPACK_QUEUE } from "../queues/enqueueUnpack.js";
 import type { IndexJobData } from "../queues/enqueueIndex.js";
 import { INDEX_QUEUE } from "../queues/enqueueIndex.js";
+import type { ReconcileJobData } from "../queues/enqueueReconcile.js";
+import { RECONCILE_QUEUE } from "../queues/enqueueReconcile.js";
 import type { DeleteJobData } from "../queues/enqueueDelete.js";
 import { DELETE_QUEUE } from "../queues/enqueueDelete.js";
 import type { OrganizeJobData } from "../queues/enqueueOrganize.js";
@@ -66,10 +67,21 @@ const INDEX_WATCH_INTERVAL = parseEnvNumber("INDEX_WATCH_INTERVAL", 2000);
 // Default on; set INDEX_AUTO=false to index only on explicit manual scans.
 const INDEX_AUTO = process.env.INDEX_AUTO !== "false";
 const INDEX_RECONCILE_INTERVAL_MS = parseEnvNumber("INDEX_RECONCILE_INTERVAL_MS", 60 * 60 * 1000);
-// Full reconcile of every allowed root at boot. Off by default: in dev (tsx
-// watch) every restart would re-enqueue a whole-root rescan, burying targeted
-// scans. The hourly interval reconcile is the steady-state catch-up.
-const INDEX_RECONCILE_ON_BOOT = process.env.INDEX_RECONCILE_ON_BOOT === "true";
+// Reconcile every allowed root at boot. On by default, because boot is the one
+// moment we know the library may have drifted: the watcher sees nothing while
+// the process is down, so a start is exactly when "what changed while I was
+// away?" needs answering. Set INDEX_RECONCILE_ON_BOOT=false to opt out.
+const INDEX_RECONCILE_ON_BOOT = process.env.INDEX_RECONCILE_ON_BOOT !== "false";
+// ...but skip the boot sweep for a root reconciled more recently than this. In
+// dev, tsx watch restarts the worker on every file save; without the cooldown
+// each save would kick off a full-root walk. A real restart after downtime is
+// always older than the cooldown, so the case that matters still runs.
+const INDEX_RECONCILE_BOOT_COOLDOWN_MS = parseEnvNumber("INDEX_RECONCILE_BOOT_COOLDOWN_MS", 30 * 60 * 1000);
+// How often to look for missing items that have outlived the grace period, and
+// how many to delete per pass. The cap keeps one sweep from stalling the worker
+// after a large drive was unmounted for a week.
+const MISSING_SWEEP_INTERVAL_MS = parseEnvNumber("MISSING_SWEEP_INTERVAL_MS", 6 * 60 * 60 * 1000);
+const MISSING_SWEEP_LIMIT = parseEnvNumber("MISSING_SWEEP_LIMIT", 500);
 
 async function main () {
   const logger = createLogger("worker");
@@ -101,6 +113,7 @@ async function main () {
   const ocrQueue = new Queue<OcrJobData>(OCR_QUEUE, { connection });
   const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, { connection });
   const indexQueue = new Queue<IndexJobData>(_INDEX_QUEUE, { connection });
+  const reconcileQueue = new Queue<ReconcileJobData>(RECONCILE_QUEUE, { connection });
   const deleteQueue = new Queue<DeleteJobData>(DELETE_QUEUE, { connection });
   const hashQueue = new Queue<HashJobData>(HASH_QUEUE, { connection });
 
@@ -188,6 +201,32 @@ async function main () {
     },
   );
 
+  const reconcileLogger = logger.child({ queue: RECONCILE_QUEUE, jobName: "reconcile" });
+
+  const reconcileWorker = new Worker<ReconcileJobData>(
+    RECONCILE_QUEUE,
+    createReconcileProcessor({
+      mediaRepository,
+      thumbQueue,
+      ocrQueue,
+      hashQueue,
+      listTagRules,
+      logger: reconcileLogger,
+      publishJobUpdate,
+      // Same epoch the index walk reads, so the one stop control cancels
+      // whichever of the two is running.
+      readAbortEpoch: () => readIndexAbortEpoch(publisher),
+    }),
+    {
+      connection,
+      concurrency: 1, // one sweep at a time; per-file work fans out to thumb/ocr/hash
+      // A sweep left "active" by a mid-run worker death must fail, not respawn:
+      // the default re-run restarts a full-root walk nobody asked for. Re-running
+      // is always safe, so resuming is a button press away.
+      maxStalledCount: 0,
+    },
+  );
+
   const deleteLogger = logger.child({ queue: DELETE_QUEUE, jobName: "delete" });
 
   const deleteWorker = new Worker<DeleteJobData>(
@@ -251,6 +290,7 @@ async function main () {
   thumbWorker.on("ready", () => thumbLogger.info({ queue: THUMB_QUEUE }, "worker ready"));
   unpackWorker.on("ready", () => unpackLogger.info({ queue: _UNPACK_QUEUE }, "worker ready"));
   indexWorker.on("ready", () => indexLogger.info({ queue: _INDEX_QUEUE }, "worker ready"));
+  reconcileWorker.on("ready", () => reconcileLogger.info({ queue: RECONCILE_QUEUE }, "worker ready"));
   deleteWorker.on("ready", () => deleteLogger.info({ queue: DELETE_QUEUE }, "worker ready"));
   organizeWorker.on("ready", () => organizeLogger.info({ queue: ORGANIZE_QUEUE }, "worker ready"));
   hashWorker.on("ready", () => hashLogger.info({ queue: HASH_QUEUE }, "worker ready"));
@@ -293,48 +333,85 @@ async function main () {
     watchLogger.warn({}, "automatic indexing disabled (INDEX_AUTO=false): no watcher, no reconcile — manual scans still run");
   }
 
-  // Reconciliation backstop: catches anything the watcher missed (inotify is
-  // unreliable on bind mounts / network shares). Re-enqueues scans per allowed
-  // root (dedupe makes re-runs cheap — only new files create rows) and prunes
-  // rows whose in-place source no longer exists on disk.
-  const reconcileLogger = logger.child({ component: "index-reconcile" });
-  const runReconcile = async () => {
+  // Reconciliation backstop: catches everything the watcher cannot see —
+  // inotify is unreliable on bind mounts and network shares, and while the
+  // process is down it sees nothing at all. Enqueues one sweep per allowed
+  // root; the work itself lives in reconcileWorker, which is also what the
+  // Settings button and the boot run drive, so all three behave identically.
+  const scheduleLogger = logger.child({ component: "index-reconcile" });
+  const runReconcile = async (opts: { cooldownMs?: number } = {}) => {
     const configs = await preferencesService.listIndexConfigs();
     for (const config of configs) {
       for (const root of config.allowedRoots) {
-        await enqueueIndex(indexQueue, {
+        const rootPath = path.resolve(root);
+        // Boot passes a cooldown so a dev restart storm doesn't launch a
+        // full-root walk per save. The interval run passes none.
+        if (opts.cooldownMs !== undefined) {
+          const previous = await reconcileQueue.getJob(reconcileJobId(config.userId, rootPath));
+          const finishedOn = previous?.finishedOn;
+          if (finishedOn && Date.now() - finishedOn < opts.cooldownMs) {
+            scheduleLogger.info(
+              { userId: config.userId, root: rootPath, finishedOn },
+              "reconcile skipped at boot (ran recently)",
+            );
+            continue;
+          }
+        }
+        await enqueueReconcile(reconcileQueue, {
           userId: config.userId,
-          rootPath: path.resolve(root),
-          recursive: true,
-          ignoreHidden: config.ignoreHidden,
+          rootPath,
           allowedRoots: config.allowedRoots,
+          ignoreHidden: config.ignoreHidden,
           blacklistExtensions: config.blacklistExtensions,
           excludeFolders: config.excludeFolders,
           skipNonContent: config.skipNonContent,
-        }).catch(err => reconcileLogger.warn({ err, root }, "reconcile enqueue failed"));
-      }
-      const rows = await mediaRepository.listSourcePaths(config.userId);
-      for (const { id, sourcePath } of rows) {
-        // Only prune sources under a currently-allowed root; leave items whose
-        // root was removed from config untouched (the user may re-add it).
-        if (!isUnderAllowedRoot(sourcePath, config.allowedRoots)) continue;
-        const exists = await access(sourcePath).then(() => true).catch(() => false);
-        if (!exists) {
-          await mediaActions.deleteMedia(config.userId, id)
-            .catch(err => reconcileLogger.warn({ err, id }, "reconcile prune failed"));
-        }
+          // Background sweeps yield to anything the user asked for directly
+          // (BullMQ treats a higher number as lower priority).
+        }, { priority: 10 }).catch(err => scheduleLogger.warn({ err, root: rootPath }, "reconcile enqueue failed"));
       }
     }
   };
-  const runReconcileSafe = () =>
-    runReconcile().catch(err => reconcileLogger.error({ err }, "reconciliation failed"));
+
+  // The only place an in-place row is deleted for real. Items whose file has
+  // been gone longer than the user's grace period are genuine deletions rather
+  // than moves or unmounted drives, so their rows finally go.
+  const sweepLogger = logger.child({ component: "missing-sweeper" });
+  const runSweep = async () => {
+    const configs = await preferencesService.listIndexConfigs();
+    for (const config of configs) {
+      const cutoff = new Date(Date.now() - config.missingFileGraceDays * 86_400_000);
+      const ids = await mediaRepository.findMissingBefore(config.userId, cutoff, MISSING_SWEEP_LIMIT);
+      let swept = 0;
+      for (const id of ids) {
+        const ok = await mediaActions.deleteMedia(config.userId, id)
+          .then(() => true)
+          .catch(err => { sweepLogger.warn({ err, id }, "sweep delete failed"); return false; });
+        if (ok) swept += 1;
+      }
+      if (swept > 0) {
+        sweepLogger.info(
+          { userId: config.userId, count: swept, graceDays: config.missingFileGraceDays },
+          "swept missing items past grace period",
+        );
+      }
+    }
+  };
+  const runReconcileSafe = (opts?: { cooldownMs: number }) =>
+    runReconcile(opts).catch(err => scheduleLogger.error({ err }, "reconciliation failed"));
   // Only schedule reconcile when automatic indexing is enabled. Within that, the
   // boot run stays separately gated by INDEX_RECONCILE_ON_BOOT.
   let reconcileInterval: NodeJS.Timeout | undefined;
+  let sweepInterval: NodeJS.Timeout | undefined;
   if (INDEX_AUTO) {
-    if (INDEX_RECONCILE_ON_BOOT) void runReconcileSafe();
-    else reconcileLogger.info({}, "reconcile-on-boot disabled (set INDEX_RECONCILE_ON_BOOT=true to enable)");
-    reconcileInterval = setInterval(runReconcileSafe, INDEX_RECONCILE_INTERVAL_MS);
+    if (INDEX_RECONCILE_ON_BOOT) void runReconcileSafe({ cooldownMs: INDEX_RECONCILE_BOOT_COOLDOWN_MS });
+    else scheduleLogger.info({}, "reconcile-on-boot disabled (INDEX_RECONCILE_ON_BOOT=false)");
+    reconcileInterval = setInterval(() => void runReconcileSafe(), INDEX_RECONCILE_INTERVAL_MS);
+    // Never on boot: a restart right after a drive went offline should not be
+    // what triggers deletions. The first sweep is one interval away.
+    sweepInterval = setInterval(
+      () => void runSweep().catch(err => sweepLogger.error({ err }, "missing sweep failed")),
+      MISSING_SWEEP_INTERVAL_MS,
+    );
   }
 
   // Run stall detection once on startup (catches records left over from a previous crash),
@@ -504,6 +581,16 @@ async function main () {
     indexLogger.error({ jobName: "index", queue: _INDEX_QUEUE, err }, "worker error"),
   );
 
+  reconcileWorker.on("failed", (job, err) =>
+    reconcileLogger.error(
+      { jobName: "reconcile", queue: RECONCILE_QUEUE, jobId: job?.id ?? "unknown", userId: job?.data?.userId ?? null, err },
+      "reconcile job failed",
+    ),
+  );
+  reconcileWorker.on("error", err =>
+    reconcileLogger.error({ jobName: "reconcile", queue: RECONCILE_QUEUE, err }, "worker error"),
+  );
+
   deleteWorker.on("failed", (job, err) =>
     deleteLogger.error(
       { jobName: "delete", queue: DELETE_QUEUE, jobId: job?.id ?? "unknown", userId: job?.data?.userId ?? null, err },
@@ -534,15 +621,16 @@ async function main () {
     hashLogger.error({ jobName: "hash", queue: HASH_QUEUE, err }, "worker error"),
   );
 
-  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE, _INDEX_QUEUE, DELETE_QUEUE, ORGANIZE_QUEUE, HASH_QUEUE] }, "worker started");
+  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE, _INDEX_QUEUE, RECONCILE_QUEUE, DELETE_QUEUE, ORGANIZE_QUEUE, HASH_QUEUE] }, "worker started");
 
   const shutdown = async () => {
     logger.info("worker shutting down...");
     clearInterval(stallInterval);
     if (reconcileInterval) clearInterval(reconcileInterval);
+    if (sweepInterval) clearInterval(sweepInterval);
     await indexWatcher.close().catch(err => watchLogger.warn({ err }, "index watcher close failed"));
-    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close(), indexWorker.close(), deleteWorker.close(), organizeWorker.close(), hashWorker.close()]);
-    await Promise.allSettled([ocrQueue.close(), thumbQueue.close(), indexQueue.close(), deleteQueue.close(), hashQueue.close()]);
+    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close(), indexWorker.close(), reconcileWorker.close(), deleteWorker.close(), organizeWorker.close(), hashWorker.close()]);
+    await Promise.allSettled([ocrQueue.close(), thumbQueue.close(), indexQueue.close(), reconcileQueue.close(), deleteQueue.close(), hashQueue.close()]);
     await publisher.quit();
   };
 

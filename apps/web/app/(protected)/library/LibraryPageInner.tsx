@@ -71,11 +71,14 @@ type DensityValue = (typeof DENSITY_OPTIONS)[number];
 // query params (a single enum each). "Needs …" surfaces the un-queued PENDING
 // items left behind after Abort Queues so they can be re-queued in bulk.
 const STATUS_OPTIONS = [
-  { value: "all", label: "All statuses", thumbState: "", textState: "" },
-  { value: "thumb_pending", label: "Pending thumbnail", thumbState: "PENDING", textState: "" },
-  { value: "thumb_error", label: "Thumbnail error", thumbState: "FAILED", textState: "" },
-  { value: "text_pending", label: "Pending text", thumbState: "", textState: "PENDING" },
-  { value: "text_error", label: "Text error", thumbState: "", textState: "ERROR" },
+  { value: "all", label: "All statuses", thumbState: "", textState: "", missing: "" },
+  { value: "thumb_pending", label: "Pending thumbnail", thumbState: "PENDING", textState: "", missing: "" },
+  { value: "thumb_error", label: "Thumbnail error", thumbState: "FAILED", textState: "", missing: "" },
+  { value: "text_pending", label: "Pending text", thumbState: "", textState: "PENDING", missing: "" },
+  { value: "text_error", label: "Text error", thumbState: "", textState: "ERROR", missing: "" },
+  // Indexed items whose file is no longer on disk. Their rows are kept so a
+  // move can reclaim them, which also means the user needs a way to see them.
+  { value: "missing", label: "Missing files", thumbState: "", textState: "", missing: "only" },
 ] as const;
 
 type StatusValue = (typeof STATUS_OPTIONS)[number]["value"];
@@ -96,6 +99,8 @@ type MediaListItem = {
   starred?: boolean;
   createdAt: string;
   fileDate?: string | null;
+  /** Set when the item's source file is no longer on disk. */
+  missingSince?: string | null;
 };
 
 type MediaListResponse = {
@@ -124,6 +129,7 @@ function applyFilterParams(
     excludedTagsList: string[];
     thumbState: string;
     textState: string;
+    missing: string;
     hideUnpackedItems: boolean;
   },
 ) {
@@ -132,6 +138,7 @@ function applyFilterParams(
   if (opts.excludedTagsList.length > 0) params.set("excludeTags", opts.excludedTagsList.join(","));
   if (opts.thumbState) params.set("thumbState", opts.thumbState);
   if (opts.textState) params.set("textState", opts.textState);
+  if (opts.missing) params.set("missing", opts.missing);
   if (opts.hideUnpackedItems && !opts.q && opts.includedTagsList.length === 0) params.set("excludeUnpacked", "1");
 }
 
@@ -239,6 +246,7 @@ export default function LibraryPageInner() {
 
   const thumbState = searchParams.get("thumbState")?.trim() ?? "";
   const textState = searchParams.get("textState")?.trim() ?? "";
+  const missing = searchParams.get("missing")?.trim() ?? "";
   const sortParam = searchParams.get("sort")?.trim();
   const sort = SORT_OPTIONS.some((option) => option.value === sortParam)
     ? (sortParam as SortValue)
@@ -317,18 +325,18 @@ export default function LibraryPageInner() {
       const params = new URLSearchParams();
       params.set("limit", String(itemLimit));
       params.set("sort", sort);
-      applyFilterParams(params, { q, includedTagsList, excludedTagsList, thumbState, textState, hideUnpackedItems });
+      applyFilterParams(params, { q, includedTagsList, excludedTagsList, thumbState, textState, missing, hideUnpackedItems });
       if (cursor) params.set("cursor", cursor);
       return params.toString();
     },
-    [excludedTagsList, gridCols, hideUnpackedItems, includedTagsList, isCompactGrid, q, sort, textState, thumbState, viewMode]
+    [excludedTagsList, gridCols, hideUnpackedItems, includedTagsList, isCompactGrid, missing, q, sort, textState, thumbState, viewMode]
   );
 
   const buildDeleteAllQuery = useCallback(() => {
     const params = new URLSearchParams();
-    applyFilterParams(params, { q, includedTagsList, excludedTagsList, thumbState, textState, hideUnpackedItems });
+    applyFilterParams(params, { q, includedTagsList, excludedTagsList, thumbState, textState, missing, hideUnpackedItems });
     return params.toString();
-  }, [excludedTagsList, hideUnpackedItems, includedTagsList, q, textState, thumbState]);
+  }, [excludedTagsList, hideUnpackedItems, includedTagsList, missing, q, textState, thumbState]);
 
   const handleSortChange = useCallback(
     (value: SortValue) => {
@@ -342,7 +350,9 @@ export default function LibraryPageInner() {
   );
 
   const statusValue: StatusValue =
-    STATUS_OPTIONS.find((o) => o.thumbState === thumbState && o.textState === textState)?.value ?? "all";
+    STATUS_OPTIONS.find(
+      (o) => o.thumbState === thumbState && o.textState === textState && o.missing === missing,
+    )?.value ?? "all";
   const statusLabel = STATUS_OPTIONS.find((o) => o.value === statusValue)?.label ?? "All statuses";
 
   const handleStatusChange = useCallback(
@@ -353,6 +363,8 @@ export default function LibraryPageInner() {
       else params.delete("thumbState");
       if (opt?.textState) params.set("textState", opt.textState);
       else params.delete("textState");
+      if (opt?.missing) params.set("missing", opt.missing);
+      else params.delete("missing");
       const nextQuery = params.toString();
       router.push(nextQuery ? `${LIBRARY_PATH}?${nextQuery}` : LIBRARY_PATH);
     },
@@ -413,7 +425,7 @@ export default function LibraryPageInner() {
 
   // True when any user-initiated filter is active. Used to keep the toolbar
   // visible even when the filtered result set is empty.
-  const hasAnyFilter = !!(q || includedTagsList.length > 0 || excludedTagsList.length > 0 || thumbState || textState);
+  const hasAnyFilter = !!(q || includedTagsList.length > 0 || excludedTagsList.length > 0 || thumbState || textState || missing);
 
 
   const hydrateItems = useCallback((list: MediaListItem[]) => {

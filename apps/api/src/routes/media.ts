@@ -84,7 +84,7 @@ const FALLBACK_WEBP_BASE64 =
 const FALLBACK_WEBP = Buffer.from(FALLBACK_WEBP_BASE64, "base64");
 
 export const mediaRoutes: FastifyPluginAsync = async app => {
-  const { uploadService, queryService, readService, actionsService, indexService, deleteService, dedupService } = app.mediaServices;
+  const { uploadService, queryService, readService, actionsService, indexService, reconcileService, deleteService, dedupService } = app.mediaServices;
   let unpackQueue: Queue<UnpackJob> | null = null;
   const getUnpackQueue = () => {
     if (!unpackQueue) {
@@ -229,8 +229,11 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       limit: z.coerce.number().int().min(1).max(100).optional(),
       cursor: z.string().optional(),
       excludeUnpacked: z.coerce.boolean().optional(),
+      // Only value is "only" — the library's "Missing files" view. Omitting it
+      // keeps missing items in the normal listing (flagged, not hidden).
+      missing: z.literal("only").optional(),
     });
-    const { q, search, tag, tags, excludeTags: excludeTagsRaw, thumbState, textState, mimeType, sort, limit, cursor, excludeUnpacked } = Query.parse(
+    const { q, search, tag, tags, excludeTags: excludeTagsRaw, thumbState, textState, mimeType, sort, limit, cursor, excludeUnpacked, missing } = Query.parse(
       rawQuery,
     );
     const hasTagsParam = Object.prototype.hasOwnProperty.call(rawQuery, "tags");
@@ -265,6 +268,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       textState,
       mimeTypePrefix: mimeType,
       excludeUnpacked,
+      missing,
       sort,
       limit,
       cursor,
@@ -387,8 +391,12 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
       thumbState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
       textState: z.enum(["PENDING", "READY", "ERROR", "FAILED", "UNSUPPORTED"]).optional(),
       excludeUnpacked: z.coerce.boolean().optional(),
+      // Must mirror the list route's filters exactly. A filter the list honours
+      // but this schema drops would silently widen the delete from "everything
+      // on screen" to "everything", which is the worst possible failure here.
+      missing: z.literal("only").optional(),
     });
-    const { q, tags, excludeTags: excludeTagsRaw, thumbState, textState, excludeUnpacked } = Query.parse(req.query as Record<string, unknown>);
+    const { q, tags, excludeTags: excludeTagsRaw, thumbState, textState, excludeUnpacked, missing } = Query.parse(req.query as Record<string, unknown>);
 
     const tagFilters = typeof tags === "string" ? tags.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
     const excludeTagFilters = excludeTagsRaw ? excludeTagsRaw.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
@@ -401,6 +409,7 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
         thumbState,
         textState,
         excludeUnpacked,
+        missing,
       },
     });
     req.log.info({ userId, jobId }, "bulk delete enqueued (filter)");
@@ -629,7 +638,46 @@ export const mediaRoutes: FastifyPluginAsync = async app => {
     return { status };
   });
 
-  // POST /media/index/stop - stop the index walker without touching the worker
+  // POST /media/index/reconcile - compare the allowed folders against the
+  // library and fix the differences. Unlike POST /media/index (which only ever
+  // adds files it has not seen), this also notices deletions, moves and edits
+  // that happened while Vault was not running. Body `path` narrows it to one
+  // root; omitted reconciles them all.
+  app.post("/index/reconcile", { preHandler: [requireAuth] }, async (req, reply) => {
+    const userId = req.userId!;
+    const body = z.object({ path: z.string().min(1).optional() }).parse(req.body ?? {});
+
+    const prefs = await app.preferencesService.getPreferences(userId).catch(() => null);
+    const result = await reconcileService.startReconcile(userId, {
+      ...(body.path !== undefined ? { path: body.path } : {}),
+      allowedRoots: prefs?.indexAllowedRoots ?? [],
+      ignoreHidden: prefs?.ignoreHiddenFiles ?? true,
+      blacklistExtensions: prefs?.indexBlacklistExtensions ?? [],
+      excludeFolders: prefs?.indexExcludeFolders ?? [],
+      skipNonContent: prefs?.indexSkipNonContent ?? true,
+    });
+
+    if (!result.ok) {
+      switch (result.reason) {
+        case "disabled":
+          return reply.badRequest("In-place indexing is disabled — add at least one allowed folder in Settings.");
+        case "not_allowed":
+          return reply.forbidden("That folder is not within an allowed indexing root.");
+      }
+    }
+
+    req.log.info({ userId, path: body.path ?? null, jobIds: result.jobIds }, "reconcile requested");
+    return reply.send({ jobIds: result.jobIds });
+  });
+
+  // GET /media/index/reconcile/state - the running sweep (so the UI can show
+  // live progress and re-attach after a reload) plus the last finished one.
+  app.get("/index/reconcile/state", { preHandler: [requireAuth] }, async req => {
+    return reconcileService.getState(req.userId!);
+  });
+
+  // POST /media/index/stop - stop the index walker (and a running reconcile
+  // sweep, which reads the same abort epoch) without touching the worker
   // queues. Already-discovered files keep processing (thumbnails, OCR); only
   // the directory walk stops adding new files.
   app.post("/index/stop", { preHandler: [requireAuth] }, async (req, reply) => {

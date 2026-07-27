@@ -15,6 +15,47 @@ export type MediaListFilters = {
   take: number;
   cursor?: string | null;
   excludeUnpacked?: boolean;
+  /** "only" restricts to items whose source file has vanished — the library's
+   *  "Missing files" view. Unset shows everything, missing items included, so
+   *  they stay visible (and flagged) rather than silently disappearing. */
+  missing?: "only";
+};
+
+/** A tombstoned row offered to `matchIdentity` as a possible move source. Adds
+ *  `titleIsUserEdited` to the matcher's shape so the caller can decide whether a
+ *  rename may overwrite the title. */
+export type MoveCandidateRow = {
+  id: string;
+  basename: string;
+  sizeBytes: number;
+  mtimeMs: number | null;
+  contentHash: string | null;
+  titleIsUserEdited: boolean;
+};
+
+/** A freshly-indexed live row, offered as a move *target* when the watcher sees
+ *  the move's `add` before its `unlink`. */
+export type RecentlyIndexedRow = {
+  id: string;
+  sourcePath: string;
+  filename: string;
+  basename: string;
+  sizeBytes: number;
+  mtimeMs: number | null;
+  contentHash: string | null;
+};
+
+/** One in-place row as the reconcile sweep sees it: enough to stat the source
+ *  and decide missing / changed / unchanged without a second query. */
+export type ReconcileEntry = {
+  id: string;
+  sourcePath: string;
+  mimeType: string;
+  storageKey: string;
+  sizeBytes: number;
+  mtimeMs: number | null;
+  fileDate: Date | null;
+  missingSince: Date | null;
 };
 
 /** The columns the delete worker needs to remove a media item (DB row + storage). */
@@ -138,7 +179,7 @@ export class MediaRepository {
   }
 
   private async _listMediaOrm (filters: MediaListFilters) {
-    const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor, excludeUnpacked } = filters;
+    const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, orderBy, take, cursor, excludeUnpacked, missing } = filters;
     return this.prisma.media.findMany({
       where: {
         userId,
@@ -157,6 +198,7 @@ export class MediaRepository {
         ...textStateWhereOrm(textState),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
         ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
+        ...(missing === "only" ? { missingSince: { not: null } } : {}),
       },
       orderBy,
       take,
@@ -164,7 +206,7 @@ export class MediaRepository {
       select: {
         id: true, title: true, filename: true,
         thumbState: true, textState: true, createdAt: true, fileDate: true,
-        tags: true, mimeType: true, sizeBytes: true, starred: true,
+        tags: true, mimeType: true, sizeBytes: true, starred: true, missingSince: true,
       },
     });
   }
@@ -172,9 +214,9 @@ export class MediaRepository {
   /** Build the shared WHERE conditions for all raw media queries. Returns conditions, params,
    *  and the next available param index so callers can continue appending. */
   private _buildMediaFilterConditions (
-    filters: Pick<MediaListFilters, "userId" | "queryText" | "tags" | "excludeTags" | "thumbState" | "textState" | "mimeTypePrefix" | "excludeUnpacked">
+    filters: Pick<MediaListFilters, "userId" | "queryText" | "tags" | "excludeTags" | "thumbState" | "textState" | "mimeTypePrefix" | "excludeUnpacked" | "missing">
   ): { conditions: string[]; params: unknown[]; p: number } {
-    const { userId, queryText, tags, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    const { userId, queryText, tags, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked, missing } = filters;
     const conditions: string[] = [`m."userId" = $1`];
     const params: unknown[] = [userId];
     let p = 2;
@@ -210,6 +252,7 @@ export class MediaRepository {
     }
     if (mimeTypePrefix) { conditions.push(`m."mimeType" LIKE $${p++}`); params.push(`${mimeTypePrefix}%`); }
     if (excludeUnpacked) conditions.push(`m."isExtractedFromArchive" = false`);
+    if (missing === "only") conditions.push(`m."missingSince" IS NOT NULL`);
 
     return { conditions, params, p };
   }
@@ -292,7 +335,7 @@ export class MediaRepository {
         : `m.${col} ${dir}, m.id ${dir}`;
 
     const sql = `
-      SELECT m.id, m.title, m.filename, m."thumbState", m."textState", m."createdAt", m."fileDate", m.tags, m."mimeType", m."sizeBytes", m.starred
+      SELECT m.id, m.title, m.filename, m."thumbState", m."textState", m."createdAt", m."fileDate", m.tags, m."mimeType", m."sizeBytes", m.starred, m."missingSince"
       FROM "Media" m
       WHERE ${conditions.join(" AND ")}
       ORDER BY ${orderSql}
@@ -307,7 +350,7 @@ export class MediaRepository {
   }
 
   private async _countMediaOrm (filters: MediaListFilters): Promise<number> {
-    const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked, missing } = filters;
     return this.prisma.media.count({
       where: {
         userId,
@@ -326,6 +369,7 @@ export class MediaRepository {
         ...textStateWhereOrm(textState),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
         ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
+        ...(missing === "only" ? { missingSince: { not: null } } : {}),
       },
     });
   }
@@ -345,7 +389,7 @@ export class MediaRepository {
   }
 
   private async _listAllMediaIdsOrm (filters: Omit<MediaListFilters, "orderBy" | "take" | "cursor">): Promise<string[]> {
-    const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    const { userId, queryText, excludeTags, thumbState, textState, mimeTypePrefix, excludeUnpacked, missing } = filters;
     const rows = await this.prisma.media.findMany({
       where: {
         userId,
@@ -364,6 +408,7 @@ export class MediaRepository {
         ...textStateWhereOrm(textState),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
         ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
+        ...(missing === "only" ? { missingSince: { not: null } } : {}),
       },
       select: { id: true },
     });
@@ -402,7 +447,7 @@ export class MediaRepository {
       const sql = `SELECT m.id, m."storageKey", m."thumbnailKey", m."sourcePath" FROM "Media" m WHERE ${conditions.join(" AND ")} LIMIT $${params.length + 1}`;
       return this.prisma.$queryRawUnsafe<MediaDeletionRow[]>(sql, ...params, limit);
     }
-    const { userId, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    const { userId, thumbState, textState, mimeTypePrefix, excludeUnpacked, missing } = filters;
     return this.prisma.media.findMany({
       where: {
         userId,
@@ -410,6 +455,7 @@ export class MediaRepository {
         ...textStateWhereOrm(textState),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
         ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
+        ...(missing === "only" ? { missingSince: { not: null } } : {}),
       },
       select: MediaRepository.DELETION_SELECT,
       take: limit,
@@ -428,7 +474,7 @@ export class MediaRepository {
       const rows = await this.prisma.$queryRawUnsafe<Array<{ count: number }>>(sql, ...params);
       return rows[0]?.count ?? 0;
     }
-    const { userId, thumbState, textState, mimeTypePrefix, excludeUnpacked } = filters;
+    const { userId, thumbState, textState, mimeTypePrefix, excludeUnpacked, missing } = filters;
     return this.prisma.media.count({
       where: {
         userId,
@@ -436,6 +482,7 @@ export class MediaRepository {
         ...textStateWhereOrm(textState),
         ...(mimeTypePrefix ? { mimeType: { startsWith: mimeTypePrefix } } : {}),
         ...(excludeUnpacked ? { isExtractedFromArchive: false } : {}),
+        ...(missing === "only" ? { missingSince: { not: null } } : {}),
       },
     });
   }
@@ -620,7 +667,10 @@ export class MediaRepository {
 
   async updateMetadata (id: string, data: { title?: string; tags?: string[] }, userId?: string) {
     const update = {
-      ...(data.title !== undefined ? { title: data.title } : {}),
+      // A title set here came from the user, so latch titleIsUserEdited: if the
+      // file is later moved or renamed on disk, the rematch must keep this title
+      // instead of re-deriving one from the new filename.
+      ...(data.title !== undefined ? { title: data.title, titleIsUserEdited: true } : {}),
       ...(data.tags !== undefined ? { tags: data.tags } : {}),
     };
     const select = {
@@ -1010,6 +1060,36 @@ export class MediaRepository {
     return row?.id ?? null;
   }
 
+  /**
+   * The full identity of the in-place item at this exact path — what the
+   * watcher's `unlink` handler needs to look for the same file having already
+   * turned up somewhere else (the reverse event ordering), rather than just the
+   * id it needs to tombstone.
+   */
+  async findIdentityBySourcePath (
+    userId: string,
+    sourcePath: string,
+  ): Promise<(MoveCandidateRow & { sourcePath: string; missingSince: Date | null }) | null> {
+    const row = await this.prisma.media.findFirst({
+      where: { userId, sourcePath },
+      select: {
+        id: true, sourcePath: true, sizeBytes: true, missingSince: true,
+        sourceMtimeMs: true, contentHash: true, titleIsUserEdited: true,
+      },
+    });
+    if (!row?.sourcePath) return null;
+    return {
+      id: row.id,
+      sourcePath: row.sourcePath,
+      basename: path.basename(row.sourcePath),
+      sizeBytes: row.sizeBytes,
+      mtimeMs: row.sourceMtimeMs,
+      contentHash: row.contentHash,
+      titleIsUserEdited: row.titleIsUserEdited,
+      missingSince: row.missingSince,
+    };
+  }
+
   /** Media ids for in-place items whose source path sits under `prefix` (a
    *  removed directory). The trailing separator prevents `/a/b` from matching
    *  a sibling `/a/bc`. Uses the OS separator so it matches the backslash paths
@@ -1024,15 +1104,217 @@ export class MediaRepository {
     return rows.map(r => r.id);
   }
 
-  /** All in-place source paths for a user (with their id), for reconciliation
-   *  pruning of rows whose original no longer exists on disk. */
-  async listSourcePaths (userId: string): Promise<Array<{ id: string; sourcePath: string }>> {
-    const rows = await this.prisma.media.findMany({
-      where: { userId, sourcePath: { not: null } },
-      select: { id: true, sourcePath: true },
+  /**
+   * Tombstone in-place rows whose source stopped existing: keep every column
+   * (tags, title, starred, bundles, reminders, text) and only stamp
+   * `missingSince`, so a subsequent `add` from the other half of a move can
+   * rematch and reclaim the row. Already-missing rows keep their original
+   * timestamp — re-stamping would restart the grace period on every reconcile.
+   * Returns how many were newly marked.
+   */
+  async markMissing (userId: string, ids: string[], at: Date = new Date()): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await this.prisma.media.updateMany({
+      where: { userId, id: { in: ids }, missingSince: null },
+      data: { missingSince: at },
     });
-    return rows
-      .filter((r): r is { id: string; sourcePath: string } => r.sourcePath !== null);
+    return result.count;
+  }
+
+  /**
+   * Tombstoned rows still inside the move-detection window, as identity
+   * candidates for {@link matchIdentity}. `basename` is derived here so the
+   * matcher stays free of path handling.
+   */
+  async findMoveCandidates (userId: string, since: Date): Promise<MoveCandidateRow[]> {
+    const rows = await this.prisma.media.findMany({
+      where: { userId, missingSince: { gte: since }, sourcePath: { not: null } },
+      select: {
+        id: true, sourcePath: true, sizeBytes: true,
+        sourceMtimeMs: true, contentHash: true, titleIsUserEdited: true,
+      },
+    });
+    return rows.map(r => ({
+      id: r.id,
+      basename: path.basename(r.sourcePath!),
+      sizeBytes: r.sizeBytes,
+      mtimeMs: r.sourceMtimeMs,
+      contentHash: r.contentHash,
+      titleIsUserEdited: r.titleIsUserEdited,
+    }));
+  }
+
+  /**
+   * Live (non-missing) rows indexed within the window, as candidates for the
+   * reverse event ordering — some platforms emit the move's `add` before its
+   * `unlink`, so by the time we see the unlink a bare new row already exists
+   * and the old row's metadata has to be transplanted onto its path.
+   */
+  async findRecentlyIndexed (userId: string, since: Date): Promise<RecentlyIndexedRow[]> {
+    const rows = await this.prisma.media.findMany({
+      where: { userId, createdAt: { gte: since }, missingSince: null, sourcePath: { not: null } },
+      select: {
+        id: true, sourcePath: true, filename: true, sizeBytes: true,
+        sourceMtimeMs: true, contentHash: true,
+      },
+    });
+    return rows.map(r => ({
+      id: r.id,
+      sourcePath: r.sourcePath!,
+      filename: r.filename,
+      basename: path.basename(r.sourcePath!),
+      sizeBytes: r.sizeBytes,
+      mtimeMs: r.sourceMtimeMs,
+      contentHash: r.contentHash,
+    }));
+  }
+
+  /**
+   * Repoint a tombstoned row at the path its file turned up on and revive it.
+   * Everything the user owns is untouched by design — this is an UPDATE, not a
+   * delete-and-insert, so the id survives and existing `/media/[id]` links keep
+   * working. `title` is only passed when the old one was auto-derived.
+   */
+  async applyMove (
+    userId: string,
+    id: string,
+    data: { sourcePath: string; filename: string; sizeBytes: number; mtimeMs: number | null; title?: string },
+  ): Promise<void> {
+    await this.prisma.media.updateMany({
+      where: { userId, id },
+      data: {
+        sourcePath: data.sourcePath,
+        filename: data.filename,
+        sizeBytes: data.sizeBytes,
+        ...(data.mtimeMs !== null ? { sourceMtimeMs: data.mtimeMs } : {}),
+        ...(data.title !== undefined ? { title: data.title } : {}),
+        missingSince: null,
+      },
+    });
+  }
+
+  /**
+   * Every in-place row whose source sits under `root` — the library's side of
+   * the reconcile diff. The root itself is included (a root is a directory, so
+   * appending the separator is what the prefix means), and the trailing
+   * separator stops `/a/b` from also matching a sibling `/a/bc`. Uses the OS
+   * separator so it matches the backslash paths stored on Windows.
+   */
+  async listReconcileEntries (userId: string, root: string): Promise<ReconcileEntry[]> {
+    const withSep = root.endsWith(path.sep) ? root : root + path.sep;
+    const rows = await this.prisma.media.findMany({
+      where: { userId, sourcePath: { startsWith: withSep } },
+      select: {
+        id: true, sourcePath: true, mimeType: true, storageKey: true,
+        sizeBytes: true, sourceMtimeMs: true, fileDate: true, missingSince: true,
+      },
+    });
+    return rows.map(r => ({
+      id: r.id,
+      sourcePath: r.sourcePath!,
+      mimeType: r.mimeType,
+      storageKey: r.storageKey,
+      sizeBytes: r.sizeBytes,
+      mtimeMs: r.sourceMtimeMs,
+      fileDate: r.fileDate,
+      missingSince: r.missingSince,
+    }));
+  }
+
+  /**
+   * The bytes at `sourcePath` changed under us. Record the new size/mtime and
+   * invalidate every artifact derived from the old bytes, so the workers rebuild
+   * them: `contentHash` above all, since a stale hash makes dedup claim two
+   * different files are the same.
+   *
+   * `resetThumb`/`resetText` are passed rather than assumed — resetting a state
+   * to PENDING for work that will never be enqueued (an unrenderable type, a
+   * file with no text layer) strands the row at PENDING forever and trips stall
+   * detection. The caller enqueues and resets from the same plan.
+   */
+  async applySourceChanged (
+    userId: string,
+    id: string,
+    data: {
+      sizeBytes: number;
+      mtimeMs: number | null;
+      resetThumb: boolean;
+      resetText: boolean;
+      /** Only set when the old fileDate was still the untouched mtime — never
+       *  clobbers an EXIF/PDF date the thumb worker extracted. */
+      fileDate?: Date;
+    },
+  ): Promise<void> {
+    await this.prisma.media.updateMany({
+      where: { userId, id },
+      data: {
+        sizeBytes: data.sizeBytes,
+        ...(data.mtimeMs !== null ? { sourceMtimeMs: data.mtimeMs } : {}),
+        ...(data.fileDate !== undefined ? { fileDate: data.fileDate } : {}),
+        missingSince: null,
+        contentHash: null,
+        ...(data.resetThumb ? { thumbnailKey: null, thumbState: "PENDING" as const, thumbError: null } : {}),
+        ...(data.resetText ? { textState: "PENDING" as const } : {}),
+      },
+    });
+  }
+
+  /**
+   * Fill in source metadata a row never had, without touching anything derived
+   * from its bytes.
+   *
+   * Deliberately not {@link applySourceChanged}: nothing changed on disk here.
+   * The file matched what we had recorded — it is the *record* that was
+   * incomplete, because the row predates the `sourceMtimeMs` column or the
+   * `fileDate` one. Routing this through `applySourceChanged` would null
+   * `contentHash` (correct only when the bytes really changed, where a re-hash
+   * always follows) and silently cost the user their duplicate detection.
+   *
+   * `fileDate` is guarded on `null` in the WHERE, mirroring `backfillFileDates`,
+   * so a date the thumb worker upgraded from EXIF/PDF metadata is never
+   * overwritten by a coarser mtime — even if the caller passes one.
+   */
+  async healSourceMetadata (
+    userId: string,
+    id: string,
+    data: { mtimeMs?: number; fileDate?: Date },
+  ): Promise<void> {
+    if (data.mtimeMs === undefined && data.fileDate === undefined) return;
+    if (data.mtimeMs !== undefined) {
+      await this.prisma.media.updateMany({
+        where: { userId, id },
+        data: { sourceMtimeMs: data.mtimeMs },
+      });
+    }
+    if (data.fileDate !== undefined) {
+      await this.prisma.media.updateMany({
+        where: { userId, id, fileDate: null },
+        data: { fileDate: data.fileDate },
+      });
+    }
+  }
+
+  /** Clear the tombstone on a row whose file came back at the same path. */
+  async clearMissing (userId: string, ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.prisma.media.updateMany({
+      where: { userId, id: { in: ids } },
+      data: { missingSince: null },
+    });
+  }
+
+  /**
+   * Rows tombstoned before `cutoff` — the sweeper's input. These have outlived
+   * the grace period without their file reappearing, so they are genuine
+   * deletions rather than moves and can finally be removed for real.
+   */
+  async findMissingBefore (userId: string, cutoff: Date, limit: number): Promise<string[]> {
+    const rows = await this.prisma.media.findMany({
+      where: { userId, missingSince: { not: null, lt: cutoff } },
+      select: { id: true },
+      take: limit,
+    });
+    return rows.map(r => r.id);
   }
 
   async markTextUnsupported (mediaIds: string[]): Promise<void> {

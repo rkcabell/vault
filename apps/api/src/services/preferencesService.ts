@@ -11,6 +11,10 @@ export interface IndexConfig {
   blacklistExtensions: string[];
   ignoreHidden: boolean;
   skipNonContent: boolean;
+  /** Seconds a vanished file stays rematchable as a move. See Preferences. */
+  moveDetectionWindowSeconds: number;
+  /** Days a missing item is kept before the sweeper deletes it for real. */
+  missingFileGraceDays: number;
 }
 
 interface CacheEntry {
@@ -51,6 +55,8 @@ export class PreferencesService {
         blacklistExtensions: prefs.indexBlacklistExtensions,
         ignoreHidden: prefs.ignoreHiddenFiles,
         skipNonContent: prefs.indexSkipNonContent,
+        moveDetectionWindowSeconds: prefs.moveDetectionWindowSeconds,
+        missingFileGraceDays: prefs.missingFileGraceDays,
       });
     }
     return configs;

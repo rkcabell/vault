@@ -26,6 +26,8 @@ type ListMediaInput = {
   textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
   mimeTypePrefix?: string;
   excludeUnpacked?: boolean;
+  /** "only" narrows to items whose source file has vanished. */
+  missing?: "only";
   sort?: typeof SORT_OPTIONS[number];
   limit?: number;
   cursor?: string | null;
@@ -99,6 +101,7 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
       textState: query.textState,
       mimeTypePrefix: query.mimeTypePrefix,
       excludeUnpacked: query.excludeUnpacked,
+      missing: query.missing,
       orderBy,
       take: take + 1,
       cursor: query.cursor ?? null,

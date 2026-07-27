@@ -21,6 +21,10 @@ export const MediaListItemSchema = z.object({
   tags: z.array(z.string()),
   mimeType: z.string(),
   sizeBytes: z.number().nullable().optional(),
+  // ISO date the item's source file was found to have vanished, or null while
+  // it is present. Set rather than deleted so a move — which the OS reports as
+  // an unrelated delete + create — cannot destroy the item's metadata.
+  missingSince: z.string().nullable().optional(),
 });
 export type MediaListItem = z.infer<typeof MediaListItemSchema>;
 
