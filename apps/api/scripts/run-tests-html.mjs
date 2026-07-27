@@ -2,13 +2,15 @@
 // Runs each test file individually with TAP reporter, collects results,
 // and generates a self-contained HTML report grouped by file (suite).
 //
-// Usage: node scripts/run-tests-html.mjs <dir> [dir2 ...]
+// Usage: node scripts/run-tests-html.mjs <dir|file> [more ...]
 // Output: test-results/test-results.html in the repo root
 
-import { readdirSync, statSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+
+import { collectTestsOrExit } from "../../../scripts/lib/findTests.mjs";
 
 // Mark the run as a test environment so app code can disable dev-only behavior
 // (e.g. the pino file transport in logger.ts, whose worker thread can't resolve
@@ -20,24 +22,6 @@ process.env.NODE_ENV ??= "test";
 // Resolve tsx from this script's own node_modules so it works regardless of cwd.
 // import.meta.resolve returns a file:// URL which --import accepts on all platforms.
 const TSX_ESM = import.meta.resolve("tsx/esm");
-
-// ── File discovery ────────────────────────────────────────────────────────────
-
-function findTests (dir) {
-  const results = [];
-  let entries;
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return results;
-  }
-  for (const entry of entries) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) results.push(...findTests(full));
-    else if (entry.endsWith(".test.ts")) results.push(full);
-  }
-  return results;
-}
 
 // ── Workspace root (nearest package.json) ────────────────────────────────────
 // tsx resolves tsconfig.json based on cwd, so each file must run in its own
@@ -513,13 +497,7 @@ sort('status');
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-const dirs = process.argv.slice(2);
-const files = dirs.flatMap(findTests);
-
-if (!files.length) {
-  console.log("No test files found.");
-  process.exit(0);
-}
+const files = collectTestsOrExit(process.argv.slice(2), "scripts/run-tests-html.mjs");
 
 const root = resolve(".");
 console.log(`Generating report… (${files.length} files)`);

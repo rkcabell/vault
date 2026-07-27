@@ -23,7 +23,6 @@
     "test": "c8 --all --src src --exclude \"src/tests/**\" --exclude \"src/**/*.test.ts\" --reporter=text-summary --reporter=lcov --reporter=html --reporter=json-summary --report-dir coverage node scripts/run-tests.mjs src/tests",
     "test:api": "node scripts/run-tests.mjs src/tests/api",
     "test:worker": "node scripts/run-tests.mjs src/tests/api/worker",
-    "test:web": "node scripts/run-tests.mjs src/tests/web",
     "test:html": "node scripts/run-tests-html.mjs src/tests",
     "test:html:api": "node scripts/run-tests-html.mjs src/tests/api",
     "log": "tsx scripts/logtail.ts",
