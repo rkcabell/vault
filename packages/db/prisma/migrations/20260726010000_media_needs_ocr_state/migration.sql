@@ -1,0 +1,21 @@
+-- Distinguish "this is a scan awaiting Tesseract" from "extraction hasn't run yet".
+--
+-- Native pdf.js extraction already runs first and sets needsOcr when a PDF has
+-- no text layer. That case used to be written back as PENDING, which conflated
+-- two very different things and cost us twice:
+--
+--   1. Stall detection marks textState PENDING → ERROR after 15 minutes. On a
+--      large first index the OCR backlog is measured in hours, so scans waiting
+--      their turn were being flagged as failures having never been attempted.
+--   2. The library could not offer "scanned, text not extracted yet" as a
+--      filter, because those rows were indistinguishable from ones simply not
+--      reached yet — so the expensive work could not be surfaced for the user
+--      to opt into.
+--
+-- NEEDS_OCR is not a terminal state: it is picked up by a background sweep
+-- (ocrMode = background) or by the user opening the document / pressing
+-- "Extract text" (ocrMode = onDemand, the default).
+--
+-- Safe inside Prisma's transaction on PostgreSQL 12+ because the new label is
+-- only added here, never read or written in this same migration.
+ALTER TYPE "MediaWorkerState" ADD VALUE 'NEEDS_OCR';

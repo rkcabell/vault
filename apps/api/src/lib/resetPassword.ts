@@ -70,13 +70,10 @@ export async function run(args: ParsedArgs, deps: ResetDeps): Promise<number> {
   const hash = await deps.hasher.hash(password);
   await deps.prisma.user.update({
     where: { id: user.id },
-    // resetToken/resetTokenExpiry are nulled defensively even though the
-    // self-service reset flow is gone. Bumping tokenVersion evicts any sessions
-    // that predate this reset (rejected at /auth/refresh).
+    // Bumping tokenVersion evicts any sessions that predate this reset
+    // (rejected at /auth/refresh).
     data: {
       passwordHash: hash,
-      resetToken: null,
-      resetTokenExpiry: null,
       tokenVersion: { increment: 1 },
     },
   });

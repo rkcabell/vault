@@ -19,8 +19,6 @@ model User {
   location     String?
   avatarUrl    String?
   preferences       Json?
-  resetToken        String?   @unique
-  resetTokenExpiry  DateTime?
   // Bumped whenever the password is reset (admin CLI). Embedded in issued JWTs
   // as `tv`; the /auth/refresh path rejects tokens whose tv no longer matches,
   // evicting sessions that predate a password change.
@@ -89,7 +87,30 @@ model Media {
   thumbError      String?
   textState       MediaWorkerState @default(PENDING)
   sourceState     MediaWorkerState @default(PENDING)
-  storageKey      String
+  // When this row was last handed to thumb_queue / text_queue. NULL means it is
+  // still sitting in the database backlog, waiting for the feeder — which is the
+  // normal state for most of a large library and is NOT a problem.
+  //
+  // Two things depend on the distinction. The feeder claims only NULL rows, so
+  // the stamp is what stops it re-dispatching work already in flight. And stall
+  // detection keys on these rather than on `updatedAt`: a row that was never
+  // dispatched cannot have stalled, and marking it FAILED after 15 minutes —
+  // which is what an `updatedAt` clock would do to a 190k-file backlog — would
+  // destroy the library. Anything that puts the state back to PENDING for the
+  // feeder must clear the matching stamp, or the row is never picked up again.
+  thumbQueuedAt   DateTime?
+  textQueuedAt    DateTime?
+  // Whether this row needs a hash *job*. UNSUPPORTED means "no job needed" —
+  // for renderable types the thumb worker hashes the buffer it already
+  // loaded, so the hash arrives without one. contentHash can therefore be
+  // set while hashState is UNSUPPORTED; this column tracks the job, not the
+  // hash. Same claim/stamp/stall rules as thumbQueuedAt above.
+  hashState       MediaWorkerState @default(PENDING)
+  hashQueuedAt    DateTime?
+  // Key into Vault-managed storage for the original (normal upload). Null =
+  // the file is indexed in place at `sourcePath` instead — exactly one of the
+  // two is ever set, enforced by the media_source_xor check constraint.
+  storageKey      String?
   // Absolute path to the original file when it is indexed in place on a mounted
   // drive/NAS (see INDEX_ALLOWED_ROOTS). Null = the file lives in Vault-managed
   // storage at `storageKey` (normal upload). For in-place rows Vault reads the
@@ -147,6 +168,13 @@ model Media {
   @@index([userId, title(sort: Asc)])
   @@index([userId, sizeBytes(sort: Desc)])
   @@index([userId, mimeType(sort: Asc)])
+  // The feeder's claim scans, and stall detection's sweep. Both filter on the
+  // state first and the stamp second, so the composite order matters — without
+  // these the feeder is a sequential scan of the whole table every tick, which
+  // is the "feeder becomes its own bottleneck" failure mode.
+  @@index([thumbState, thumbQueuedAt])
+  @@index([textState, textQueuedAt])
+  @@index([hashState, hashQueuedAt])
 }
 
 model Bundle {
@@ -201,6 +229,7 @@ enum MediaWorkerState {
   FAILED
   ERROR
   UNSUPPORTED
+  NEEDS_OCR
 }
 
 enum TagOrigin {

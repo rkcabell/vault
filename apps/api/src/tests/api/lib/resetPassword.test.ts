@@ -66,15 +66,14 @@ test("run: weak password is rejected before any write", async () => {
   assert.equal(updates.length, 0);
 });
 
-test("run: valid password hashes, nulls reset fields, returns 0", async () => {
+test("run: valid password hashes and bumps tokenVersion, returns 0", async () => {
   const { deps, updates } = makeDeps({ id: "u1", email: "a@b.com" });
   const code = await run({ email: "a@b.com", password: "Tr0ubadour-9x" }, deps);
   assert.equal(code, 0);
   assert.equal(updates.length, 1);
   assert.equal(updates[0].where.id, "u1");
   assert.equal(updates[0].data.passwordHash, "hashed:Tr0ubadour-9x");
-  assert.equal(updates[0].data.resetToken, null);
-  assert.equal(updates[0].data.resetTokenExpiry, null);
+  assert.deepEqual(updates[0].data.tokenVersion, { increment: 1 });
 });
 
 test("run: no password without a TTY returns 2 (must pass --password)", async () => {
