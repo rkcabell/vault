@@ -1,7 +1,6 @@
 /**
- * Summarize a --cpu-prof .cpuprofile: self time by function, and by source
- * file, so "is this main-thread PDF rasterization or something else" is a
- * table instead of a 50MB JSON blob.
+ * Summarizes a V8 `.cpuprofile` as two tables of self time, one by function and
+ * one by source file.
  *
  *   node scripts/bench/analyzeCpuProfile.mjs ./bench-results/thumb-cpuprof-c4.cpuprofile
  */
@@ -16,6 +15,8 @@ const nodes = new Map(profile.nodes.map(n => [n.id, n]));
 const totalMicros = profile.endTime - profile.startTime;
 const totalHits = profile.nodes.reduce((s, n) => s + (n.hitCount ?? 0), 0);
 
+// Returns the final path segment of a profile frame's script URL. A frame with
+// no URL is native code.
 function basename (url) {
   if (!url) return "(native/unknown)";
   const clean = url.split("?")[0];

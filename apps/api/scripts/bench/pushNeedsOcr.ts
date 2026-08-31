@@ -1,8 +1,8 @@
 /**
- * Push a batch of NEEDS_OCR rows onto ocr_queue with forceOcr, for work item
- * 15F's runbook step 3 (peak-RSS-per-concurrency figure). Mirrors what
- * mediaActionsService's "Extract all" does, without the HTTP route or the rest
- * of its dependency graph.
+ * Claims a batch of NEEDS_OCR rows and adds them to `ocr_queue`, so that a
+ * measured run has tier-2 work to do. Claims and enqueues the same way
+ * `mediaActionsService` does for "Extract all", without the HTTP route or its
+ * dependency graph.
  *
  *   tsx scripts/bench/pushNeedsOcr.ts --user-id <id> --limit 200
  */

@@ -1,12 +1,8 @@
 /**
- * CPU profile for work item 15F's runbook step 1: confirm that
- * `renderPdfThumbnail.ts`'s `disableWorker: true` (pdf.js running on Node's main
- * thread) is really what pins the thumb worker at ~160% CPU regardless of
- * THUMB_CONCURRENCY.
- *
- * Same lifecycle as sweep.ts (real feeder, real worker, obliterate-then-drain),
- * but the worker is spawned with --cpu-prof instead of being timed, and the run
- * is a fixed wall-clock window rather than a full drain.
+ * Records a V8 CPU profile of the thumbnail worker while the real feeder drives
+ * it, so that worker CPU can be attributed to individual functions. The run is a
+ * fixed wall-clock window rather than a full drain. The worker must exit on
+ * SIGTERM, because `--cpu-prof` writes the profile only on a clean exit.
  *
  *   tsx scripts/bench/cpuProfileThumb.ts --scope E:/vault-bench/corpus --concurrency 4 --seconds 150
  */
@@ -48,6 +44,8 @@ function parseArgs (argv: string[]): Args {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+// Runs another script from this directory to completion, and throws on a
+// nonzero exit code.
 async function runScript (script: string, args: string[]): Promise<void> {
   const child = spawn(process.execPath, ["--import", "tsx", path.join(HERE, script), ...args], {
     cwd: API_ROOT, stdio: "inherit", env: process.env,
@@ -85,6 +83,8 @@ async function main () {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, THUMB_CONCURRENCY: String(args.concurrency) },
   });
+  // The worker announces readiness only in its log output, so readiness is
+  // detected by matching that line.
   let ready = false;
   const log: string[] = [];
   const onChunk = (b: Buffer) => {
@@ -121,8 +121,8 @@ async function main () {
 
   await feeder.stop();
 
-  // Same pattern as sweep.ts's stopWorker: SIGTERM and wait, SIGKILL only as a
-  // last resort — a SIGKILL here would drop the .cpuprofile entirely.
+  // SIGTERM first, with SIGKILL only as a last resort: a killed worker writes no
+  // .cpuprofile at all. Mirrors stopWorker in sweep.ts.
   child.kill("SIGTERM");
   const deadline = Date.now() + 30_000;
   while (child.exitCode === null && Date.now() < deadline) await sleep(300);

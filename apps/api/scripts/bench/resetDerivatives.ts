@@ -1,13 +1,6 @@
 /**
- * Put a corpus back to "just indexed" so a sweep run can be repeated.
- *
- * Two traps:
- *  - Not every row goes back to PENDING. A .txt has no thumbnail, a .bin no
- *    text. Target state is re-derived from planDerivations, not copied.
- *  - thumbnailKey must be cleared, or processThumb returns early and every run
- *    after the first is a no-op reporting spectacular throughput.
- *
- * Refuses to run unscoped, so it cannot touch a real library.
+ * Returns a corpus to its just-indexed state so that a sweep can be run against
+ * it a second time. Requires `--scope`, so it cannot reset a real library.
  *
  *   tsx scripts/bench/resetDerivatives.ts --scope E:\vault-bench\corpus
  */
@@ -32,8 +25,11 @@ function parseArgs (argv: string[]) {
 }
 
 /**
- * `starts_with`, not Prisma's `startsWith`: the latter compiles to LIKE, whose
- * default escape character is backslash, so a Windows path prefix silently
+ * Returns the id, media type and size of every Media row whose `sourcePath` is
+ * under `scope`.
+ *
+ * Uses `starts_with` rather than Prisma's `startsWith`. The latter compiles to
+ * LIKE, whose default escape character is backslash, so a Windows path prefix
  * matches nothing.
  */
 async function scopedRows (scope: string) {
@@ -56,6 +52,8 @@ async function main () {
   const textPending: string[] = [];
   const textUnsupported: string[] = [];
 
+  // Target state is re-derived rather than set to PENDING for every row: a .txt
+  // file has no thumbnail and a .bin file has no text.
   for (const r of rows) {
     const plan = planDerivations(r.mimeType ?? "", Number(r.sizeBytes ?? 0));
     (plan.thumb ? thumbPending : thumbUnsupported).push(r.id);
@@ -69,7 +67,7 @@ async function main () {
   if (clearHashes) console.log(`  contentHash → NULL (all ${rows.length})`);
   if (dryRun) { console.log("\n--dry-run: nothing written"); return; }
 
-  // Chunked so one reset is a few updateMany calls, not one per row.
+  // Splits ids so that one reset is a few updateMany calls rather than one per row.
   const chunk = <T>(xs: T[], n = 1000) =>
     Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
 
@@ -77,7 +75,8 @@ async function main () {
     for (const ids of chunk(thumbPending)) {
       await prisma.media.updateMany({
         where: { id: { in: ids } },
-        // thumbnailKey: null is the load-bearing part — see the header.
+        // Clearing thumbnailKey is required. processThumb returns early when a
+        // thumbnail already exists, so every run after the first would do no work.
         data: { thumbState: "PENDING", thumbQueuedAt: null, thumbError: null, thumbnailKey: null },
       });
     }
@@ -102,8 +101,9 @@ async function main () {
         data: { textState: "UNSUPPORTED", textQueuedAt: null },
       });
     }
-    // Not needed for correctness (text is upserted), but leaving these makes
-    // later runs an UPDATE rather than an INSERT, biasing the sweep.
+    // Deleting extracted text keeps a later run an INSERT rather than an UPDATE,
+    // which is what the first run measured. Text is upserted, so correctness does
+    // not depend on this.
     for (const ids of chunk(rows.map(r => r.id))) {
       await prisma.document.deleteMany({ where: { mediaId: { in: ids } } });
     }

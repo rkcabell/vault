@@ -1,12 +1,9 @@
 /**
- * Run every raw-SQL derivative claim against live Postgres, always rolled back.
- *
- * $queryRaw is unchecked by TypeScript, so a wrong column or mis-bound parameter
- * only fails at runtime in a worker. Covers the three claims 15D left unverified,
- * the 15C stall-detection re-key, and 15G1's claimHashBatch / DEDUP_STRICT_ORDER
- * gate / hash stall arm.
- *
- * Safe against real data: every check throws a sentinel to force the rollback.
+ * Runs every raw-SQL derivative claim against live Postgres inside a transaction
+ * that always rolls back. TypeScript does not check `$queryRaw`, so a wrong
+ * column name or a mis-bound parameter otherwise fails only at runtime in a
+ * worker. Every check forces its own rollback with a sentinel error, so this is
+ * safe to run against a real library.
  *
  *   tsx scripts/bench/verifyClaims.ts
  */
@@ -16,12 +13,16 @@ import { MediaRepository } from "../../src/repositories/mediaRepository.js";
 import { markStalledJobs } from "../../src/services/stallDetectionService.js";
 import { STALL_THRESHOLD_MINUTES } from "../../src/lib/workerStateMachine.js";
 
-/** Thrown to force the rollback. Never escapes `inRollback`. */
+/**
+ * Signals that a check has finished and its transaction must be rolled back.
+ *
+ * Never escapes `inRollback`.
+ */
 class Rollback extends Error {
   constructor (public value: unknown) { super("rollback"); }
 }
 
-/** Run `fn` in a transaction that is guaranteed to roll back, and return its value. */
+/** Runs `fn` in a transaction that always rolls back, and returns its value. */
 async function inRollback<T> (fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
   try {
     await prisma.$transaction(async tx => { throw new Rollback(await fn(tx)); });
@@ -39,6 +40,8 @@ function record (name: string, ok: boolean, detail: string) {
   console.log(`${ok ? "  ok  " : " FAIL "} ${name.padEnd(34)} ${detail}`);
 }
 
+// Runs one check, recording the detail it returns on success or its error
+// message on failure. Never throws.
 async function check (name: string, fn: () => Promise<string>) {
   try {
     record(name, true, await fn());
@@ -53,7 +56,8 @@ async function main () {
 
   console.log(`verifying raw claims against live Postgres (user ${userId})\n`);
 
-  // Parses, binds LIMIT, and returns the columns the feeder destructures.
+  // Confirms the statement parses, binds LIMIT, and returns the columns the
+  // feeder destructures.
   await check("claimThumbBatch", async () =>
     inRollback(async tx => {
       const repo = new MediaRepository(tx);
@@ -84,9 +88,9 @@ async function main () {
     }),
   );
 
-  // --- claimHashBatch (15G1) -------------------------------------------------
-  // Routes through the same claimDerivativeBatch as thumb/text, widened to a
-  // third column pair — this is what exercises the widening.
+  // --- claimHashBatch --------------------------------------------------------
+  // Routes through the same claimDerivativeBatch as thumb and text, widened to a
+  // third pair of state and stamp columns.
   await check("claimHashBatch", async () =>
     inRollback(async tx => {
       const rows = await new MediaRepository(tx).claimHashBatch(5);
@@ -99,7 +103,8 @@ async function main () {
     }),
   );
 
-  // Unstamped means dispatched twice; stamped-but-not-returned means never.
+  // A claim that returns a row without stamping it dispatches that row twice. A
+  // claim that stamps a row without returning it dispatches the row never.
   await check("claim sets the dispatch stamp (thumb, text, hash)", async () =>
     inRollback(async tx => {
       const seeded = await tx.media.create({
@@ -132,7 +137,7 @@ async function main () {
       if (!after?.thumbQueuedAt) throw new Error("thumbQueuedAt still NULL after claim");
       if (!after?.textQueuedAt) throw new Error("textQueuedAt still NULL after claim");
       if (!after?.hashQueuedAt) throw new Error("hashQueuedAt still NULL after claim");
-      // Re-claiming must not return it: that is the double-dispatch bug.
+      // A second claim must not return the row, which is what the stamp prevents.
       const again = await repo.claimThumbBatch(1);
       const hashAgain = await repo.claimHashBatch(1);
       if (again.some(r => r.id === seeded.id)) throw new Error("row claimable twice (thumb)");
@@ -141,9 +146,10 @@ async function main () {
     }),
   );
 
-  // DEDUP_STRICT_ORDER's whole mechanism: thumb/text must wait for hashState
-  // to leave PENDING, but a FAILED hash still unblocks them (loses dedup,
-  // doesn't strand the item). Toggled only for this check.
+  // Under DEDUP_STRICT_ORDER a thumb or text claim waits for hashState to leave
+  // PENDING. A FAILED hash still releases the claim, which gives up duplicate
+  // detection rather than leaving the row unprocessed. The flag is set only for
+  // the duration of this check.
   await check("DEDUP_STRICT_ORDER gates thumb/text on hashState <> PENDING", async () =>
     inRollback(async tx => {
       const prevFlag = process.env.DEDUP_STRICT_ORDER;
@@ -177,8 +183,8 @@ async function main () {
     }),
   );
 
-  // Without these, a job burns its retry budget on a file not there yet
-  // (upload mid-PUT) or gone (tombstoned move).
+  // Without these guards, a job spends its retry attempts on a file that has not
+  // finished being written, or on one tombstoned after a move.
   await check("claim skips non-READY / missing rows", async () =>
     inRollback(async tx => {
       const base = {
@@ -213,8 +219,9 @@ async function main () {
     }),
   );
 
-  // Flips NEEDS_OCR -> PENDING, which is what the feeder claims. Without an
-  // in-statement stamp the next feeder tick silently undoes "Extract all".
+  // The claim moves NEEDS_OCR to PENDING, which is the state the feeder claims.
+  // Without a stamp set in the same statement, the next feeder tick would undo
+  // "Extract all".
   await check("claimNeedsOcrBatch stamps in-statement", async () =>
     inRollback(async tx => {
       const seeded = await tx.media.create({
@@ -240,7 +247,7 @@ async function main () {
       });
       if (after?.textState !== "PENDING") throw new Error(`textState is ${after?.textState}, expected PENDING`);
       if (!after?.textQueuedAt) throw new Error("textQueuedAt NULL — the feeder would re-claim this row");
-      // And prove the feeder now can't take it.
+      // Confirms the feeder can no longer claim the row.
       const stolen = await repo.claimTextBatch(500);
       if (stolen.some(r => r.id === seeded.id)) {
         throw new Error("feeder claimed a forced-OCR row — Extract all would be undone");
@@ -249,7 +256,7 @@ async function main () {
     }),
   );
 
-  // Already validated in 15D; re-run so one command covers the whole set.
+  // Ids belonging to no row must produce an empty result rather than an error.
   await check("claimThumbByIds scopes by user", async () =>
     inRollback(async tx => {
       const rows = await new MediaRepository(tx).claimThumbByIds(userId, [
@@ -261,8 +268,9 @@ async function main () {
     }),
   );
 
-  // A never-dispatched row is waiting, not stalled. Keying on updatedAt instead
-  // of the stamp would mark a whole fresh backlog FAILED.
+  // A row that was never dispatched is waiting rather than stalled. Keying stall
+  // detection on updatedAt instead of the dispatch stamp would mark an entire
+  // fresh backlog FAILED.
   await check("stall detection ignores un-dispatched rows (thumb, text, hash)", async () =>
     inRollback(async tx => {
       const old = new Date(Date.now() - (STALL_THRESHOLD_MINUTES + 60) * 60 * 1000);
@@ -277,7 +285,7 @@ async function main () {
         textState: "PENDING" as const,
         hashState: "PENDING" as const,
       };
-      // Waiting: PENDING, old, never handed to a queue.
+      // Waiting: PENDING and old, but never handed to a queue.
       const waiting = await tx.media.create({
         data: { ...base, storageKey: `bench/stall-wait/${Date.now()}`, createdAt: old, updatedAt: old },
         select: { id: true },
@@ -314,8 +322,7 @@ async function main () {
     }),
   );
 
-  // countDerivativeBacklog's replacement (15I) — was exists-but-unused before;
-  // now backs GET /api/server/backlog, so confirm the groupBy runs.
+  // Confirms the groupBy runs and reports all three derivative kinds.
   await check("countDerivativeProgress", async () => {
     const counts = await new MediaRepository(prisma).countDerivativeProgress(userId);
     return `thumb=${JSON.stringify(counts.thumb)} text=${JSON.stringify(counts.text)} hash=${JSON.stringify(counts.hash)}`;

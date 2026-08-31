@@ -1,11 +1,7 @@
 /**
- * Index a benchmark corpus without the API or Redis.
- *
- * The index worker is a thin wrapper over walkFiles + indexFiles, so driving
- * those directly produces identical rows. Two production behaviours are dropped
- * on purpose: no hashQueue, so hash jobs don't add unmeasured disk reads to
- * every sample; and no tag rules, which affect index cost but not derivative
- * cost.
+ * Indexes a benchmark corpus without the API or Redis. The index worker is a
+ * wrapper over `walkFiles` and `indexFiles`, so calling those directly produces
+ * the same rows.
  *
  *   tsx scripts/bench/indexCorpus.ts --root E:\vault-bench\corpus
  */
@@ -15,7 +11,7 @@ import { walkFiles } from "../../src/worker/indexWalk.js";
 import { indexFiles, type DiscoveredFile } from "../../src/worker/indexCore.js";
 import { MediaRepository } from "../../src/repositories/mediaRepository.js";
 
-const BATCH_SIZE = 200; // same as indexWorker's
+const BATCH_SIZE = 200; // Matches the batch size indexWorker uses.
 
 function parseArgs (argv: string[]) {
   let root = "", userId = "", purge = false;
@@ -30,8 +26,13 @@ function parseArgs (argv: string[]) {
   return { root, userId, purge };
 }
 
-/** `starts_with`, not Prisma's `startsWith`: that compiles to LIKE, where
- *  backslash is the escape character and a Windows prefix matches nothing. */
+/**
+ * Returns the id of every Media row whose `sourcePath` is under `root`.
+ *
+ * Uses `starts_with` rather than Prisma's `startsWith`. The latter compiles to
+ * LIKE, whose escape character is backslash, so a Windows path prefix matches
+ * nothing.
+ */
 function scopedIds (root: string) {
   return prisma.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "Media" WHERE starts_with("sourcePath", ${root})
@@ -52,13 +53,15 @@ async function main () {
     console.log(`purged ${ids.length} existing rows under ${args.root}`);
   }
 
+  // Hash jobs are omitted so they add no disk reads to a timed sample. Tag rules
+  // are omitted because they change index duration but not derivative duration.
   const deps = { mediaRepository: new MediaRepository(prisma), listTagRules: async () => [] };
   const filters = {
     recursive: true,
     ignoreHidden: true,
     blacklist: [] as string[],
     excludeFolders: [] as string[],
-    skipNonContent: false, // the corpus is all content by construction
+    skipNonContent: false, // The corpus contains only content files.
   };
 
   const started = Date.now();

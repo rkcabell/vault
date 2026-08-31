@@ -1,6 +1,6 @@
 /**
- * 15F sampler: joins queue depth, database backlog and process cost (CPU/RSS/
- * disk) into one CSV timeline.
+ * Samples queue depth, database backlog and process resource use into a single
+ * CSV timeline, and writes a summary of the run beside it.
  *
  *   tsx scripts/bench/measure.ts --label thumb-c8 --scope E:\corpus \
  *     --pids 1234 --drain thumb --out ./bench-results
@@ -56,21 +56,26 @@ function parseArgs (argv: string[]): Args {
 
 type ProcSample = {
   cpuPct: number; rssBytes: number;
-  /** ocrmypdf/ffmpeg fan-out. OCR's memory lives here, not in the node worker's
-   *  RSS, and it is what caps OCR_CONCURRENCY. */
+  /** Totals across the ocrmypdf and ffmpeg subprocesses. A tier-2 job's memory
+   *  is counted here rather than in the node worker's RSS, so this is the figure
+   *  that bounds OCR_CONCURRENCY. */
   childCpuPct: number; childRssBytes: number; childCount: number;
   systemCpuPct: number; diskReadBps: number; diskWriteBps: number;
 };
 
-/** Matched by image name, not PID: spawned and reaped per job. */
+/** Subprocess image names counted separately from the worker. Matching is by
+ *  name rather than PID, because each of these starts and exits within a single
+ *  job. */
 const CHILD_PATTERNS = ["tesseract", "gswin64c", "gs", "python", "python3", "ffmpeg", "unpaper", "pngquant", "img2pdf", "qpdf"];
 
 /**
- * One long-lived PowerShell loop emitting NDJSON.
+ * Reads process CPU, memory and disk counters from one long-lived PowerShell
+ * loop that emits a JSON object per interval.
  *
- * Not typeperf: it expands instance wildcards once at start, so tesseract
- * processes spawned later are invisible. Not a spawn per sample either — that
- * would cost more than the jobs being measured.
+ * A single loop is used because typeperf expands instance wildcards once at
+ * startup, which hides any tesseract process started later. Spawning a fresh
+ * sampler per interval would use more processor time than the jobs under
+ * measurement.
  */
 class ProcessCounters {
   private child?: ChildProcess;
@@ -118,7 +123,7 @@ class ProcessCounters {
           diskWriteBps: o.diskWrite ?? 0,
         };
         this.ready = true;
-      } catch { /* partial line; the next one will do */ }
+      } catch { /* Partial line; the next chunk completes it. */ }
     }
   }
 
@@ -128,9 +133,13 @@ class ProcessCounters {
 }
 
 /**
- * CPU% is delta(cumulative processor time) / delta(wall clock), so 400% is four
- * saturated cores. A process first seen this tick reports no CPU (nothing to
- * subtract); its memory still counts, which is the number that caps OCR.
+ * PowerShell source for the sampling loop, which writes one JSON object per
+ * interval to stdout.
+ *
+ * CPU percentage is the change in cumulative processor time divided by the
+ * change in wall-clock time, so 400 means four saturated cores. A process first
+ * seen on a given tick reports no CPU, because there is no earlier value to
+ * subtract. Its memory is counted on that tick regardless.
  */
 const PS_SAMPLER = String.raw`
 $ErrorActionPreference = 'SilentlyContinue'
@@ -163,8 +172,8 @@ while ($true) {
       $cpu += $pct
       $rss += $proc.WorkingSet64
     } elseif ($proc.ProcessName -ne 'node') {
-      # Non-node watch-list images are OCR/ffmpeg fan-out. Other node processes
-      # (API, web dev server) are excluded on purpose.
+      # Watch-list images other than node are OCR and video subprocesses. Other
+      # node processes, such as the API and the web dev server, are excluded.
       $ccpu += $pct
       $crss += $proc.WorkingSet64
       $ccount += 1
@@ -208,13 +217,13 @@ type DbCountsRow = {
 };
 
 /**
- * Scoped by sourcePath prefix so the dev library's unrelated rows don't offset
- * every "done" figure.
+ * Returns per-state row counts for the corpus under `scopePrefix`.
  *
- * `starts_with`, not LIKE: backslash is LIKE's default escape character, so
- * `LIKE 'E:\vault-bench\corpus%'` reads as `E:vault-benchcorpus%` and silently
- * matches nothing. Prisma's `startsWith` filter has the same problem. Any scope
- * filter on a Windows path must avoid LIKE.
+ * Scoping by path prefix keeps unrelated rows in the dev library out of every
+ * "done" figure. The prefix is matched with `starts_with` rather than LIKE,
+ * whose default escape character is backslash: `LIKE 'E:\vault-bench\corpus%'`
+ * reads as `E:vault-benchcorpus%` and matches nothing. Prisma's `startsWith`
+ * filter has the same problem.
  */
 async function readDb (scopePrefix: string): Promise<DbCounts> {
   const [row] = await prisma.$queryRaw<DbCountsRow[]>`
@@ -246,6 +255,8 @@ async function readDb (scopePrefix: string): Promise<DbCounts> {
 
 type QueueCounts = Record<string, { waiting: number; active: number; delayed: number; failed: number }>;
 
+// Returns job counts for each queue. Prioritized jobs are added to the waiting
+// count, because BullMQ reports them as a separate state.
 async function readQueues (queues: Record<string, Queue>): Promise<QueueCounts> {
   const out: QueueCounts = {};
   await Promise.all(Object.entries(queues).map(async ([name, q]) => {
@@ -270,8 +281,13 @@ const CSV_HEADER = [
   "hashed", "unhashed",
 ].join(",");
 
-/** Both halves must be quiet: an empty queue with rows still PENDING only means
- *  the feeder has not ticked yet. */
+/**
+ * True if the queues selected by `drain` are idle and their backlog rows are
+ * gone.
+ *
+ * Both conditions are required. An empty queue with rows still PENDING means
+ * only that the feeder has not run since the queue emptied.
+ */
 function isDrained (drain: Drain, db: DbCounts, q: QueueCounts): boolean {
   const quiet = (name: string) => (q[name]?.waiting ?? 0) === 0 && (q[name]?.active ?? 0) === 0;
   switch (drain) {
@@ -306,7 +322,8 @@ async function main () {
   const t0 = Date.now();
   const first = await readDb(args.scope);
   if (first.total === 0) throw new Error(`no rows under ${args.scope} — nothing to measure`);
-  // Rows already terminal at t0 are not this run's work; rates come from deltas.
+  // Rows already in a terminal state at t0 are not this run's work. Every rate is
+  // computed as a delta from this baseline.
   const baseline = { thumbDone: first.thumbDone, textDone: first.textDone + first.textNeedsOcr, hashed: first.hashed };
 
   const samples: { t: number; cpu: number; rss: number; childCpu: number; childRss: number; childCount: number;
@@ -328,7 +345,7 @@ async function main () {
     const t = tick - t0;
 
     const thumbDone = db.thumbDone - baseline.thumbDone;
-    // NEEDS_OCR is a completed tier-1 job, not an incomplete one.
+    // NEEDS_OCR marks a completed tier-1 job, so it counts toward text throughput.
     const textDone = db.textDone + db.textNeedsOcr - baseline.textDone;
     const hashed = db.hashed - baseline.hashed;
 
@@ -358,7 +375,8 @@ async function main () {
       );
     }
 
-    // Three consecutive: one empty queue between feeder batches is not the end.
+    // Three consecutive drained ticks are required. A single empty queue between
+    // feeder batches is not the end of the run.
     drainedFor = isDrained(args.drain, db, q) ? drainedFor + 1 : 0;
     if (drainedFor >= 3) break;
     if (stopping) break;
@@ -418,7 +436,8 @@ async function main () {
     finalState: last,
     samples: samples.length,
     countersAvailable: counters.ready,
-    // Recorded per run so results are never mistaken for NAS numbers.
+    // Recorded per run so that results are not read as figures from a different
+    // kind of storage.
     storageClass: process.env.BENCH_STORAGE_CLASS ?? "local-ssd (unlabelled)",
     concurrency: {
       TEXT_CONCURRENCY: process.env.TEXT_CONCURRENCY ?? null,

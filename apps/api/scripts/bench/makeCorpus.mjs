@@ -1,18 +1,8 @@
 /**
- * Generate a benchmark corpus for work item 15F.
- *
- * The dev library is 73 rows, all terminal - nothing to time. The *mix* matters
- * more than the size, because each class lands on a different queue:
- *
- *   pdfText     text_queue (pdf.js, ms) + thumb_queue (page render)
- *   pdfScan     no text layer -> parks at NEEDS_OCR; real glyphs inside so a
- *               tier-2 run has something to recognise
- *   photoJpeg   thumb_queue (sharp) + text -> NEEDS_OCR
- *   screenshot  same, flat UI fills rather than photo detail
- *   plainText   text_queue direct read; thumb UNSUPPORTED at index
- *   opaque      hash_queue only
- *
- * Deterministic per --seed so a sweep compares runs, not corpora.
+ * Generates a benchmark corpus of synthetic files. The proportions in `MIX`
+ * matter more than the file count, because each kind reaches a different queue.
+ * A given `--seed` writes byte-identical files, so a sweep compares runs rather
+ * than corpora.
  *
  *   node scripts/bench/makeCorpus.mjs --out E:/vault-bench/corpus --count 5000
  */
@@ -21,7 +11,17 @@ import { mkdir, rm, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { deflateRawSync } from "node:zlib";
 
-/** Roughly a document hoard: mostly born-digital, a real scanned minority. */
+/**
+ * Corpus proportions, weighted toward born-digital documents with a scanned
+ * minority. Each kind exercises a different queue:
+ *
+ *   pdfText     text_queue by native extraction, plus a thumb_queue page render
+ *   pdfScan     no text layer, so the row stops at NEEDS_OCR
+ *   photoJpeg   thumb_queue through sharp, and text_queue to NEEDS_OCR
+ *   screenshot  the same queues as photoJpeg, with flat interface fills
+ *   plainText   text_queue by direct read, with no thumbnail
+ *   opaque      hash_queue only
+ */
 const MIX = [
   { kind: "pdfText",   weight: 34 },
   { kind: "pdfScan",   weight: 16 },
@@ -31,10 +31,10 @@ const MIX = [
   { kind: "opaque",    weight:  6 },
 ];
 
-/** Keeps the walk hitting many directories rather than one huge readdir. */
+/** Keeps the index walk spread over many directories rather than one large readdir. */
 const FILES_PER_DIR = 120;
 
-/** mulberry32 - deterministic, so a given --seed writes byte-identical files. */
+/** Returns a mulberry32 generator, so a given `--seed` writes byte-identical files. */
 function makeRng (seed) {
   let a = seed >>> 0;
   return () => {
@@ -54,6 +54,7 @@ const WORDS = (
   "meeting minutes agenda action item owner deadline status blocked resolved pending"
 ).split(" ");
 
+// Returns one capitalized sentence of `words` randomly chosen words.
 function paragraph (rng, words) {
   const out = [];
   for (let i = 0; i < words; i++) out.push(WORDS[Math.floor(rng() * WORDS.length)]);
@@ -61,20 +62,22 @@ function paragraph (rng, words) {
   return s.charAt(0).toUpperCase() + s.slice(1) + ".";
 }
 
-// Lazy: --dry-run needs no native modules, and the import cost is paid once.
+// Imported on first use, so that --dry-run loads no native module.
 let _sharp, _canvas, _pdfLib;
 const loadSharp  = async () => (_sharp  ??= (await import("sharp")).default);
 const loadCanvas = async () => (_canvas ??= await import("@napi-rs/canvas"));
 const loadPdfLib = async () => (_pdfLib ??= await import("pdf-lib"));
 
-/** Noise upscaled then really encoded, so sharp pays a plausible decode cost. */
+/** Returns a JPEG of upscaled noise, encoded so that a thumbnail run performs a
+ *  realistic decode. */
 async function makePhoto (rng) {
   const sharp = await loadSharp();
-  // Spread of real camera-ish sizes; the large end is what costs.
+  // A range of camera resolutions. The largest dominates decode time.
   const dims = [[1024, 768], [1600, 1200], [2048, 1536], [3024, 4032]];
   const [w, h] = dims[Math.floor(rng() * dims.length)];
 
-  // Small tile upscaled: 12M raw pixels per file in JS would dominate runtime.
+  // A small tile is upscaled because filling 12 million pixels in JavaScript
+  // would dominate generation time.
   const tw = 64, th = 64;
   const raw = Buffer.allocUnsafe(tw * th * 3);
   for (let i = 0; i < tw * th; i++) {
@@ -89,8 +92,9 @@ async function makePhoto (rng) {
   return { buf, ext: "jpg" };
 }
 
-/** PNGs in a real hoard are screenshots. As photos they'd be 20 MB of
- *  incompressible noise - a case that barely exists. */
+/** Returns a PNG of a synthetic application window. Most PNGs in a real library
+ *  are screenshots, and generating them as photographic noise would instead
+ *  produce 20 MB files that are rare in practice. */
 async function makeScreenshot (rng) {
   const { createCanvas } = await loadCanvas();
   const dims = [[1920, 1080], [1440, 900], [2560, 1440], [1366, 768]];
@@ -120,8 +124,8 @@ async function makeScreenshot (rng) {
   return { buf: await canvas.encode("png"), ext: "png" };
 }
 
-/** Real glyphs, so a tier-2 run measures the success path rather than the
- *  much cheaper failure path. */
+/** Returns a JPEG page of rendered text, so that a tier-2 run measures
+ *  recognition rather than the much faster failure path. */
 async function makeScanPage (rng, lines) {
   const { createCanvas } = await loadCanvas();
   const W = 1275, H = 1650; // 150 dpi Letter — a typical scan resolution
@@ -130,7 +134,8 @@ async function makeScanPage (rng, lines) {
 
   ctx.fillStyle = "#fdfdfa";
   ctx.fillRect(0, 0, W, H);
-  // Speckle: a pure-white background denoises for free, which no scan does.
+  // Speckle is added because a pure-white background denoises trivially, which a
+  // real scan does not.
   for (let i = 0; i < 4000; i++) {
     const g = 200 + Math.floor(rng() * 40);
     ctx.fillStyle = `rgb(${g},${g},${g})`;
@@ -147,7 +152,7 @@ async function makeScanPage (rng, lines) {
   return canvas.encode("jpeg", 78);
 }
 
-/** Born-digital PDF: a real text layer, so tier 1 finishes it in milliseconds. */
+/** Returns a PDF carrying a text layer, which tier 1 extracts without OCR. */
 async function makePdfText (rng) {
   const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
   const doc = await PDFDocument.create();
@@ -166,7 +171,8 @@ async function makePdfText (rng) {
   return Buffer.from(await doc.save());
 }
 
-/** Image-only PDF: no text layer at all, which is what parks a row at NEEDS_OCR. */
+/** Returns a PDF of page images carrying no text layer, which leaves its row at
+ *  NEEDS_OCR. */
 async function makePdfScan (rng) {
   const { PDFDocument } = await loadPdfLib();
   const doc = await PDFDocument.create();
@@ -187,8 +193,8 @@ function makePlainText (rng) {
   return Buffer.from(out.join("\n\n"), "utf8");
 }
 
-/** No derivative possible - exercises the hash path. Incompressible, so the
- *  hash job really reads bytes. */
+/** Returns an incompressible binary file, which exercises the hash path alone.
+ *  No thumbnail or text derivative can be produced from it. */
 function makeOpaque (rng) {
   const size = 64 * 1024 + Math.floor(rng() * 512 * 1024);
   const buf = Buffer.allocUnsafe(size);
@@ -199,8 +205,9 @@ function makeOpaque (rng) {
 // ---------------------------------------------------------------------------
 
 function parseArgs (argv) {
-  // Above ~4 the @napi-rs/canvas encoder dies with no JS error, stopping
-  // mid-run after a few hundred files (and exiting 0 through a pipe).
+  // The @napi-rs/canvas encoder fails above a concurrency of about 4, raising no
+  // JavaScript error. Generation stops after a few hundred files, and the process
+  // exits 0 when its output is piped.
   const args = { out: "", count: 5000, seed: 1, clean: false, concurrency: 4, dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -217,7 +224,7 @@ function parseArgs (argv) {
   return args;
 }
 
-/** Expand the weighted mix into a concrete, deterministic plan of `count` items. */
+/** Expands `MIX` into a deterministic list of `count` file kinds. */
 function buildPlan (count, seed) {
   const rng = makeRng(seed);
   const total = MIX.reduce((s, m) => s + m.weight, 0);
@@ -226,10 +233,11 @@ function buildPlan (count, seed) {
     const n = Math.round((m.weight / total) * count);
     for (let i = 0; i < n; i++) plan.push(m.kind);
   }
-  // Rounding drift.
+  // Corrects for rounding in the per-kind counts.
   while (plan.length < count) plan.push("pdfText");
   while (plan.length > count) plan.pop();
-  // Interleave kinds; a type-sorted corpus feeds workers homogeneous runs.
+  // Shuffles the kinds. A corpus ordered by kind would give each worker a long
+  // run of identical work.
   for (let i = plan.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
     [plan[i], plan[j]] = [plan[j], plan[i]];
@@ -266,11 +274,12 @@ async function main () {
   }
   if (args.dryRun) return;
 
-  // --clean deletes recursively; a mistyped --out must not take a real folder.
+  // --clean deletes recursively, so a mistyped --out must not be able to remove a
+  // real folder.
   if (args.clean) {
     const marker = path.join(outDir, ".vault-bench-corpus");
     let owned = false;
-    try { await stat(marker); owned = true; } catch { /* not ours (or absent) */ }
+    try { await stat(marker); owned = true; } catch { /* Absent, or not a corpus directory. */ }
     let exists = true;
     try { await stat(outDir); } catch { exists = false; }
     if (exists && !owned) {
@@ -294,7 +303,8 @@ async function main () {
     await mkdir(path.join(outDir, `batch-${String(d).padStart(4, "0")}`), { recursive: true });
   }
 
-  // Per-index RNG: a shared one would make output depend on completion order.
+  // Each file gets its own generator, seeded by index. A shared generator would
+  // make the output depend on completion order.
   let done = 0, bytes = 0;
   const started = Date.now();
   let next = 0;

@@ -1,15 +1,8 @@
 /**
- * Concurrency sweep for work item 15F.
- *
  * Runs one corpus through one derivative queue at a series of concurrency
- * settings. Three things shape it:
- *
- *  - One queue per run. With thumb, text and hash all live no CPU number can be
- *    attributed, and the question is per-queue anyway.
- *  - The API must be stopped; this starts the real feeder itself. Two feeders on
- *    one queue is harmless (SKIP LOCKED) but silently doubles the bound.
- *  - Workers are spawned as bare `node --import tsx`, not via pnpm, so child.pid
- *    is the process being measured rather than a shell.
+ * settings, then writes a table comparing them. One queue is measured per run,
+ * because no CPU or disk figure can be attributed to a queue while thumb, text
+ * and hash are all running.
  *
  *   tsx scripts/bench/sweep.ts --scope E:/corpus --queue thumb --values 2,4,8,16
  */
@@ -70,7 +63,8 @@ function parseArgs (argv: string[]): Args {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-/** Run a bench script to completion, inheriting stdio. */
+// Runs another script from this directory to completion, and throws on a
+// nonzero exit code.
 async function runScript (script: string, args: string[], env: NodeJS.ProcessEnv = {}): Promise<void> {
   const child = spawn(process.execPath, ["--import", "tsx", path.join(HERE, script), ...args], {
     cwd: API_ROOT,
@@ -81,8 +75,14 @@ async function runScript (script: string, args: string[], env: NodeJS.ProcessEnv
   if (code !== 0) throw new Error(`${script} exited ${code}`);
 }
 
-/** Waits on the ready log line, not a fixed sleep: the thumb worker awaits
- *  configureSharp first, and jobs run before t0 are timed by nobody. */
+/**
+ * Starts a worker process and resolves once it reports readiness.
+ *
+ * Readiness is read from the worker's log output rather than waited out with a
+ * fixed sleep, because the thumbnail worker awaits configureSharp before it
+ * accepts a job. Spawning bare `node --import tsx` rather than pnpm makes
+ * `child.pid` the process to be measured rather than a shell.
+ */
 async function startWorker (entry: string, env: NodeJS.ProcessEnv, log: string[]): Promise<ChildProcess> {
   const child = spawn(process.execPath, ["--import", "tsx", path.join(API_ROOT, "src/worker", entry)], {
     cwd: API_ROOT,
@@ -107,11 +107,12 @@ async function startWorker (entry: string, env: NodeJS.ProcessEnv, log: string[]
   return child;
 }
 
+// Stops a worker, escalating to SIGKILL only after 20 seconds.
 async function stopWorker (child: ChildProcess): Promise<void> {
   if (child.exitCode !== null) return;
   child.kill("SIGTERM");
-  // Workers close their BullMQ connections on SIGTERM. A lock still held at
-  // SIGKILL gets the job redelivered, corrupting the next run's counts.
+  // Workers close their BullMQ connections on SIGTERM. A job whose lock is still
+  // held at SIGKILL is redelivered, which corrupts the next run's counts.
   const deadline = Date.now() + 20_000;
   while (child.exitCode === null && Date.now() < deadline) await sleep(200);
   if (child.exitCode === null) child.kill("SIGKILL");
@@ -127,17 +128,18 @@ async function main () {
   const repository = new MediaRepository(prisma);
   const preferences = new PreferencesService(new PreferencesRepository(prisma));
 
-  // starts_with, not Prisma's startsWith: that compiles to LIKE, where backslash
-  // is the escape character and a Windows path prefix matches nothing.
+  // starts_with, not Prisma's startsWith. The latter compiles to LIKE, whose
+  // escape character is backslash, so a Windows path prefix matches nothing.
   const [{ n }] = await prisma.$queryRaw<{ n: bigint }[]>`
     SELECT count(*) AS n FROM "Media" WHERE starts_with("sourcePath", ${args.scope})
   `;
   const total = Number(n);
   if (total === 0) throw new Error(`no indexed rows under ${args.scope} - index the corpus first`);
 
-  // LOW_MEMORY cannot be turned off from the environment - the workers fall
-  // through to the DB preference unless env is exactly "true"/"1" - and if it is
-  // on, every concurrency under test is silently halved.
+  // Setting LOW_MEMORY in the environment cannot turn the preference off. The
+  // workers fall through to the database preference unless the variable is
+  // "true" or "1". While the preference is on, every concurrency under test is
+  // halved.
   if (await readLowMemoryPreference(prisma)) {
     throw new Error(
       "lowMemoryMode is enabled in preferences, which halves every concurrency. " +
@@ -151,12 +153,15 @@ async function main () {
 
   const entry = args.queue === "thumb" ? "thumb.ts" : "text.ts";
   const envVar = args.queue === "thumb" ? "THUMB_CONCURRENCY" : "TEXT_CONCURRENCY";
-  /** Only the summary fields the comparison table reads. */
+  // The subset of measure.ts's summary that the comparison table reads.
   type RunSummary = {
-    /** The value under test on this run. Deliberately not named `concurrency`:
-     *  measure.ts writes a `concurrency` key of its own — the full env snapshot,
-     *  for provenance — and it used to overwrite this one through the spread
-     *  below, so every run recorded an object where the curve's x-axis belongs. */
+    /**
+     * The value under test on this run.
+     *
+     * The name differs from `concurrency` because measure.ts writes a
+     * `concurrency` key of its own, holding the full environment snapshot. The
+     * spread below would otherwise replace this number with that object.
+     */
     concurrencyUnderTest: number;
     elapsedSeconds: number;
     completed: Record<string, number>;
@@ -174,13 +179,14 @@ async function main () {
     const label = `${args.queue}-c${value}`;
     console.log(`\n${"=".repeat(64)}\n${label}\n${"=".repeat(64)}`);
 
-    // Only the queue under test, so an undrained queue's Redis work stays out
-    // of the measurement.
+    // Resets only the queue under test, so that another queue's Redis work stays
+    // out of the measurement.
     await runScript("resetDerivatives.ts", ["--scope", args.scope, "--kind", args.queue]);
 
-    // Jobs key on the media id and BullMQ silently drops an add for an id that
-    // still exists, so a stale job would leave its row dispatched forever.
-    // Destructive: wipes the whole queue, hence the API must be stopped.
+    // Jobs key on the media id, and BullMQ drops an add for an id that still
+    // exists, so a job left over from an earlier run would hold its row
+    // dispatched permanently. obliterate removes every job in the queue, which is
+    // one of the two reasons the API must be stopped.
     const q = args.queue === "thumb" ? thumbQueue : textQueue;
     await q.obliterate({ force: true });
 
@@ -191,7 +197,10 @@ async function main () {
     }, log);
     console.log(`  worker pid ${worker.pid}, ${envVar}=${value}`);
 
-    // The real feeder, water marks at their defaults.
+    // The production feeder, with its water marks at the defaults. A second
+    // feeder on the same queue is safe under SKIP LOCKED, but it doubles the
+    // depth those water marks bound, which is the other reason the API must be
+    // stopped.
     const feeder = createDerivativeFeeder({
       repository,
       thumbQueue,
@@ -220,7 +229,7 @@ async function main () {
     const summary = JSON.parse(await readFile(path.join(args.out, `${label}.summary.json`), "utf8")) as Omit<RunSummary, "concurrencyUnderTest">;
     results.push({ ...summary, concurrencyUnderTest: value });
 
-    // So run N+1 does not start inside run N's tail.
+    // Keeps the next run from starting while this one is still finishing.
     await sleep(args.settleSeconds * 1000);
   }
 
