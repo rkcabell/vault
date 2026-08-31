@@ -1,14 +1,21 @@
+/**
+ * Converts a photo taken by a modern phone into a format the thumbnail
+ * renderer can work with.
+ */
 export type RenderHeicThumbnailArgs = {
   image: Uint8Array | Buffer;
   targetWidth?: number;
   maxWidth?: number;
-  // kept for backwards-compat but no longer used
+  /** Ignored. Kept so existing callers still compile. */
   ffmpegPath?: string;
 };
 
 /**
- * Convert HEIC/HEIF to PNG using heic-convert (libheif via WASM).
- * Works on all platforms without native ffmpeg HEIF demuxer support.
+ * Returns `image` re-encoded as a PNG.
+ *
+ * The conversion runs in WebAssembly, so no HEIF support is needed from the
+ * system's own media libraries. Failure raises an error whose message begins
+ * HEIC_THUMBNAIL_FAILED.
  */
 export async function renderHeicThumbnail(args: RenderHeicThumbnailArgs): Promise<Buffer> {
   const { image } = args;

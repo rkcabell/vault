@@ -5,30 +5,29 @@ import { openSourceStream } from "../adapters/storage/openSource.js";
 import { tagDuplicatesForHash, type DuplicateTagRepository } from "../services/media/duplicateTag.js";
 import type { HashJobData } from "../queues/enqueueHash.js";
 
+/**
+ * Hashes a file's contents into `Media.contentHash`. This covers the items the
+ * thumbnail worker never hashes: the types it cannot render, and the files too
+ * large to load. Bytes are streamed, so memory does not grow with the file.
+ */
+
 type HashLogger = {
   info: (obj: object, msg: string) => void;
   warn: (obj: object, msg: string) => void;
 };
 
-/** Structural deps so the worker is unit-testable with simple fakes. */
 type HashWorkerDeps = {
   mediaRepository: DuplicateTagRepository & {
     setContentHash: (mediaId: string, hash: string) => Promise<void>;
+    setHashState: (mediaId: string, state: "READY" | "FAILED") => Promise<boolean>;
   };
-  /** detectDuplicates gate; absent = hash only, never tag. */
+  /** Absent, items are hashed but never tagged as duplicates. */
   preferencesService?: { getPreferences: (userId: string) => Promise<{ detectDuplicates?: boolean }> };
   storage: StorageAdapter;
   bucket: string;
   logger: HashLogger;
 };
 
-/**
- * Streams a source's bytes into SHA-256 and persists the digest — the coverage
- * path for items the thumbnail worker never hashes (non-thumbnailable types,
- * too-large files) and for dedup backfill scans. Streaming keeps memory flat
- * regardless of file size. Mirrors the thumb worker's hash step, including the
- * detectDuplicates tagging, via the shared duplicateTag helper.
- */
 export function createHashProcessor (deps: HashWorkerDeps): Processor<HashJobData> {
   return async (job: Job<HashJobData>) => {
     const { mediaId, userId, storageKey, sourcePath, allowedRoots } = job.data;
@@ -40,9 +39,10 @@ export function createHashProcessor (deps: HashWorkerDeps): Processor<HashJobDat
       sourcePath,
       allowedRoots: allowedRoots ?? [],
     });
-    // Source gone (deleted since enqueue, or the upload never landed): nothing
-    // to hash, and retrying won't conjure it back — drop the job quietly.
+    // The file is gone, and a retry cannot bring it back. FAILED is written now,
+    // rather than leaving the row at PENDING for stall detection to find later.
     if (!res) {
+      await deps.mediaRepository.setHashState(mediaId, "FAILED");
       deps.logger.warn({ mediaId }, "hash skipped: source missing");
       return;
     }
@@ -52,6 +52,7 @@ export function createHashProcessor (deps: HashWorkerDeps): Processor<HashJobDat
     const contentHash = hash.digest("hex");
 
     await deps.mediaRepository.setContentHash(mediaId, contentHash);
+    await deps.mediaRepository.setHashState(mediaId, "READY");
 
     const prefs = await deps.preferencesService?.getPreferences(userId).catch(() => null);
     if (prefs?.detectDuplicates) {

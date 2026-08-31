@@ -1,11 +1,16 @@
+/**
+ * Works out the date an item is filed under for its year and month tags.
+ */
 import type { MediaMetadata } from "../../../services/media/metadata/types.js";
 
 /**
- * Best-known "file date" for FILE_DATE rules, in precedence order:
- * EXIF capture date → PDF creation date → filesystem mtime. Returns null when
- * nothing trustworthy exists (e.g. an upload with no embedded date — the ingest
- * timestamp is deliberately NOT used; `year:` means the file's year, not the
- * year it was added to Vault).
+ * Returns the date a file itself carries, or null when it carries none.
+ *
+ * The camera capture date is preferred, then a PDF's creation date, then the
+ * file-modified time.
+ *
+ * The date the item was added to Vault is never used, because a year tag names
+ * the file's own year.
  */
 export function resolveFileDate (
   meta: MediaMetadata | null | undefined,

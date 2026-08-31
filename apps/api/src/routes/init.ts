@@ -1,3 +1,7 @@
+/**
+ * Serves everything the web app needs on first load, so it does not have to
+ * make one request per piece.
+ */
 import type { FastifyPluginAsync } from "fastify";
 import { requireAuth } from "../utils/authGuard.js";
 import { ProfileRepository } from "../repositories/profileRepository.js";
@@ -17,6 +21,8 @@ export const initRoutes: FastifyPluginAsync = async app => {
     const now = new Date();
     const preferencesPromise = app.preferencesService.getPreferences(userId);
 
+    // Gathered together so the slowest read decides the response time, rather
+    // than the sum of them all.
     const [profile, preferences, rawTags, bundles, totalActive, overviewResult, mediaStats] =
       await Promise.all([
         profileService.getProfile(userId),
@@ -32,6 +38,8 @@ export const initRoutes: FastifyPluginAsync = async app => {
             now,
           )
         ),
+        // Library statistics are the one optional part: a failure here returns
+        // zeroes rather than failing the whole startup response.
         mediaRepo.getMediaStats(userId).catch(() => ({ totalDocs: 0, storageBytes: 0, typeBreakdown: [] as Array<{ mimeType: string; count: number }> })),
       ]);
 

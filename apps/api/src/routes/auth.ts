@@ -1,4 +1,6 @@
-//File: apps/api/src/routes/auth.ts
+/**
+ * Serves signing in, signing up, signing out, and renewing a session.
+ */
 
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
@@ -9,9 +11,9 @@ import { TagRuleRepository } from "../repositories/tagRuleRepository.js";
 import { createPasswordHasher } from "../adapters/passwordHasher.js";
 import { createJwtAdapter } from "../adapters/jwtAdapter.js";
 
-// Login: validate shape only. Never enforce the password *policy* here, or we
-// would lock out users whose password predates a later policy change — login
-// just needs a present credential to check against the stored hash.
+// Checks a sign-in request has both fields, and nothing more. The password
+// policy is deliberately not applied here: an account whose password was set
+// before a stricter policy must still be able to sign in.
 function parseCredentials(body: unknown) {
   const schema = z.object({
     email: z.string().email(),
@@ -26,7 +28,7 @@ function parseCredentials(body: unknown) {
   return { data: result.data };
 }
 
-// Registration: enforce the full shared password policy on the new password.
+// Checks a sign-up request, applying the full password policy to the new password.
 function parseRegistration(body: unknown) {
   const schema = z.object({
     email: z.string().email(),
@@ -55,12 +57,12 @@ export const authRoutes: FastifyPluginAsync = async app => {
     httpOnly: true,
     sameSite: "lax" as const,
     path: "/",
-    // Use COOKIE_SECURE=true only when behind a real HTTPS reverse proxy.
-    // NODE_ENV=production is set in Docker even for plain HTTP local deployments,
-    // so we gate on an explicit env var instead.
+    // Set COOKIE_SECURE only behind a real HTTPS proxy. NODE_ENV is production
+    // in Docker even for a plain HTTP deployment, so it cannot decide this.
     secure: process.env.COOKIE_SECURE === "true",
   };
 
+  // The signed-in account, read from the browser's cookie.
   app.get("/me", async (req, reply) => {
     const token = req.cookies.access_token;
     if (!token) return reply.unauthorized("Missing token");
@@ -76,12 +78,12 @@ export const authRoutes: FastifyPluginAsync = async app => {
     }
   });
 
-  // POST /auth/register
+  // Creates the owner's account. The tokens come back in the body rather than
+  // as cookies, so signing up does not sign the browser in.
   app.post(
     "/register",
     {
       preHandler: async (req, reply) => {
-        // 5 registrations/min per IP
         await app.rateLimit({ key: `register:ip:${req.ip}`, limit: 5, windowMs: 60_000 })(
           req,
           reply,
@@ -91,8 +93,8 @@ export const authRoutes: FastifyPluginAsync = async app => {
     async (req, reply) => {
       if (reply.sent) return;
 
-      // Self-hosted lock: once the owner has created their account, set
-      // DISABLE_REGISTRATION=true so nobody else on the network can register.
+      // Once the owner has their account, DISABLE_REGISTRATION stops anyone
+      // else on the network from creating one.
       if (app.config.DISABLE_REGISTRATION) {
         return reply.forbidden("Registration is disabled on this server.");
       }
@@ -114,12 +116,11 @@ export const authRoutes: FastifyPluginAsync = async app => {
     },
   );
 
-  // POST /auth/login
+  // Signs in and sets the session cookies.
   app.post(
     "/login",
     {
       preHandler: async (req, reply) => {
-        // 30 login attempts/min per IP
         await app.rateLimit({ key: `login:ip:${req.ip}`, limit: 30, windowMs: 60_000 })(req, reply);
       },
     },
@@ -130,7 +131,8 @@ export const authRoutes: FastifyPluginAsync = async app => {
       if ("error" in parsed) return reply.badRequest(parsed.error);
       const data = parsed.data;
 
-      // 10 login attempts/min per email (fine-grained)
+      // A second limit, per email address, so one account cannot be worked
+      // through from many addresses.
       await app.rateLimit({ key: `login:email:${data.email}`, limit: 10, windowMs: 60_000 })(
         req,
         reply,
@@ -158,9 +160,9 @@ export const authRoutes: FastifyPluginAsync = async app => {
     },
   );
 
-  // POST /auth/logout — clears the auth cookies. Stateless JWTs can't be
-  // revoked server-side, so this just drops the browser's session; the tokens
-  // themselves remain valid until they expire (or are evicted via tokenVersion).
+  // Signs the browser out by dropping its cookies. The tokens themselves stay
+  // valid until they expire, because nothing records which ones were issued.
+  // Raising the account's token version is what actually revokes them.
   app.post("/logout", async (_req, reply) => {
     return reply
       .clearCookie("access_token", { ...cookieConfig })
@@ -168,16 +170,15 @@ export const authRoutes: FastifyPluginAsync = async app => {
       .send({});
   });
 
-  // Password recovery is admin-only via the reset-password CLI
-  // (apps/api/scripts/reset-password.ts) — there is no self-service reset
-  // endpoint, so no reset token is ever generated or put in transit.
+  // There is no route for a forgotten password. Recovery is the owner running
+  // scripts/reset-password.ts on the server, so no reset link is ever created
+  // or sent anywhere.
 
-  // POST /auth/refresh
+  // Renews an expiring session.
   app.post(
     "/refresh",
     {
       preHandler: async (req, reply) => {
-        // 60 refreshes/min per IP
         await app.rateLimit({ key: `refresh:ip:${req.ip}`, limit: 60, windowMs: 60_000 })(
           req,
           reply,

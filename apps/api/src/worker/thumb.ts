@@ -1,6 +1,3 @@
-// Entry point for the thumbnail worker process.
-// Run independently of the OCR worker so a thumbnail failure cannot
-// block OCR processing (and vice-versa).
 import "dotenv/config";
 
 import { Worker } from "bullmq";
@@ -10,10 +7,16 @@ import { prisma } from "@vault/db";
 import { createWorkerStorage, workerBucket, workerAllowedRoots } from "./storageFromEnv.js";
 import { readLowMemoryPreference } from "./workerPrefs.js";
 import { createThumbProcessor, sanitizeThumbError, type ThumbJob } from "./thumbWorker.js";
+import { configureSharp } from "./configureSharp.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { MediaMetadataRepository } from "../repositories/mediaMetadataRepository.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
+
+/**
+ * Entry point for the thumbnail worker process. It runs separately from the OCR
+ * worker, so a failure in one cannot hold up the other.
+ */
 
 const REDIS_URL       = process.env.REDIS_URL ?? "redis://localhost:6379";
 const BUCKET          = workerBucket();
@@ -28,6 +31,10 @@ const THUMB_CONCURRENCY = parseEnvNumber("THUMB_CONCURRENCY", LOW_MEMORY ? 4 : 8
 async function main() {
   const logger     = createLogger("worker-thumb");
   const connection = buildRedisConnection(REDIS_URL);
+
+  // Runs before the Worker starts pulling jobs. BullMQ owns parallelism, and
+  // libvips must not also spread each pipeline across the cores.
+  await configureSharp(logger);
 
   const publisher = new IORedis(REDIS_URL);
   publisher.on("error", err => logger.warn({ err }, "publisher redis error"));

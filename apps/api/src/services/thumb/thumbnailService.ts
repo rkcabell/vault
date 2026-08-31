@@ -19,6 +19,12 @@ import { resolveFileDate } from "../../lib/tags/rules/fileDate.js";
 import { tagDuplicatesForHash } from "../media/duplicateTag.js";
 import { exceedsThumbnailSize, THUMBNAIL_TOO_LARGE_REASON } from "../../lib/media/processingSupport.js";
 
+/**
+ * Renders an item's thumbnail, choosing a decoder by the file's leading bytes
+ * rather than its name. It also extracts the file's metadata and hashes it,
+ * while the bytes are already in memory.
+ */
+
 type PrefsLookup = { getPreferences: (userId: string) => Promise<{ extractMetadata?: boolean; detectDuplicates?: boolean }> };
 
 export type ThumbDeps = {
@@ -27,11 +33,11 @@ export type ThumbDeps = {
   preferencesService?: PrefsLookup;
   storage: StorageAdapter;
   bucket: string;
-  /** Configured INDEX_ALLOWED_ROOTS; required to read in-place sources. Defaults to []. */
+  /** The user's allowed roots. Needed to read a source on their own drive. */
   allowedRoots?: string[];
   logger: Logger;
   queueName: string;
-  publishJobUpdate?: (update: { userId: string; mediaId: string; field: "thumbState"; value: "READY" | "FAILED" }) => void;
+  publishJobUpdate?: (update: { userId: string; mediaId: string; field: "thumbState"; value: "READY" | "FAILED" | "UNSUPPORTED" }) => void;
 };
 
 /** Stored when the error message is empty after sanitization. */
@@ -40,9 +46,8 @@ const THUMB_ERROR_FALLBACK = "thumbnail_failed";
 const MAX_THUMB_ERROR_LENGTH = 160;
 
 /**
- * Convert any thrown value to a short, single-line string safe for DB storage.
- * Collapses whitespace, trims, truncates to MAX_THUMB_ERROR_LENGTH, and falls
- * back to a generic sentinel when the message would be empty.
+ * Converts anything thrown into one short line safe to store. Falls back to a
+ * fixed message when nothing usable is left.
  */
 export function sanitizeThumbError (err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
@@ -54,10 +59,9 @@ export function sanitizeThumbError (err: unknown): string {
 }
 
 /**
- * Resize and encode an image buffer to WebP.
- * `rotate()` with no argument applies EXIF auto-rotation.
- * `fit: "inside"` preserves aspect ratio; `withoutEnlargement` prevents
- * upscaling images that are already smaller than `size`.
+ * Resizes an image buffer and encodes it as WebP. `rotate()` with no argument
+ * applies the rotation recorded in the file's EXIF. The aspect ratio is kept,
+ * and an image already smaller than `size` is left at its own size.
  */
 async function renderWebp(input: Buffer, size: number): Promise<Buffer> {
   const { default: sharp } = await import("sharp");
@@ -72,19 +76,15 @@ async function renderWebp(input: Buffer, size: number): Promise<Buffer> {
 type FormatHandler = {
   /** Short label used in log messages and error codes (e.g. "video", "pdf"). */
   label: string;
-  /** Return true if this handler should process the given file. First match wins. */
+  /** True when this handler should take the file. The first match wins. */
   detect: (mimeType: string, buffer: Buffer) => boolean;
-  /** Render a high-resolution intermediate PNG from the source buffer. */
+  /** Renders a high-resolution PNG from the source, for encoding to WebP. */
   render: (buffer: Buffer, targetWidth: number) => Promise<Buffer>;
 };
 
 /**
- * Registry of format-specific thumbnail renderers, checked in order.
- * Order matters: HEIC must precede video because some HEIC files share
- * MP4 magic bytes and would otherwise be misclassified.
- *
- * To add a new format: import its renderer and append an entry here.
- * No changes to processThumb are needed.
+ * The format-specific renderers, checked in order. HEIC has to come before
+ * video: some HEIC files carry MP4 magic bytes and would be taken for video.
  */
 const FORMAT_HANDLERS: FormatHandler[] = [
   {
@@ -96,7 +96,8 @@ const FORMAT_HANDLERS: FormatHandler[] = [
     label: "video",
     detect: (mime, buf) => mime.startsWith("video/") || looksLikeMp4(buf),
     render: (buf, w) => renderVideoThumbnail({ video: buf, targetWidth: w }),
-    // Note: when videoPath is available (pre-streamed), thumbnailService calls renderVideoThumbnail directly.
+    // With a pre-streamed videoPath, processThumb calls renderVideoThumbnail
+    // directly instead.
   },
   {
     label: "pdf",
@@ -106,24 +107,12 @@ const FORMAT_HANDLERS: FormatHandler[] = [
 ];
 
 /**
- * Core thumbnail processing logic for a single job.
+ * Renders one item's thumbnail and records the outcome on its row.
  *
- * Flow:
- * 1. Idempotency check — if thumbnailKey already matches outKey and state is
- *    READY, return early. If state is wrong (e.g. PENDING after a crash),
- *    repair it in place.
- * 2. Wait for the source object to appear in S3 (up to 4 probes).
- * 3. Opportunistically extract and persist file metadata from the buffer
- *    (non-fatal; a metadata error never fails the thumb job).
- * 4. Match the file against FORMAT_HANDLERS (first match wins) and render a
- *    high-resolution intermediate PNG. Generic images pass through unchanged.
- * 5. Encode the intermediate PNG to WebP at `size` px and upload to S3.
- * 6. Mark thumbState READY in the DB and publish a real-time update.
- *
- * Format-specific render failures (video, PDF, HEIC) set thumbState FAILED
- * and return without throwing, since the error is permanent and retrying
- * would produce the same result. Sharp failures and S3 errors propagate
- * so BullMQ can retry them.
+ * A render that fails for a format some handler claimed sets thumbState FAILED
+ * and returns rather than throwing, because a retry produces the same result.
+ * Bytes no handler claimed, which Sharp also rejects, are UNSUPPORTED instead:
+ * no render was ever possible.
  */
 export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<void> {
   const { prismaMedia, storage, bucket, logger } = deps;
@@ -155,11 +144,11 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
     return;
   }
 
-  // Skip files too large to load into memory. The worker reads the whole source
-  // into a Buffer (ffmpeg/sharp need it in memory too), which can't exceed Node's
-  // ~2 GiB Buffer limit — attempting it only burns a queue slot and fails. Mark
-  // FAILED with a clear reason so the UI shows a placeholder instead of a stuck
-  // PENDING. Permanent (the size won't change), so return rather than throw.
+  // The whole source is read into a Buffer, and Node cannot hold more than
+  // about 2 GiB in one, so a larger file would only occupy a queue slot and
+  // fail. It is marked FAILED with a reason, so the UI shows a placeholder
+  // rather than a row stuck at PENDING. The size will not change, so this
+  // returns rather than throwing.
   if (exceedsThumbnailSize(existing?.sizeBytes)) {
     await prismaMedia.setThumbFailed(job.mediaId, THUMBNAIL_TOO_LARGE_REASON);
     deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
@@ -173,9 +162,9 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   const mimeType = existing?.mimeType ?? "";
   const isVideo = mimeType.startsWith("video/");
 
-  // For video files, stream directly from S3 to a temp file to avoid holding
-  // the full source in memory while ffmpeg also needs it on disk. For all other
-  // formats download to buffer as before.
+  // Video streams straight to a temp file: ffmpeg needs it on disk anyway, and
+  // buffering it first would hold the whole source in memory at the same time.
+  // Other formats read to a buffer.
   let original: Buffer;
   let videoTempDir: string | null = null;
   let videoTempPath: string | null = null;
@@ -197,31 +186,32 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
 
   let inputForSharp: Buffer = original;
 
-  // Fetch user preferences once — used for extractMetadata and detectDuplicates gates.
+  // Read once, for the extractMetadata and detectDuplicates settings below.
   const prefs = deps.preferencesService && job.userId
     ? await deps.preferencesService.getPreferences(job.userId).catch(() => null)
     : null;
 
-  // Extract and persist file metadata from the buffer we already have.
-  // Non-fatal: a metadata failure must never fail the thumbnail job.
-  // Skipped when the user has disabled extractMetadata (privacy — avoids storing EXIF/GPS).
+  // Read from the buffer already in hand. A failure here never fails the
+  // thumbnail job. Skipped when the user has turned extractMetadata off, which
+  // is what keeps EXIF and GPS out of the database.
   if (deps.metadataRepository && mimeType && prefs?.extractMetadata !== false) {
     extractMetadataFromBuffer(original, mimeType)
       .then(async (meta) => {
         if (!meta) return;
         await deps.metadataRepository!.upsert(job.mediaId, meta);
-        // Upgrade fileDate to the embedded EXIF/PDF date — it beats any
-        // mtime-derived value stored at ingest (see lib/tags/rules/fileDate.ts).
+        // A date read from inside the file is better than the modified time
+        // stored at index time, so it replaces it.
         const fileDate = resolveFileDate(meta);
         if (fileDate) await prismaMedia.setFileDate(job.mediaId, fileDate);
       })
       .catch((err: unknown) => logger.warn({ err, mediaId: job.mediaId }, "metadata extraction failed"));
   }
 
-  // Compute SHA-256 hash, store it, and tag duplicates when detectDuplicates is enabled.
-  // Non-fatal: hash/duplicate failures must never fail the thumbnail job.
+  // Hashes the bytes already in hand, and tags duplicates when the user has
+  // detectDuplicates on. A failure here never fails the thumbnail job.
+  let contentHash: string | null = null;
   try {
-    const contentHash = crypto.createHash("sha256").update(original).digest("hex");
+    contentHash = crypto.createHash("sha256").update(original).digest("hex");
     await prismaMedia.setContentHash(job.mediaId, contentHash);
     if (prefs?.detectDuplicates && job.userId) {
       await tagDuplicatesForHash(prismaMedia, job.userId, job.mediaId, contentHash);
@@ -229,6 +219,42 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   } catch (err: unknown) {
     logger.warn({ err, mediaId: job.mediaId }, "hash/duplicate check failed");
   }
+
+  // Copies an existing thumbnail for a byte-identical file rather than
+  // rendering again: the copy is a small WebP, where the render would be a PDF
+  // rasterization, an ffmpeg frame grab, or a HEIC decode.
+  //
+  // Only an ordinary job qualifies. An unset outKey and size mark one; a caller
+  // asking for anything else wants its own render, and noReuse is set by
+  // "regenerate". A miss, a missing blob, or a failed lookup all fall through
+  // to a normal render, so reuse never fails a job.
+  if (contentHash && job.userId && job.outKey === undefined && job.size === undefined && !job.noReuse) {
+    try {
+      const twin = await prismaMedia.findReusableThumbnail(job.userId, contentHash, job.mediaId);
+      if (twin) {
+        const twinObject = await storage.getObjectStream({ bucket, key: twin.thumbnailKey });
+        if (twinObject) {
+          await storage.putObject({
+            bucket,
+            key: outKey,
+            body: twinObject.body,
+            contentType: "image/webp",
+            cacheControl: "public, max-age=31536000, immutable",
+          });
+          await prismaMedia.setThumbReady(job.mediaId, outKey);
+          deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "READY" });
+          logger.info(
+            { ...logContext, twinMediaId: twin.id, durationMs: Date.now() - startedAt },
+            "thumbnail reused from identical file",
+          );
+          return;
+        }
+      }
+    } catch (err: unknown) {
+      logger.warn({ err, mediaId: job.mediaId }, "thumbnail reuse check failed; rendering instead");
+    }
+  }
+
   const targetWidth = Math.min(1600, Math.max(800, size * 3));
 
   // Render a high-res intermediate PNG for formats that Sharp can't decode
@@ -270,6 +296,18 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
   try {
     webp = await renderWebp(inputForSharp, size);
   } catch (err) {
+    // No handler claimed these bytes and Sharp can't decode them either, so no
+    // render was ever possible — UNSUPPORTED, which the library's "Thumbnail
+    // error" filter correctly ignores. A handler ran means one was attempted.
+    if (!handler) {
+      await prismaMedia.markThumbUnsupported([job.mediaId]);
+      deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "UNSUPPORTED" });
+      logger.info(
+        { ...logContext, mimeType, durationMs: Date.now() - startedAt },
+        "thumbnail unsupported: no renderer and not a decodable image",
+      );
+      return;
+    }
     const reason = sanitizeThumbError(err);
     await prismaMedia.setThumbFailed(job.mediaId, reason);
     deps.publishJobUpdate?.({ userId: job.userId, mediaId: job.mediaId, field: "thumbState", value: "FAILED" });
@@ -299,9 +337,8 @@ export async function processThumb (deps: ThumbDeps, job: ThumbJob): Promise<voi
 }
 
 /**
- * Wrap `processThumb` in the BullMQ worker callback signature.
- * Logs job start, completion (with duration), and failure (re-throws so BullMQ
- * can apply retry/backoff logic).
+ * Wraps `processThumb` in the shape BullMQ calls, logging the start, the
+ * duration, and any failure. A failure is re-thrown, so BullMQ still retries.
  */
 export function createThumbProcessor (deps: ThumbDeps) {
   return async (job: { data: ThumbJob; id?: string; attemptsMade?: number }) => {

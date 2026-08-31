@@ -6,7 +6,7 @@ import { bucketOf, bucketColor, BUCKET_LABEL, BUCKET_ORDER, type BucketKey } fro
 /**
  * Legend + category filter for the /explore treemap. Each bucket present in the
  * data is a toggle button; toggling it highlights every tile of that colour
- * (handled by the treemap). Reflects exactly the buckets in the data set.
+ * (handled by the treemap). Reflects the buckets present in the data set.
  */
 
 interface Props {

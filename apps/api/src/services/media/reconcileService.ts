@@ -8,13 +8,19 @@ import {
 } from "../../queues/enqueueReconcile.js";
 import { isUnderAllowedRoot } from "../../lib/media/indexRoots.js";
 
+/**
+ * Starts reconciliation sweeps and reports their progress. A sweep runs as one
+ * queue job per indexing root. Both the live progress and the last finished run
+ * are read back from those jobs; this file stores nothing in the database.
+ */
+
 type ReconcileServiceDeps = {
   reconcileQueue: Queue<ReconcileJobData>;
   logger: { info: (obj: object, msg: string) => void };
 };
 
 export type StartReconcileInput = {
-  /** Reconcile only this root. Omitted = every configured root. */
+  /** Limits the sweep to this root. Omitted, every configured root is swept. */
   path?: string;
   allowedRoots: string[];
   ignoreHidden: boolean;
@@ -23,18 +29,20 @@ export type StartReconcileInput = {
   skipNonContent: boolean;
 };
 
+/** `disabled` when no indexing roots are configured. `not_allowed` when the
+ *  requested path falls outside them. */
 export type StartReconcileResult =
   | { ok: true; jobIds: string[] }
   | { ok: false; reason: "disabled" | "not_allowed" };
 
 export type ReconcileStatus = {
   jobId: string;
-  /** The root this sweep covered, for the UI to name it. */
+  /** The root this sweep covered. */
   rootPath: string;
   state: string;
   done: boolean;
   aborted: boolean;
-  /** When the sweep finished, epoch ms; null while it is still running. */
+  /** When the sweep finished, in epoch milliseconds. Null while it is running. */
   finishedAt: number | null;
   checked: number;
   scanned: number;
@@ -49,15 +57,6 @@ const EMPTY: ReconcileJobProgress = {
   checked: 0, scanned: 0, added: 0, moved: 0, revived: 0, missing: 0, changed: 0,
 };
 
-/**
- * Drives the reconciliation sweep: enqueues a job per indexing root and reports
- * progress plus the last completed run.
- *
- * The "last run" summary is read straight off the completed BullMQ job rather
- * than stored in Postgres — the job already holds the exact counters the sweep
- * returned, and `enqueueReconcile` retains completed jobs for weeks precisely so
- * this read works after a restart. One less table to keep in sync.
- */
 export function createReconcileService (deps: ReconcileServiceDeps) {
   const startReconcile = async (
     userId: string,
@@ -97,8 +96,8 @@ export function createReconcileService (deps: ReconcileServiceDeps) {
     const state = await job.getState();
     const live = (typeof job.progress === "object" ? job.progress : null) as ReconcileJobProgress | null;
     const final = (job.returnvalue ?? null) as ReconcileJobProgress | null;
-    // Final counters win: progress stops updating at the last tick, so a
-    // completed job's returnvalue is the only place the true totals live.
+    // Progress stops updating at the sweep's last tick. The return value holds
+    // the final counters.
     const counts = final ?? live ?? EMPTY;
 
     return {
@@ -119,9 +118,9 @@ export function createReconcileService (deps: ReconcileServiceDeps) {
   };
 
   /**
-   * What the settings card needs in one round-trip: the sweep running right now
-   * (so it can show live progress and re-attach after a reload) and the most
-   * recent finished one (so it can show a summary when nothing is running).
+   * Returns the sweep running now, and the most recent finished one. The
+   * finished sweep is available only while `enqueueReconcile` still retains its
+   * completed job.
    */
   const getState = async (
     userId: string,

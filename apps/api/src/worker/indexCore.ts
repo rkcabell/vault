@@ -1,36 +1,25 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import type { MediaRepository } from "../repositories/mediaRepository.js";
-import type { Queue } from "bullmq";
-import type { ThumbJob } from "../queues/enqueueThumbnail.js";
-import type { OcrJobData } from "../services/ocrProcessingService.js";
-import { enqueueThumbBulk } from "../queues/enqueueThumbnail.js";
-import { enqueueOcrBulk } from "../queues/enqueueOcr.js";
-import { enqueueHashBulk, type EnqueueHashItem, type HashJobData } from "../queues/enqueueHash.js";
 import { mimeFromExtension } from "../lib/media/mimeFromExtension.js";
 import { extOf } from "../lib/media/extensions.js";
 import { normalizeMimeType } from "../lib/tags/mimeTypeTag.js";
-import { evaluateRules, type TagRuleInput } from "../lib/tags/rules/evaluateRules.js";
+import { evaluateRules, type IngestSource, type TagRuleInput } from "../lib/tags/rules/evaluateRules.js";
 import { canonicalizeAbsPath } from "../lib/media/indexRoots.js";
 import { deriveTitle } from "../lib/media/deriveTitle.js";
 import { ocrSupported, thumbnailSupported, exceedsThumbnailSize } from "../lib/media/processingSupport.js";
+import { isDedupStrictOrder } from "../lib/config/dedup.js";
 
-// Re-exported for existing consumers that imported it from here before it moved
-// to the shared processingSupport module.
+// Re-exported: callers import this from here as well as from processingSupport.
 export { ocrSupported } from "../lib/media/processingSupport.js";
 
 /** Dependencies shared by the one-shot scan worker and the live watcher. */
 export type IndexCoreDeps = {
   mediaRepository: MediaRepository;
-  thumbQueue: Queue<ThumbJob>;
-  ocrQueue: Queue<OcrJobData>;
-  /** Stream-hash queue for items the thumb worker won't hash (non-thumbnailable
-   *  or too-large) — keeps contentHash coverage complete for dedup. Optional so
-   *  existing tests/fakes keep working; absent = those items stay unhashed
-   *  until a dedup scan. */
-  hashQueue?: Queue<HashJobData>;
   /** The user's enabled Tag Organizer rules (see lib/tags/rules/evaluateRules). */
   listTagRules: (userId: string) => Promise<TagRuleInput[]>;
+  /** The user's `autoTagOnIngest` preference. Absent, tagging is enabled. */
+  getAutoTagOnIngest?: (userId: string) => Promise<boolean>;
   /** Publishes a media event so open library views pick up newly indexed items. */
   publishJobUpdate?: (update: { userId: string; mediaId: string; field: string; value: string }) => void;
 };
@@ -55,8 +44,9 @@ export type DerivationPlan = {
   thumb: boolean;
   /** Enqueue a stream-hash job instead — the thumb job won't run to do it. */
   hash: boolean;
-  /** Enqueue OCR / text extraction. */
-  ocr: boolean;
+  /** Enqueue tier-1 text extraction (`text_queue`). Never Tesseract — see
+   *  enqueueText.ts for why the two tiers are separate queues. */
+  text: boolean;
   /** Type the thumbnailer cannot render at all. */
   thumbUnsupported: boolean;
   /** Renderable type, but too big to buffer. */
@@ -64,39 +54,49 @@ export type DerivationPlan = {
 };
 
 /**
- * Decide what work a file needs, from its type and size alone.
+ * Decides what derived work a file needs, from its type and size alone. The same
+ * plan serves first-time indexing and the reconcile sweep's changed-bytes path,
+ * so a re-derivation queues what a first index would have.
  *
- * Shared by initial indexing and by the reconcile sweep's "bytes changed under
- * us" path so a re-derivation queues exactly what a first index would have. The
- * hash fallback matters: the thumb worker hashes everything it processes, so
- * anything that skips the thumb job needs an explicit hash job or its
- * `contentHash` — and therefore dedup — silently stays empty.
+ * The hash fallback matters: the thumbnail worker hashes everything it renders,
+ * so anything that skips a thumbnail job needs an explicit hash job. Without one
+ * its `contentHash` stays empty and dedup never sees it.
+ *
+ * `hashAll` forces an explicit hash job even for a renderable row, so a claim
+ * gated on `hashState <> 'PENDING'` waits for the hash rather than racing it. It
+ * costs a second read of every renderable file.
  */
-export function planDerivations (mimeType: string, sizeBytes: number): DerivationPlan {
+export function planDerivations (mimeType: string, sizeBytes: number, opts?: { hashAll?: boolean }): DerivationPlan {
   const renderable = thumbnailSupported(mimeType);
   const tooLarge = renderable && exceedsThumbnailSize(sizeBytes);
   return {
     thumb: renderable && !tooLarge,
-    hash: !renderable || tooLarge,
-    ocr: ocrSupported(mimeType),
+    hash: opts?.hashAll ? true : (!renderable || tooLarge),
+    text: ocrSupported(mimeType),
     thumbUnsupported: !renderable,
     thumbTooLarge: tooLarge,
   };
 }
 
 /**
- * Index a set of discovered files: skip already-indexed paths, create Media rows
- * that reference each file in place (sourcePath set, sourceState READY), and
- * enqueue thumbnail + OCR work. Returns how many were newly indexed vs skipped.
+ * Indexes a set of discovered files: skips paths that already have a row, creates
+ * one for each that does not, and marks the rows no derivative can be made for.
+ * Returns how many were newly indexed, and how many were skipped.
  *
- * Shared by the bulk scan (batches of {@link DiscoveredFile}) and the live
- * watcher (single-element batches), so both produce identical rows + jobs.
+ * It queues no thumbnail or text work. Rows are written at PENDING, and the
+ * derivative feeder takes them from there.
+ *
+ * The bulk scan, the live watcher and ingest all come through here, so a row
+ * looks the same whichever found the file.
  */
 export async function indexFiles (
   deps: IndexCoreDeps,
   userId: string,
   files: DiscoveredFile[],
   allowedRoots: string[],
+  /** `source:` axis for the rows created here. Ingest passes "upload" so a file
+   *  sent over HTTP stays distinguishable from one found by a scan. */
+  opts?: { ingestSource?: IngestSource },
 ): Promise<{ indexed: number; skipped: number }> {
   if (files.length === 0) return { indexed: 0, skipped: 0 };
 
@@ -110,10 +110,10 @@ export async function indexFiles (
     files.map(f => f.absPath),
   );
 
-  // Rows indexed before the fileDate column existed have it NULL and are
-  // otherwise skipped forever by re-scans. The walk has a fresh stat in hand,
-  // so heal them here; only NULL columns are written (mtime is the
-  // lowest-precedence date source and must not clobber an EXIF/PDF date).
+  // A row indexed before the fileDate column existed has none, and a re-scan
+  // skips it otherwise. The walk holds a fresh stat, so it fills them in here.
+  // Only a null column is written: a modified time must not overwrite a date
+  // read from the file itself.
   const backfillItems = files
     .filter(f => existing.has(f.absPath) && f.mtimeMs && f.mtimeMs > 0)
     .map(f => ({ sourcePath: f.absPath, fileDate: new Date(f.mtimeMs!) }));
@@ -125,41 +125,45 @@ export async function indexFiles (
   if (fresh.length === 0) return { indexed: 0, skipped: files.length };
 
   const rows: Prisma.MediaCreateManyInput[] = [];
-  // Indexed files carry only rule-evaluated auto tags (type:, folder:, year:, …);
-  // there is no user input at this ingest site.
-  const rules = await deps.listTagRules(userId);
+  // An indexed file carries only the tags the rules produce. Nobody types
+  // anything here, so with autoTagOnIngest off a row arrives with no tags at
+  // all, not even the `source:` axis.
+  const autoTag = (await deps.getAutoTagOnIngest?.(userId)) ?? true;
+  const rules = autoTag ? await deps.listTagRules(userId) : [];
   const autoTagsByItem: string[][] = [];
-  const thumbItems: { mediaId: string; userId: string; storageKey: string; sourcePath: string; allowedRoots: string[] }[] = [];
-  const ocrItems: { mediaId: string; userId: string; storageKey: string; allowedRoots: string[] }[] = [];
-  const hashItems: EnqueueHashItem[] = [];
   const textUnsupportedIds: string[] = [];
   const thumbUnsupportedIds: string[] = [];
   const thumbTooLargeIds: string[] = [];
+  const hashAll = isDedupStrictOrder();
 
   for (const file of fresh) {
     const id = randomUUID();
     const mimeType = normalizeMimeType(mimeFromExtension(file.name), file.name);
-    // mtime is the best date known at index time; the thumb worker upgrades it
-    // to the embedded EXIF/PDF date after metadata extraction.
+    // The modified time is the best date known here. The thumbnail worker
+    // replaces it with the date inside the file once it reads the metadata.
     const fileDate = file.mtimeMs && file.mtimeMs > 0 ? new Date(file.mtimeMs) : null;
-    const autoTags = evaluateRules(rules, {
-      filename: file.name,
-      mimeType,
-      sizeBytes: file.size,
-      sourcePath: file.absPath,
-      indexRoots: allowedRoots,
-      fileDate,
-      ingest: "index",
-    });
-    // Sentinel storageKey: in-place items never store source bytes here (source
-    // is read from sourcePath), but the column is NOT NULL and a real-looking
-    // key degrades to a clean 404 instead of a 500 if ever read unbranched.
-    const storageKey = `external/${userId}/${id}/${file.name}`;
-
+    const autoTags = autoTag
+      ? evaluateRules(rules, {
+          filename: file.name,
+          mimeType,
+          sizeBytes: file.size,
+          sourcePath: file.absPath,
+          indexRoots: allowedRoots,
+          fileDate,
+          ingest: opts?.ingestSource ?? "index",
+        })
+      : [];
+    // Nothing is queued here: rows are written straight at the state the feeder
+    // claims from. What matters is marking the rows that must never be claimed.
+    // A type that can never render, left at PENDING, would be fed again and
+    // again into a job that can only fail.
+    const plan = planDerivations(mimeType, file.size, { hashAll });
     rows.push({
       id,
       userId,
-      storageKey,
+      // An item indexed in place reads from sourcePath, never from managed
+      // storage. Written out rather than left to Prisma's omit-means-null.
+      storageKey: null,
       sourcePath: file.absPath,
       filename: file.name,
       mimeType,
@@ -167,38 +171,31 @@ export async function indexFiles (
       title: deriveTitle(file.name),
       tags: autoTags,
       fileDate,
-      // Kept separate from fileDate, which the thumb worker upgrades to the
-      // embedded EXIF/PDF date. Move detection needs the untouched mtime.
+      // Kept apart from fileDate, which the thumbnail worker later replaces with
+      // the date inside the file. Move detection needs the untouched one.
       sourceMtimeMs: file.mtimeMs && file.mtimeMs > 0 ? file.mtimeMs : null,
       sourceState: "READY", // the original already exists on disk
       thumbState: "PENDING",
       textState: "PENDING",
+      // UNSUPPORTED means no job is needed: the thumbnail worker hashes a
+      // renderable row while rendering it.
+      hashState: plan.hash ? "PENDING" : "UNSUPPORTED",
     });
     autoTagsByItem.push(autoTags);
 
-    // Thumbnail: supported type AND small enough to load into memory. Too-large
-    // files are marked UNSUPPORTED rather than enqueued — the worker can't buffer a
-    // >2 GiB source, so the job would only fail.
-    const plan = planDerivations(mimeType, file.size);
-    if (plan.thumb) thumbItems.push({ mediaId: id, userId, storageKey, sourcePath: file.absPath, allowedRoots });
-    if (plan.hash) hashItems.push({ mediaId: id, userId, storageKey, sourcePath: file.absPath, allowedRoots });
     if (plan.thumbUnsupported) thumbUnsupportedIds.push(id);
     if (plan.thumbTooLarge) thumbTooLargeIds.push(id);
-    if (plan.ocr) ocrItems.push({ mediaId: id, userId, storageKey, allowedRoots });
-    else textUnsupportedIds.push(id);
+    if (!plan.text) textUnsupportedIds.push(id);
   }
 
   // skipDuplicates tolerates a race on the (userId, sourcePath) unique index.
   await deps.mediaRepository.createBatch(rows, { skipDuplicates: true, autoTagsByItem });
 
-  // New rows exist — tell open library views (the client debounces its refetch,
-  // so per-batch granularity is fine even for large walks).
+  // Open library views learn of the new rows from this. The client debounces
+  // its refetch, so one event per batch is enough even for a large walk.
   deps.publishJobUpdate?.({ userId, mediaId: "*", field: "mediaCreated", value: String(rows.length) });
 
   await Promise.all([
-    thumbItems.length > 0 ? enqueueThumbBulk(deps.thumbQueue, thumbItems) : Promise.resolve(),
-    ocrItems.length > 0 ? enqueueOcrBulk(deps.ocrQueue, ocrItems) : Promise.resolve(),
-    hashItems.length > 0 && deps.hashQueue ? enqueueHashBulk(deps.hashQueue, hashItems) : Promise.resolve(),
     textUnsupportedIds.length > 0
       ? deps.mediaRepository.markTextUnsupported(textUnsupportedIds)
       : Promise.resolve(),

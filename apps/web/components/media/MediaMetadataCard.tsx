@@ -151,8 +151,8 @@ export function MediaMetadataCard (props: {
   addRow(generalRows, 'Type', media.mimeType, 'break-all')
   const ext = media.filename?.includes('.') ? media.filename.split('.').pop()?.toUpperCase() : null
   addRow(generalRows, 'Extension', ext ? `.${ext}` : null)
-  addRow(generalRows, 'Uploaded', formatDateTime(media.createdAt))
-  addRow(generalRows, 'Updated', formatDateTime(media.updatedAt))
+  addRow(generalRows, 'Uploaded', formatNumericDateTime(media.createdAt))
+  addRow(generalRows, 'Updated', formatNumericDateTime(media.updatedAt))
 
   if (generalRows.length) {
     sections.push({ title: 'General', rows: generalRows })
@@ -175,8 +175,8 @@ export function MediaMetadataCard (props: {
     addRow(pdfRows, 'PDF version', pdf.pdfVersion)
     addRow(pdfRows, 'Page count', formatNumber(pdf.pageCount))
     addRow(pdfRows, 'Encrypted', formatBool(pdf.encrypted))
-    addRow(pdfRows, 'Created', formatDateTime(pdf.createdAt))
-    addRow(pdfRows, 'Modified', formatDateTime(pdf.modifiedAt))
+    addRow(pdfRows, 'Created', formatNumericDateTime(pdf.createdAt))
+    addRow(pdfRows, 'Modified', formatNumericDateTime(pdf.modifiedAt))
   }
   if (pdfRows.length) {
     sections.push({ title: 'Document', rows: pdfRows })
@@ -258,7 +258,7 @@ function buildImageRows (image: ImageMetadata, showGps: boolean, onToggleGps: ()
       ? formatAspectRatio(image.width, image.height)
       : null
 
-  addRow(rows, 'Captured', formatDateTime(image.capturedAt))
+  addRow(rows, 'Captured', formatNumericDateTime(image.capturedAt))
   addRow(rows, 'Dimensions', dimensions)
   addRow(rows, 'Aspect ratio', aspectRatio)
   addRow(rows, 'Bit depth', image.bitDepth ? `${image.bitDepth}-bit` : null)
@@ -305,7 +305,7 @@ function formatNumber (value?: number | null) {
   return new Intl.NumberFormat().format(value)
 }
 
-function formatDateTime (value?: string | null) {
+function formatNumericDateTime (value?: string | null) {
   if (!value) return null
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value

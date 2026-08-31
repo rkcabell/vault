@@ -1,4 +1,6 @@
-// File: apps/api/src/utils/authGuard.ts
+/**
+ * Rejects a request that is not signed in, and records who made it.
+ */
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 declare module "fastify" {
@@ -7,13 +9,14 @@ declare module "fastify" {
   }
 }
 
+// Reads one cookie, falling back to parsing the header directly when the cookie
+// plugin has not filled in `req.cookies`.
 function readCookie (req: FastifyRequest, name: string): string | null {
   const cookies = req.cookies;
   if (cookies && typeof cookies[name] === "string") {
     return cookies[name];
   }
 
-  // Fallback: parse cookie header manually
   const raw = req.headers.cookie ?? "";
   if (!raw) return null;
 
@@ -35,6 +38,7 @@ function readCookie (req: FastifyRequest, name: string): string | null {
   return null;
 }
 
+// True if `value` is a decoded token carrying an account id.
 function isJwtPayload (value: unknown): value is { sub: string } {
   return (
     typeof value === "object" &&
@@ -44,13 +48,19 @@ function isJwtPayload (value: unknown): value is { sub: string } {
   );
 }
 
+/**
+ * Rejects the request with 401 unless it carries a valid access token.
+ *
+ * A request that passes has `req.userId` set to the signed-in account, which is
+ * what every route reads to scope its work. An `Authorization` header is
+ * preferred over the cookie, so a client with no cookie store can still be
+ * recognized.
+ */
 export async function requireAuth (req: FastifyRequest, reply: FastifyReply) {
   const hdr = req.headers.authorization ?? "";
 
-  // Prefer Bearer token if present
   let token: string | null = hdr.startsWith("Bearer ") ? hdr.slice(7) : null;
 
-  // Otherwise fall back to cookie auth
   if (!token) token = readCookie(req, "access_token");
 
   if (!token) return reply.unauthorized();

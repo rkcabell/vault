@@ -71,10 +71,12 @@ export function getStatusChip (args: {
   isRunning: boolean
   canShowViewer: boolean
   isUnsupported?: boolean
+  isQueued?: boolean
 }) {
-  const { isErrorState, isRunning, canShowViewer, isUnsupported } = args
+  const { isErrorState, isRunning, canShowViewer, isUnsupported, isQueued } = args
   if (isUnsupported) return { label: 'Not supported', variant: 'secondary' as const }
   if (isErrorState) return { label: 'Failed', variant: 'destructive' as const }
+  if (isQueued) return { label: 'Queued', variant: 'secondary' as const }
   if (isRunning) return { label: 'Running', variant: 'secondary' as const }
   if (canShowViewer) return { label: 'Ready', variant: 'default' as const }
   return { label: 'No text', variant: 'secondary' as const }

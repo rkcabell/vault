@@ -1,3 +1,7 @@
+/**
+ * Hashes and checks account passwords with Argon2, behind an interface so
+ * services can be tested without running the real hash.
+ */
 import argon2 from "argon2";
 
 export interface PasswordHasher {

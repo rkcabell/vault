@@ -1,3 +1,7 @@
+/**
+ * Applies a user's tagging rules to one item and produces the tags to store
+ * on it.
+ */
 import { MATCHER_SCHEMAS, type TagRuleSource } from "@vault/types";
 import { normalizeTag, TagValidationError } from "../normalizeTags.js";
 import { buildMimeTypeTag } from "../mimeTypeTag.js";
@@ -7,10 +11,11 @@ import { extOf } from "../../media/extensions.js";
 export type IngestSource = "upload" | "index" | "unpacked";
 
 /**
- * The deterministic facts a rule can read about one media item. Call sites pass
- * whatever they know at that moment: upload knows filename/MIME/size, indexing
- * additionally knows sourcePath (+ roots) and mtime, the retroactive organize
- * worker knows everything including extracted EXIF/PDF dates.
+ * What a rule is allowed to know about one item.
+ *
+ * A caller supplies only the fields available where it runs. Indexing knows the
+ * path on disk and the roots it sits under; the organize worker additionally
+ * knows dates read out of the file.
  */
 export type MediaFacts = {
   filename: string;
@@ -20,12 +25,12 @@ export type MediaFacts = {
   sourcePath?: string | null;
   /** Allowed index roots; folder segments are computed relative to the containing root. */
   indexRoots?: string[];
-  /** Best-known file date (EXIF capturedAt → PDF createdAt → fs mtime). */
+  /** The date the file itself carries. See `resolveFileDate` for which dates count. */
   fileDate?: Date | null;
   ingest?: IngestSource;
 };
 
-/** The subset of a TagRule row the evaluator needs (Prisma-independent). */
+/** The parts of a stored tagging rule the evaluator reads, without the Prisma row type. */
 export type TagRuleInput = {
   source: TagRuleSource;
   matcher: unknown;
@@ -34,8 +39,8 @@ export type TagRuleInput = {
   enabled: boolean;
 };
 
-/** Strip characters a tag value may not contain (mirrors buildMimeTypeTag's
- *  sanitization): lowercase, whitespace/underscores → dash, drop the rest. */
+// Returns `raw` reduced to the characters a tag value may contain. Kept in
+// step with buildMimeTypeTag's own sanitizing.
 function sanitizeValue (raw: string): string {
   return raw
     .toLowerCase()
@@ -46,16 +51,17 @@ function sanitizeValue (raw: string): string {
     .replace(/-+$/, "");
 }
 
-/** Path with forward slashes and no trailing slash, for prefix comparison. */
+// Returns `p` with forward slashes and no trailing slash, so two paths can be
+// compared by prefix.
 function normPath (p: string): string {
   return p.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
 /**
- * Directory segments of `sourcePath` beneath its containing index root,
- * excluding the filename. Comparison is case-insensitive (NTFS roots and walked
- * paths can differ in case; roots come from the same canonical source, so a
- * false cross-case match is not a real concern).
+ * Returns the folder names between `sourcePath`'s index root and its filename.
+ *
+ * Matching a path to its root ignores case, because a Windows root and a walked
+ * path may spell the same folder differently.
  */
 export function folderSegments (sourcePath: string, indexRoots: string[]): string[] {
   const src = normPath(sourcePath);
@@ -73,8 +79,9 @@ export function folderSegments (sourcePath: string, indexRoots: string[]): strin
   return [];
 }
 
-/** Values a rule computed; each becomes one tag via the template. `null` in the
- *  list means "matched, but no capture" (usable only by placeholder-free templates). */
+// Returns one value per tag the rule produces for this item, or an empty list
+// when the rule does not apply. A null entry means the rule matched without
+// capturing anything, which only a template with no placeholder can use.
 function ruleValues (rule: TagRuleInput, facts: MediaFacts): (string | null)[] {
   const parsed = MATCHER_SCHEMAS[rule.source].safeParse(rule.matcher ?? {});
   if (!parsed.success) return []; // stored matcher no longer valid — skip, never throw
@@ -133,15 +140,14 @@ function ruleValues (rule: TagRuleInput, facts: MediaFacts): (string | null)[] {
 }
 
 /**
- * Evaluate every enabled rule against one media item's facts, returning the
- * normalized, deduplicated tags to apply. Pure: no I/O, no clock, no Prisma —
- * unit-testable and safe to call from any ingest site or worker.
+ * Returns the tags to apply to one item, from every rule the user has enabled.
  *
- * Always includes the built-in `source:upload|index|unpacked` axis when the
- * ingest fact is present (it needs no configuration and every retrieval flow
- * benefits from it). Rules that error (bad template, invalid value chars,
- * over-length tag) are skipped silently — one broken rule must never block an
- * upload or an index batch.
+ * Results are normalized and deduplicated, and rules run in priority order.
+ * The built-in `source:` axis is added whenever the caller supplied an ingest
+ * fact, without a rule of its own.
+ *
+ * A rule that produces an unusable tag is skipped rather than raised, so one
+ * bad rule cannot stop an index batch part-way through.
  */
 export function evaluateRules (rules: TagRuleInput[], facts: MediaFacts): string[] {
   const out: string[] = [];

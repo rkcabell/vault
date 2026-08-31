@@ -18,8 +18,6 @@ function makeDeps (existingPaths: string[] = []) {
   const unsupported: string[] = [];
   const thumbUnsupported: string[] = [];
   const thumbTooLarge: string[] = [];
-  const thumbCalls: unknown[][] = [];
-  const ocrCalls: unknown[][] = [];
   const backfilled: { sourcePath: string; fileDate: Date }[] = [];
 
   const mediaRepository = {
@@ -43,22 +41,17 @@ function makeDeps (existingPaths: string[] = []) {
 
   } as any;
 
-
-  const thumbQueue = { addBulk: async (jobs: unknown[]) => { thumbCalls.push(jobs); return []; } } as any;
-
-  const ocrQueue = { addBulk: async (jobs: unknown[]) => { ocrCalls.push(jobs); return []; } } as any;
-
   // No tag rules by default — rule evaluation itself is covered in evaluateRules.test.ts.
   const listTagRules = async () => [];
 
-  return { mediaRepository, thumbQueue, ocrQueue, listTagRules, created, unsupported, thumbUnsupported, thumbTooLarge, thumbCalls, ocrCalls, backfilled };
+  return { mediaRepository, listTagRules, created, unsupported, thumbUnsupported, thumbTooLarge, backfilled };
 }
 
 function makeJob (data: { userId: string; rootPath: string; recursive: boolean; ignoreHidden: boolean; allowedRoots?: string[]; blacklistExtensions?: string[]; excludeFolders?: string[]; skipNonContent?: boolean }) {
   return { data: { allowedRoots: [], ...data }, updateProgress: async () => {} } as any;
 }
 
-test("indexFiles: skips the thumbnail enqueue for files over 2 GiB, marks them too-large", async () => {
+test("indexFiles: marks files over 2 GiB too-large so the feeder never claims them", async () => {
   const deps = makeDeps();
   const GIB = 1024 * 1024 * 1024;
   const files = [
@@ -67,19 +60,77 @@ test("indexFiles: skips the thumbnail enqueue for files over 2 GiB, marks them t
   ];
 
   await indexFiles(
-    { mediaRepository: deps.mediaRepository, thumbQueue: deps.thumbQueue, ocrQueue: deps.ocrQueue, listTagRules: deps.listTagRules },
+    { mediaRepository: deps.mediaRepository, listTagRules: deps.listTagRules },
     "u1",
     files,
     ["/r"],
   );
 
-  const hugeId = (deps.created.find(r => r.filename === "huge.mp4") as { id: string }).id;
-  const smallId = (deps.created.find(r => r.filename === "small.jpg") as { id: string }).id;
+  const huge = deps.created.find(r => r.filename === "huge.mp4") as { id: string; thumbState: string; hashState: string };
+  const small = deps.created.find(r => r.filename === "small.jpg") as { id: string; thumbState: string; hashState: string };
 
-  // Oversize file: marked too-large, never enqueued.
-  assert.deepEqual(deps.thumbTooLarge, [hugeId]);
-  const enqueuedIds = deps.thumbCalls.flat().map((j: any) => j.data.mediaId);
-  assert.deepEqual(enqueuedIds, [smallId]);
+  // The oversize file is moved off PENDING, which is what takes it out of the
+  // feeder's claim set — a row the thumbnailer can never buffer must not be fed
+  // to it once a tick forever.
+  assert.deepEqual(deps.thumbTooLarge, [huge.id]);
+  // The small one is simply left at PENDING for the feeder to claim later.
+  assert.equal(small.thumbState, "PENDING");
+  // Too-large means the thumb worker will never run to hash it as a side
+  // effect, so it needs its own hash job; the small renderable one doesn't.
+  assert.equal(huge.hashState, "PENDING");
+  assert.equal(small.hashState, "UNSUPPORTED");
+});
+
+test("indexFiles: autoTagOnIngest off skips rule evaluation entirely", async () => {
+  const files = [{ absPath: "/r/a.pdf", name: "a.pdf", size: 100 }];
+  const run = async (getAutoTagOnIngest?: () => Promise<boolean>) => {
+    const deps = makeDeps();
+    let rulesFetched = 0;
+    await indexFiles(
+      {
+        mediaRepository: deps.mediaRepository,
+        listTagRules: async () => { rulesFetched += 1; return []; },
+        ...(getAutoTagOnIngest ? { getAutoTagOnIngest } : {}),
+      },
+      "u1",
+      files,
+      ["/r"],
+    );
+    return { tags: (deps.created[0] as { tags: string[] }).tags, rulesFetched };
+  };
+
+  // With zero rules configured evaluateRules still emits the source: axis, so
+  // "no tags at all" is what proves the gate ran ahead of the call rather than
+  // the rule set merely being empty.
+  assert.deepEqual((await run()).tags, ["source:index"], "absent dep means enabled");
+  const off = await run(async () => false);
+  assert.deepEqual(off.tags, []);
+  assert.equal(off.rulesFetched, 0, "no rules fetch when the preference is off");
+});
+
+test("indexFiles: enqueues no thumb, text, or hash work — the row at PENDING is the backlog", async () => {
+  const deps = makeDeps();
+  const files = [{ absPath: "/r/a.pdf", name: "a.pdf", size: 100 }];
+
+  await indexFiles(
+    { mediaRepository: deps.mediaRepository, listTagRules: deps.listTagRules },
+    "u1",
+    files,
+    ["/r"],
+  );
+
+  // Pushing here is what filled Redis with tens of thousands of undrainable jobs
+  // on a large library. The contract with the feeder is the row itself: PENDING
+  // state, no dispatch stamp.
+  const [row] = deps.created as unknown as { thumbState: string; textState: string; hashState: string; thumbQueuedAt?: unknown; textQueuedAt?: unknown; hashQueuedAt?: unknown }[];
+  assert.equal(row.thumbState, "PENDING");
+  assert.equal(row.textState, "PENDING");
+  assert.equal(row.thumbQueuedAt, undefined, "a fresh row must look un-dispatched to the feeder");
+  assert.equal(row.textQueuedAt, undefined);
+  // Renderable and not too large: the thumb worker hashes it inline, so this
+  // row must never enter the hash feeder's claim (see hashState in schema.prisma).
+  assert.equal(row.hashState, "UNSUPPORTED");
+  assert.equal(row.hashQueuedAt, undefined);
 });
 
 let base: string;
@@ -107,10 +158,12 @@ test("recursive scan indexes all non-hidden files and marks unsupported text", a
   assert.equal((result as { indexed: number }).indexed, 4);
 
   // Every row references its source in place and is marked source-ready.
+  // storageKey stays null — in-place rows read from sourcePath, never from
+  // managed storage (media_source_xor).
   for (const row of deps.created) {
     assert.ok(row.sourcePath, "row should carry a sourcePath");
     assert.equal(row.sourceState, "READY");
-    assert.ok(String(row.storageKey).startsWith("external/u1/"));
+    assert.equal(row.storageKey, null);
   }
 
   // All 4 files are text-extractable (pdf/jpg/png OCR + txt direct read) → none unsupported.
@@ -118,11 +171,11 @@ test("recursive scan indexes all non-hidden files and marks unsupported text", a
   // text/plain is still not thumbnailable → exactly one thumb-unsupported id (c.txt).
   assert.equal(deps.thumbUnsupported.length, 1);
 
-  // Thumbnails for the 3 image/pdf files; text extraction enqueued for all 4 (incl. c.txt).
-  const thumbJobs = deps.thumbCalls.flat();
-  const ocrJobs = deps.ocrCalls.flat();
-  assert.equal(thumbJobs.length, 3);
-  assert.equal(ocrJobs.length, 4);
+  // All 4 rows are left at PENDING for the feeder — 3 of them will get a
+  // thumbnail, all 4 will get text extraction, but that is the feeder's call to
+  // make on its own schedule, not something the walk commits to Redis up front.
+  for (const row of deps.created) assert.equal(row.thumbState, "PENDING");
+  for (const row of deps.created) assert.equal(row.textState, "PENDING");
 });
 
 test("non-recursive scan ignores subfolders", async () => {
@@ -330,8 +383,6 @@ test("abort signalled before the first batch stops the walk (nothing indexed)", 
 
   assert.equal((result as { aborted?: boolean }).aborted, true);
   assert.equal(deps.created.length, 0, "no rows created once aborted");
-  assert.equal(deps.thumbCalls.flat().length, 0, "no thumb jobs enqueued");
-  assert.equal(deps.ocrCalls.flat().length, 0, "no ocr jobs enqueued");
 });
 
 test("abort mid-walk indexes what was already scanned, then stops", async () => {

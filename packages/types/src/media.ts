@@ -133,6 +133,8 @@ export const MediaDetailSchema = z.object({
   thumbState: MediaWorkerStateSchema,
   thumbError: z.string().nullable(),
   textState: MediaWorkerStateSchema,
+  /** Null while PENDING means still in the database backlog, not extracting. */
+  textQueuedAt: z.string().nullable().optional(),
   thumbnailKey: z.string().nullable(),
   hasText: z.boolean(),
   hasThumb: z.boolean(),
@@ -248,31 +250,18 @@ export const MediaDetailResponseSchema = z.object({
 export type MediaDetailResponse = z.infer<typeof MediaDetailResponseSchema>;
 
 // ---------------------------------------------------------------------------
-// Upload  (POST /media, POST /media/batch-init, POST /media/batch-finalize)
+// Ingest  (PUT /ingest/file/*)
 // ---------------------------------------------------------------------------
 
-export const InitUploadResponseSchema = z.object({
+export const IngestResultSchema = z.object({
   id: z.string(),
-  uploadUrl: z.string(),
-  storageKey: z.string(),
+  /** Name on disk — differs from the sent one when it collided. */
+  savedAs: z.string(),
+  renamed: z.boolean(),
+  sourcePath: z.string(),
+  sizeBytes: z.number(),
 });
-export type InitUploadResponse = z.infer<typeof InitUploadResponseSchema>;
-
-export const BatchInitItemSchema = z.object({
-  id: z.string(),
-  storageKey: z.string(),
-  putUrl: z.string(),
-});
-export const BatchInitResponseSchema = z.object({
-  items: z.array(BatchInitItemSchema),
-});
-export type BatchInitResponse = z.infer<typeof BatchInitResponseSchema>;
-
-export const FinalizeResponseSchema = z.object({
-  ok: z.boolean(),
-  count: z.number(),
-});
-export type FinalizeResponse = z.infer<typeof FinalizeResponseSchema>;
+export type IngestResult = z.infer<typeof IngestResultSchema>;
 
 // ---------------------------------------------------------------------------
 // Text chunk  (GET /media/:id/text)

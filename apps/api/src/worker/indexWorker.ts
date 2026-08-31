@@ -9,6 +9,11 @@ import {
   indexFiles,
 } from "./indexCore.js";
 
+/**
+ * Runs one index scan: walks a root, and creates a row for each file it finds
+ * that has none. Progress and an abort check are published as it goes.
+ */
+
 type IndexLogger = {
   info: (obj: object, msg: string) => void;
   warn: (obj: object, msg: string) => void;
@@ -18,16 +23,15 @@ type IndexLogger = {
 type IndexWorkerDeps = IndexCoreDeps & {
   logger: IndexLogger;
   /**
-   * Reads the current abort epoch (see lib/media/indexAbort). The walk captures
-   * it once at start and re-checks between batches; if it advances, a dev abort
-   * was requested and the walk stops enqueuing. Defaults to "never abort".
+   * Reads the current abort epoch. The walk captures it at start and re-reads it
+   * between batches; a higher value means an abort was requested, and the walk
+   * stops. Absent, the walk never aborts.
    */
   readAbortEpoch?: () => Promise<number>;
-  /** Override the batch size (tests use a small value to exercise mid-walk abort). */
   batchSize?: number;
 };
 
-/** How many discovered files to insert + enqueue per batch. */
+/** How many discovered files are written to the database at a time. */
 const BATCH_SIZE = 200;
 
 export function createIndexProcessor (deps: IndexWorkerDeps): Processor<IndexJobData> {
@@ -46,8 +50,8 @@ export function createIndexProcessor (deps: IndexWorkerDeps): Processor<IndexJob
 
     const batchSize = deps.batchSize ?? BATCH_SIZE;
     const readAbortEpoch = deps.readAbortEpoch ?? (async () => 0);
-    // Capture the epoch at start; a later bump means this walk must stop. Reading
-    // it between batches (not per file) keeps the Redis hit to one per batch.
+    // The epoch is captured at start; a later value means this walk must stop.
+    // Reading it per batch rather than per file keeps it to one Redis call.
     const startEpoch = await readAbortEpoch();
     const isAborted = async () => (await readAbortEpoch()) > startEpoch;
 
@@ -66,10 +70,9 @@ export function createIndexProcessor (deps: IndexWorkerDeps): Processor<IndexJob
       await job.updateProgress(progress);
     };
 
-    // Tick during the walk: publish scanned count + re-check abort on a ~250ms
-    // cadence, independent of batch boundaries. Without it, a sub-batch folder
-    // showed "scanned 0" for the whole scan and a deep walk ignored aborts until
-    // the next full batch.
+    // Publishes the scanned count and re-checks the abort about every 250 ms,
+    // independent of batch boundaries. A folder smaller than one batch would
+    // otherwise report nothing until it had finished.
     let lastTickAt = 0;
     let aborted = false;
     const tick = async (): Promise<boolean> => {
@@ -92,10 +95,10 @@ export function createIndexProcessor (deps: IndexWorkerDeps): Processor<IndexJob
         await flush();
       }
     }
-    // Final partial batch — skip it too if an abort landed during the walk.
+    // Final partial batch — skip it if an abort was requested during the walk.
     if (!aborted && (await isAborted())) aborted = true;
     if (!aborted) await flush();
-    progress.filtered = stats.filtered; // reconcile even when the last batch was empty (all-filtered scans)
+    progress.filtered = stats.filtered; // reconcile even when the last batch was empty
 
     if (aborted) {
       progress.aborted = true;

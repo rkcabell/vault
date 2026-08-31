@@ -31,6 +31,8 @@ async function buildApp(storage: StorageAdapter, driver = "fs") {
     NODE_ENV: "test",
   });
   (app as unknown as { decorate: (k: string, v: unknown) => void }).decorate("storage", storage);
+  // /fs/list and /fs/mkdir attach a limiter at registration time; no-op here.
+  (app as unknown as { decorate: (k: string, v: unknown) => void }).decorate("userRateLimit", () => async () => {});
   await app.register(serverRoutes);
   return app;
 }

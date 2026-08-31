@@ -1,22 +1,10 @@
-// Builds the data for the Explore storage treemap.
-//
-// A vault with tens of thousands of files can't be drawn as one-tile-per-file:
-// it's slow (tens of thousands of DOM nodes) and unreadable (every small file
-// is a sub-pixel sliver). But showing only the largest files paints a false
-// picture — "your vault is all big videos" — when by COUNT it may be mostly
-// small code/text files.
-//
-// So we return two kinds of tiles:
-//   1. top-N largest files, exact (weightBytes == sizeBytes).
-//   2. a stratified, byte-weighted random SAMPLE of the remaining "tail".
-//
-// Stratified: the tail is grouped by file-type bucket and sampled in proportion
-// to each bucket's file COUNT, so the type mix (code, images, docs…) is honest.
-//
-// Byte-weighted: each sampled tile's area is scaled so that, per bucket, the
-// sample's total area equals the bucket's true byte footprint. The individual
-// small tiles look bigger than they are (they're stand-ins), but the treemap as
-// a whole stays proportional to real storage — sum(weightBytes) == total bytes.
+/**
+ * Builds the tiles for the Explore storage treemap. A library of tens of
+ * thousands of files cannot be drawn one tile per file, and drawing only the
+ * largest would suggest a library of big videos when most of the files are
+ * small. So the result is the largest files exactly, plus a sample of the rest
+ * whose areas are scaled to match what those files really occupy.
+ */
 
 export type StorageBucket =
   | "pdf" | "image" | "document" | "spreadsheet" | "presentation"
@@ -46,8 +34,8 @@ export type StorageTreemap = {
   totalBytes: number;
 };
 
-// Extension → bucket. Mirrors the client's vizUtils TAG_BUCKET so the server's
-// stratification lines up with the legend the user sees.
+// Extension to bucket. It mirrors the client's TAG_BUCKET, so these categories
+// match the legend the user reads.
 const EXT_BUCKET: Record<string, StorageBucket> = {};
 const def = (b: StorageBucket, exts: string[]) => { for (const e of exts) EXT_BUCKET[e] = b; };
 def("pdf",          ["pdf"]);
@@ -89,11 +77,10 @@ function sampleK<T>(arr: T[], k: number, rng: () => number): T[] {
 }
 
 export type BuildTreemapOpts = {
-  /** Number of largest files shown exactly. */
   topN?: number;
   /** Total budget for tail-sample tiles, spread across buckets. */
   sampleN?: number;
-  /** Injectable RNG for deterministic tests. Defaults to Math.random. */
+  /** Defaults to Math.random. Tests pass one to make the sample repeatable. */
   rng?: () => number;
 };
 
@@ -129,16 +116,14 @@ export function buildStorageTreemap(
     }
 
     for (const arr of buckets.values()) {
-      // Sample count ∝ this bucket's share of the tail by file count.
+      // How many are sampled follows the bucket's share of the tail by count.
       const share = arr.length / tail.length;
       const s = Math.min(arr.length, Math.max(1, Math.round(sampleN * share)));
 
       const picked = sampleK(arr, s, rng);
       const bucketBytes = arr.reduce((sum, i) => sum + i.sizeBytes, 0);
       const pickedBytes = picked.reduce((sum, i) => sum + i.sizeBytes, 0);
-      // Scale the sample so its total area == the bucket's true bytes. Falls
-      // back to an even split if every picked file is zero-byte (shouldn't
-      // happen — we filtered sizeBytes>0 — but keeps the math total-safe).
+      // Scales the sample so its total area equals the bucket's true bytes.
       const scale = pickedBytes > 0 ? bucketBytes / pickedBytes : 0;
       const represents = Math.max(1, Math.round(arr.length / s));
 

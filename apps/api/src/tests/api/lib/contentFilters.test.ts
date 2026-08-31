@@ -59,14 +59,20 @@ test("isNonContentFile passes documents, images, media, and content-text", () =>
 });
 
 test("isJunkDir matches OS/system dirs, case-insensitively", () => {
-  assert.equal(isJunkDir("$RECYCLE.BIN"), true);
-  assert.equal(isJunkDir("System Volume Information"), true);
-  assert.equal(isJunkDir(".Trashes"), true);
+  for (const name of ["$RECYCLE.BIN", "System Volume Information", ".Trashes", "__MACOSX", ".Spotlight-V100", ".fseventsd", "lost+found"]) {
+    assert.equal(isJunkDir(name), true, name);
+  }
   assert.equal(isJunkDir("Documents"), false);
 });
 
+test("isJunkDir matches per-uid Linux trash by prefix", () => {
+  assert.equal(isJunkDir(".Trash-1000"), true);
+  assert.equal(isJunkDir(".trash-0"), true);
+  assert.equal(isJunkDir(".trashcan"), false);
+});
+
 test("isJunkFile matches OS metadata, temp, and backup artifacts", () => {
-  for (const name of ["Thumbs.db", "desktop.ini", ".DS_Store", "~$report.docx", "._foo", "draft.tmp", "movie.crdownload", "notes.txt~", ".main.swp"]) {
+  for (const name of ["Thumbs.db", "desktop.ini", ".DS_Store", "~$report.docx", "._foo", "draft.tmp", "movie.crdownload", "notes.txt~", ".main.swp", "backup.zip.driveupload", "video.mp4.opdownload"]) {
     assert.equal(isJunkFile(name), true, name);
   }
 });

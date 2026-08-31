@@ -1,9 +1,17 @@
+/**
+ * Describes a request to scan a folder for files, and hands it to the worker
+ * that does the scanning.
+ */
 import type { Queue } from "bullmq";
 
 /**
- * A request to scan a server-side directory and index the files it contains in
- * place (no copy). The walk + row creation runs in the worker so a large NAS
- * library never blocks the HTTP request.
+ * A request to add the files in one folder to the library, leaving them where
+ * they are.
+ *
+ * Everything the scan is allowed to do is fixed when the job is queued, so a
+ * preference changed mid-scan does not alter a run already under way. Walking
+ * the folder happens in the worker, so a large library does not hold up the
+ * request that started it.
  */
 export type IndexJobData = {
   userId: string;
@@ -13,13 +21,13 @@ export type IndexJobData = {
   recursive: boolean;
   /** Skip dotfiles (.immich, .DS_Store, …) — mirrors the ignoreHiddenFiles preference. */
   ignoreHidden: boolean;
-  /** Snapshotted from user preferences at enqueue time; worker validates rootPath against these. */
+  /** The folders the user has permitted scanning. The worker checks `rootPath` against these again. */
   allowedRoots: string[];
-  /** Extensions (lowercase, no dot) to skip — snapshotted from preferences at enqueue time. */
+  /** Filename extensions to pass over, lowercase and without the dot. */
   blacklistExtensions?: string[];
-  /** Absolute folders (and their subtrees) to skip — snapshotted from preferences at enqueue time. */
+  /** Folders to pass over, along with everything inside them. */
   excludeFolders?: string[];
-  /** Skip build/dependency dirs + non-content file types — snapshotted from preferences at enqueue time. */
+  /** Pass over build and dependency folders, and files that hold no readable content. */
   skipNonContent?: boolean;
 };
 
@@ -28,8 +36,8 @@ export type IndexJobProgress = {
   scanned: number;
   indexed: number;
   skipped: number;
-  /** Files passed over during the walk (junk dir/file, zero-byte, blacklist, non-content).
-   *  Distinct from `skipped`, which counts already-indexed paths the walk did yield. */
+  /** Files the walk declined to offer at all, such as junk folders, empty files and
+   *  blacklisted types. A file already in the library counts under `skipped` instead. */
   filtered: number;
   /** True when the walk was stopped early by a dev abort (see lib/media/indexAbort). */
   aborted?: boolean;
@@ -41,10 +49,9 @@ export async function enqueueIndex (queue: Queue<IndexJobData>, job: IndexJobDat
   // One in-flight scan per (user, root): the jobId dedupes repeated submits.
   const jobId = `index-${job.userId}-${Buffer.from(job.rootPath).toString("base64url")}`;
 
-  // BullMQ keeps the job key in Redis for the full retention window even after
-  // completion or failure (removeOnComplete/Fail: { age }). Within that window,
-  // queue.add with the same jobId is a no-op — the worker never re-runs. Remove
-  // terminal-state jobs explicitly so the user can re-trigger a scan.
+  // BullMQ keeps a finished job's key in Redis for its full retention window,
+  // and adding the same id again during that window does nothing at all. Delete
+  // a finished job first, or the user cannot start the same scan twice.
   const existing = await queue.getJob(jobId);
   if (existing) {
     const state = await existing.getState();

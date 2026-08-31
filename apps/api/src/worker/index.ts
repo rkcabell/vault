@@ -1,7 +1,14 @@
+/**
+ * Entry point for the combined worker, which runs every queue in one process.
+ * The split Docker deployment runs text, OCR and thumbnails as their own
+ * containers instead, so the concurrencies here are lower: in this process they
+ * add up rather than sitting side by side.
+ */
+
 import "dotenv/config";
 
 import path from "node:path";
-import { Queue, Worker } from "bullmq";
+import { Queue, Worker, type JobsOptions } from "bullmq";
 import IORedis from "ioredis";
 
 import { prisma } from "@vault/db";
@@ -14,9 +21,12 @@ import { createDeleteProcessor } from "./deleteWorker.js";
 import { createOrganizeProcessor } from "./organizeWorker.js";
 import { createHashProcessor } from "./hashWorker.js";
 import { createIndexWatcher } from "./indexWatcher.js";
+import { configureSharp } from "./configureSharp.js";
+import { readLowMemoryPreference } from "./workerPrefs.js";
 import { createMediaActionsService } from "../services/media/mediaActionsService.js";
 import { readIndexAbortEpoch } from "../lib/media/indexAbort.js";
 import { readDeleteAbortEpoch } from "../lib/media/deleteAbort.js";
+import { readReconcileAbortEpoch } from "../lib/media/reconcileAbort.js";
 import { enqueueReconcile, reconcileJobId } from "../queues/enqueueReconcile.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
@@ -27,6 +37,7 @@ import { PreferencesRepository } from "../repositories/preferencesRepository.js"
 import { PreferencesService } from "../services/preferencesService.js";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
+import { DEFAULT_PREFERENCES } from "@vault/types";
 import { TextJobError } from "../lib/text/processTextJob.js";
 import { markStalledJobs } from "../services/stallDetectionService.js";
 import { createWorkerStorage, workerBucket, workerAllowedRoots } from "./storageFromEnv.js";
@@ -42,11 +53,12 @@ import type { OrganizeJobData } from "../queues/enqueueOrganize.js";
 import { ORGANIZE_QUEUE } from "../queues/enqueueOrganize.js";
 import type { HashJobData } from "../queues/enqueueHash.js";
 import { HASH_QUEUE } from "../queues/enqueueHash.js";
+import { TEXT_QUEUE } from "../queues/enqueueText.js";
+import { OCR_QUEUE, enqueueOcrJob } from "../queues/enqueueOcr.js";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const BUCKET = workerBucket();
 
-const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
 const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
 const _UNPACK_QUEUE = UNPACK_QUEUE;
 const _INDEX_QUEUE = INDEX_QUEUE;
@@ -69,8 +81,8 @@ const INDEX_AUTO = process.env.INDEX_AUTO !== "false";
 const INDEX_RECONCILE_INTERVAL_MS = parseEnvNumber("INDEX_RECONCILE_INTERVAL_MS", 60 * 60 * 1000);
 // Reconcile every allowed root at boot. On by default, because boot is the one
 // moment we know the library may have drifted: the watcher sees nothing while
-// the process is down, so a start is exactly when "what changed while I was
-// away?" needs answering. Set INDEX_RECONCILE_ON_BOOT=false to opt out.
+// the process is down, so a start is when "what changed while I was away?"
+// needs answering. Set INDEX_RECONCILE_ON_BOOT=false to opt out.
 const INDEX_RECONCILE_ON_BOOT = process.env.INDEX_RECONCILE_ON_BOOT !== "false";
 // ...but skip the boot sweep for a root reconciled more recently than this. In
 // dev, tsx watch restarts the worker on every file save; without the cooldown
@@ -86,6 +98,31 @@ const MISSING_SWEEP_LIMIT = parseEnvNumber("MISSING_SWEEP_LIMIT", 500);
 async function main () {
   const logger = createLogger("worker");
   const connection = buildRedisConnection(REDIS_URL);
+
+  // Every queue below shares this one process, so the concurrencies compound
+  // rather than sitting side by side as they do in the split Docker containers.
+  // Defaults are therefore deliberately lower than ocr.ts / thumb.ts use — but
+  // they read the same env vars, so a deployment tunes one set of knobs whether
+  // it runs combined or split.
+  const lowMemory = process.env.LOW_MEMORY === "true" || process.env.LOW_MEMORY === "1"
+    || await readLowMemoryPreference(prisma);
+  // Halve everything rather than special-casing individual queues: memory
+  // pressure comes from the total number of concurrent subprocesses, not from
+  // any one queue's share of them.
+  const scale = (n: number) => (lowMemory ? Math.max(1, Math.floor(n / 2)) : n);
+  // Tier 1 is IO-bound and spawns nothing, so it gets the large number. Tier 2
+  // is one subprocess per slot and gets the small one. Splitting the queues is
+  // worth nothing unless each pool is sized for what it does.
+  const TEXT_CONCURRENCY = parseEnvNumber("TEXT_CONCURRENCY", scale(8));
+  const OCR_CONCURRENCY = parseEnvNumber("OCR_CONCURRENCY", scale(2));
+  const THUMB_CONCURRENCY = parseEnvNumber("THUMB_CONCURRENCY", scale(4));
+  const UNPACK_CONCURRENCY = parseEnvNumber("UNPACK_CONCURRENCY", scale(2));
+  const HASH_CONCURRENCY = parseEnvNumber("HASH_CONCURRENCY", scale(2));
+  if (lowMemory) logger.info({}, "low-memory mode: worker concurrencies halved");
+
+  // Runs before any Worker below starts pulling. BullMQ owns parallelism, and
+  // libvips must not also spread each pipeline across the cores.
+  await configureSharp(logger);
 
   // Dedicated publish-only client — does not block the BullMQ connection
   const publisher = new IORedis(REDIS_URL);
@@ -106,10 +143,16 @@ async function main () {
   const preferencesService = new PreferencesService(new PreferencesRepository(prisma));
   const tagRuleRepository = new TagRuleRepository(prisma);
   const listTagRules = (userId: string) => tagRuleRepository.listEnabled(userId);
+  // Every ingest site the worker owns (index scan, watcher, reconcile, unpack)
+  // reads this, which is what the "OnIngest" in the preference name asserts.
+  const getAutoTagOnIngest = async (userId: string) =>
+    (await preferencesService.getPreferences(userId)).autoTagOnIngest;
 
+  const textLogger = logger.child({ queue: TEXT_QUEUE, jobName: "text" });
   const ocrLogger = logger.child({ queue: OCR_QUEUE, jobName: "ocr" });
   const thumbLogger = logger.child({ queue: THUMB_QUEUE, jobName: "thumb" });
 
+  const textQueue = new Queue<OcrJobData>(TEXT_QUEUE, { connection });
   const ocrQueue = new Queue<OcrJobData>(OCR_QUEUE, { connection });
   const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, { connection });
   const indexQueue = new Queue<IndexJobData>(_INDEX_QUEUE, { connection });
@@ -119,22 +162,36 @@ async function main () {
 
   const allowedRoots = workerAllowedRoots();
 
+  // One processor drains both tiers; `forceOcr` in the job data decides which
+  // half of it runs. The handoff always targets ocrQueue, so a tier-1 job that
+  // meets a scan enqueues rather than blocking its slot on Tesseract.
+  const textProcessorDeps = {
+    mediaRepository,
+    documentRepository,
+    storage: storage,
+    bucket: BUCKET,
+    allowedRoots,
+    enqueueOcr: async (data: OcrJobData, opts?: JobsOptions) => enqueueOcrJob(ocrQueue, data, opts),
+    getOcrMode: async (userId?: string) =>
+      userId ? (await preferencesService.getPreferences(userId)).ocrMode : DEFAULT_PREFERENCES.ocrMode,
+    getOcrTimeoutCapMinutes: async (userId?: string) =>
+      userId ? (await preferencesService.getPreferences(userId)).ocrTimeoutCapMinutes : DEFAULT_PREFERENCES.ocrTimeoutCapMinutes,
+    publishJobUpdate,
+  };
+
+  const textWorker = new Worker<OcrJobData>(
+    TEXT_QUEUE,
+    createOcrProcessor({ ...textProcessorDeps, logger: textLogger, queueName: TEXT_QUEUE }),
+    // No lock extension: nothing here runs long enough to need it.
+    { connection, concurrency: TEXT_CONCURRENCY },
+  );
+
   const ocrWorker = new Worker<OcrJobData>(
     OCR_QUEUE,
-    createOcrProcessor({
-      mediaRepository,
-      documentRepository,
-      storage: storage,
-      bucket: BUCKET,
-      allowedRoots,
-      enqueueOcr: async (data, opts) => ocrQueue.add("ocr", data, opts),
-      logger: ocrLogger,
-      queueName: OCR_QUEUE,
-      publishJobUpdate,
-    }),
+    createOcrProcessor({ ...textProcessorDeps, logger: ocrLogger, queueName: OCR_QUEUE }),
     {
       connection,
-      concurrency: 4,
+      concurrency: OCR_CONCURRENCY,
       lockDuration: OCR_LOCK_DURATION_MS,
       lockRenewTime: OCR_LOCK_RENEW_MS,
       stalledInterval: OCR_STALLED_INTERVAL_MS,
@@ -154,7 +211,7 @@ async function main () {
       queueName: THUMB_QUEUE,
       publishJobUpdate,
     }),
-    { connection, concurrency: 4 },
+    { connection, concurrency: THUMB_CONCURRENCY },
   );
 
   const unpackLogger = logger.child({ queue: _UNPACK_QUEUE, jobName: "unpack" });
@@ -166,13 +223,12 @@ async function main () {
       bundleRepository,
       storage,
       bucket: BUCKET,
-      ocrQueue,
-      thumbQueue,
       listTagRules,
+      getAutoTagOnIngest,
       logger: unpackLogger,
       publishJobUpdate,
     }),
-    { connection, concurrency: 2 },
+    { connection, concurrency: UNPACK_CONCURRENCY },
   );
 
   const indexLogger = logger.child({ queue: _INDEX_QUEUE, jobName: "index" });
@@ -181,22 +237,20 @@ async function main () {
     _INDEX_QUEUE,
     createIndexProcessor({
       mediaRepository,
-      thumbQueue,
-      ocrQueue,
-      hashQueue,
       listTagRules,
+      getAutoTagOnIngest,
       logger: indexLogger,
       publishJobUpdate,
-      // Read the abort epoch off the publish client (a plain GET); the dev abort
-      // endpoint bumps it so an in-flight walk stops adding jobs.
+      // Read off the publish client with a plain GET. The abort endpoint raises
+      // it, and a walk already running then stops adding jobs.
       readAbortEpoch: () => readIndexAbortEpoch(publisher),
     }),
     {
       connection,
       concurrency: 1, // one walk at a time; per-file work fans out to thumb/ocr
-      // maxStalledCount 0: a walk left "active" by a mid-scan worker death must
-      // fail, not respawn — the default re-run restarts a full-root walk nobody
-      // asked for, which exploded the queues on every restart. Re-scan to resume.
+      // maxStalledCount 0: a walk left active by a worker that died mid-scan has
+      // to fail rather than respawn. The default re-run would restart a
+      // full-root walk nobody asked for. Scanning again is how to resume.
       maxStalledCount: 0,
     },
   );
@@ -207,22 +261,18 @@ async function main () {
     RECONCILE_QUEUE,
     createReconcileProcessor({
       mediaRepository,
-      thumbQueue,
-      ocrQueue,
-      hashQueue,
       listTagRules,
+      getAutoTagOnIngest,
       logger: reconcileLogger,
       publishJobUpdate,
-      // Same epoch the index walk reads, so the one stop control cancels
-      // whichever of the two is running.
-      readAbortEpoch: () => readIndexAbortEpoch(publisher),
+      // Read the abort epoch off the publish client (a plain GET); the reconcile
+      // abort endpoint bumps it so an in-flight sweep stops between ticks.
+      readAbortEpoch: () => readReconcileAbortEpoch(publisher),
     }),
     {
       connection,
       concurrency: 1, // one sweep at a time; per-file work fans out to thumb/ocr/hash
-      // A sweep left "active" by a mid-run worker death must fail, not respawn:
-      // the default re-run restarts a full-root walk nobody asked for. Re-running
-      // is always safe, so resuming is a button press away.
+      // maxStalledCount 0 — same reason as index_queue above.
       maxStalledCount: 0,
     },
   );
@@ -245,8 +295,7 @@ async function main () {
     {
       connection,
       concurrency: 1, // one bulk delete at a time; the per-chunk work is set-based
-      // A delete whose worker dies mid-run leaves the job "active". A partial
-      // delete is resumable by re-running, so a stalled job must fail, not respawn.
+      // maxStalledCount 0 — as above; a partial delete is resumable by re-running.
       maxStalledCount: 0,
     },
   );
@@ -262,7 +311,7 @@ async function main () {
       bucket: BUCKET,
       logger: hashLogger,
     }),
-    { connection, concurrency: 2 }, // streaming, IO-bound; keep it light
+    { connection, concurrency: HASH_CONCURRENCY }, // streaming, IO-bound; keep it light
   );
 
   const organizeLogger = logger.child({ queue: ORGANIZE_QUEUE, jobName: "organize" });
@@ -280,12 +329,12 @@ async function main () {
     {
       connection,
       concurrency: 1, // one retro run at a time; per-row work is cheap
-      // A partial organize run is resumable by re-running (it only adds missing
-      // tags), so a stalled job must fail, not respawn.
+      // maxStalledCount 0 — as above; a partial run only adds missing tags.
       maxStalledCount: 0,
     },
   );
 
+  textWorker.on("ready", () => textLogger.info({ queue: TEXT_QUEUE }, "worker ready"));
   ocrWorker.on("ready", () => ocrLogger.info({ queue: OCR_QUEUE }, "worker ready"));
   thumbWorker.on("ready", () => thumbLogger.info({ queue: THUMB_QUEUE }, "worker ready"));
   unpackWorker.on("ready", () => unpackLogger.info({ queue: _UNPACK_QUEUE }, "worker ready"));
@@ -297,25 +346,23 @@ async function main () {
 
   // Live in-place indexing: a single chokidar watcher across all users' allowed
   // roots. mediaActionsService gives the watcher a delete path that also cleans
-  // thumbnails/S3 and queue jobs; it never deletes an in-place source.
+  // thumbnails and queue jobs; it never deletes an in-place source.
   const watchLogger = logger.child({ component: "index-watcher" });
   const mediaActions = createMediaActionsService({
     repository: mediaRepository,
     bundleRepository,
     storage,
     bucket: BUCKET,
+    textQueue,
     ocrQueue,
     thumbQueue,
-    listTagRules,
     publishJobUpdate,
   });
   const indexWatcher = createIndexWatcher(
     {
       mediaRepository,
-      thumbQueue,
-      ocrQueue,
-      hashQueue,
       listTagRules,
+      getAutoTagOnIngest,
       publishJobUpdate,
       deleteMedia: (userId, id) => mediaActions.deleteMedia(userId, id),
       regenerateThumbnail: (userId, id, roots) => mediaActions.regenerateThumbnail(userId, id, roots),
@@ -333,11 +380,9 @@ async function main () {
     watchLogger.warn({}, "automatic indexing disabled (INDEX_AUTO=false): no watcher, no reconcile — manual scans still run");
   }
 
-  // Reconciliation backstop: catches everything the watcher cannot see —
-  // inotify is unreliable on bind mounts and network shares, and while the
-  // process is down it sees nothing at all. Enqueues one sweep per allowed
-  // root; the work itself lives in reconcileWorker, which is also what the
-  // Settings button and the boot run drive, so all three behave identically.
+  // Catches everything the watcher cannot see. It queues one sweep per allowed
+  // root, and reconcileWorker does the work, which is also what the settings
+  // button and the boot run drive, so all three behave the same.
   const scheduleLogger = logger.child({ component: "index-reconcile" });
   const runReconcile = async (opts: { cooldownMs?: number } = {}) => {
     const configs = await preferencesService.listIndexConfigs();
@@ -414,8 +459,7 @@ async function main () {
     );
   }
 
-  // Run stall detection once on startup (catches records left over from a previous crash),
-  // then on a recurring interval.
+  // Runs once on startup too, to catch records left over from a previous crash.
   const stallLogger = logger.child({ component: "stall-detection" });
   const runStallCheck = () =>
     markStalledJobs(mediaRepository, stallLogger).catch(err =>
@@ -424,69 +468,65 @@ async function main () {
   void runStallCheck();
   const stallInterval = setInterval(runStallCheck, STALL_CHECK_INTERVAL_MS);
 
-  ocrWorker.on("failed", async (job, err) => {
-    const errorCode =
-      err instanceof TextJobError
-        ? err.code
-        : err instanceof Error && err.name
-          ? err.name
-          : "UNKNOWN_ERROR";
-    const attempts = job?.opts?.attempts ?? 1;
-    const isFinal = job ? (job.attemptsMade ?? 0) >= attempts : true;
-
-    // Mark ERROR on all final failures, including transient ones (e.g. repeated network
-    // timeouts). Without this, a job that exhausts all retries on transient errors stays
-    // at PENDING indefinitely — exactly the stall case stall detection is meant to catch.
-    if (job?.data?.mediaId && isFinal) {
-      try {
-        await mediaRepository.setTextState(job.data.mediaId, "ERROR");
-        if (job.data.userId) {
-          publishJobUpdate({ userId: job.data.userId, mediaId: job.data.mediaId, field: "textState", value: "ERROR" });
-        }
-        ocrLogger.error(
-          {
-            jobName: "ocr",
-            queue: OCR_QUEUE,
-            jobId: job?.id ?? "unknown",
-            mediaId: job.data.mediaId,
-            userId: job.data.userId ?? null,
-            durationMs: job?.processedOn ? Date.now() - job.processedOn : undefined,
-            errorCode,
-          },
-          "ocr job failed (marked ERROR)",
-        );
-      } catch (updateErr) {
-        ocrLogger.error(
-          {
-            jobName: "ocr",
-            queue: OCR_QUEUE,
-            jobId: job?.id ?? "unknown",
-            mediaId: job.data.mediaId,
-            userId: job.data.userId ?? null,
-            durationMs: job?.processedOn ? Date.now() - job.processedOn : undefined,
-            errorCode: "TEXT_STATE_UPDATE_FAILED",
-            err: updateErr,
-          },
-          "failed to mark textState ERROR",
-        );
-      }
-    }
-
-    ocrLogger.error(
-      {
-        jobName: "ocr",
-        queue: OCR_QUEUE,
+  // Both text tiers fail the same way and need the same ERROR write, so they
+  // share one handler parameterised by which queue reported it.
+  const attachTextFailureHandlers = (
+    worker: Worker<OcrJobData>,
+    queueName: string,
+    jobName: string,
+    log: typeof ocrLogger,
+  ) => {
+    worker.on("failed", async (job, err) => {
+      const errorCode =
+        err instanceof TextJobError
+          ? err.code
+          : err instanceof Error && err.name
+            ? err.name
+            : "UNKNOWN_ERROR";
+      const attempts = job?.opts?.attempts ?? 1;
+      const isFinal = job ? (job.attemptsMade ?? 0) >= attempts : true;
+      const base = {
+        jobName,
+        queue: queueName,
         jobId: job?.id ?? "unknown",
         mediaId: job?.data?.mediaId ?? "unknown",
         userId: job?.data?.userId ?? null,
-        attempt: job?.attemptsMade ?? 0,
         durationMs: job?.processedOn ? Date.now() - job.processedOn : undefined,
-        errorCode,
-        err,
-      },
-      "ocr job failed",
+      };
+
+      // Mark ERROR on all final failures, including transient ones (e.g. repeated network
+      // timeouts). Without this, a job that exhausts all retries on transient errors stays
+      // at PENDING indefinitely — the stall case stall detection is meant to catch.
+      if (job?.data?.mediaId && isFinal) {
+        try {
+          await mediaRepository.setTextState(job.data.mediaId, "ERROR");
+          if (job.data.userId) {
+            publishJobUpdate({ userId: job.data.userId, mediaId: job.data.mediaId, field: "textState", value: "ERROR" });
+          }
+          log.error({ ...base, errorCode }, `${jobName} job failed (marked ERROR)`);
+        } catch (updateErr) {
+          log.error({ ...base, errorCode: "TEXT_STATE_UPDATE_FAILED", err: updateErr }, "failed to mark textState ERROR");
+        }
+      }
+
+      log.error({ ...base, attempt: job?.attemptsMade ?? 0, errorCode, err }, `${jobName} job failed`);
+    });
+
+    worker.on("error", err =>
+      log.error(
+        {
+          jobName,
+          queue: queueName,
+          errorCode: err instanceof Error && err.name ? err.name : "WORKER_ERROR",
+          err,
+        },
+        "worker error",
+      ),
     );
-  });
+  };
+
+  attachTextFailureHandlers(textWorker, TEXT_QUEUE, "text", textLogger);
+  attachTextFailureHandlers(ocrWorker, OCR_QUEUE, "ocr", ocrLogger);
 
   thumbWorker.on("failed", async (job, err) => {
     const msg = err instanceof Error ? err.message : String(err);
@@ -531,17 +571,6 @@ async function main () {
     );
   });
 
-  ocrWorker.on("error", err =>
-    ocrLogger.error(
-      {
-        jobName: "ocr",
-        queue: OCR_QUEUE,
-        errorCode: err instanceof Error && err.name ? err.name : "WORKER_ERROR",
-        err,
-      },
-      "worker error",
-    ),
-  );
   thumbWorker.on("error", err =>
     thumbLogger.error(
       {
@@ -621,7 +650,7 @@ async function main () {
     hashLogger.error({ jobName: "hash", queue: HASH_QUEUE, err }, "worker error"),
   );
 
-  logger.info({ queues: [OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE, _INDEX_QUEUE, RECONCILE_QUEUE, DELETE_QUEUE, ORGANIZE_QUEUE, HASH_QUEUE] }, "worker started");
+  logger.info({ queues: [TEXT_QUEUE, OCR_QUEUE, THUMB_QUEUE, _UNPACK_QUEUE, _INDEX_QUEUE, RECONCILE_QUEUE, DELETE_QUEUE, ORGANIZE_QUEUE, HASH_QUEUE] }, "worker started");
 
   const shutdown = async () => {
     logger.info("worker shutting down...");
@@ -629,8 +658,8 @@ async function main () {
     if (reconcileInterval) clearInterval(reconcileInterval);
     if (sweepInterval) clearInterval(sweepInterval);
     await indexWatcher.close().catch(err => watchLogger.warn({ err }, "index watcher close failed"));
-    await Promise.all([ocrWorker.close(), thumbWorker.close(), unpackWorker.close(), indexWorker.close(), reconcileWorker.close(), deleteWorker.close(), organizeWorker.close(), hashWorker.close()]);
-    await Promise.allSettled([ocrQueue.close(), thumbQueue.close(), indexQueue.close(), reconcileQueue.close(), deleteQueue.close(), hashQueue.close()]);
+    await Promise.all([textWorker.close(), ocrWorker.close(), thumbWorker.close(), unpackWorker.close(), indexWorker.close(), reconcileWorker.close(), deleteWorker.close(), organizeWorker.close(), hashWorker.close()]);
+    await Promise.allSettled([textQueue.close(), ocrQueue.close(), thumbQueue.close(), indexQueue.close(), reconcileQueue.close(), deleteQueue.close(), hashQueue.close()]);
     await publisher.quit();
   };
 

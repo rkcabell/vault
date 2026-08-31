@@ -1,6 +1,10 @@
+/**
+ * Reads and edits the account details shown on a user's profile page.
+ */
 import { normalizeNullable } from "../lib/strings/normalize.js";
 import { type ProfileRepository } from "../repositories/profileRepository.js";
 
+/** The profile fields a request may change. A field left out is not touched; a field set to null is cleared. */
 export type ProfilePatch = {
   name?: string | null;
   username?: string | null;
@@ -10,6 +14,7 @@ export type ProfilePatch = {
   avatarUrl?: string | null;
 };
 
+/** Applies profile edits, deciding which fields a request actually meant to change. */
 export class ProfileService {
   constructor(private readonly repo: ProfileRepository) {}
 
@@ -17,6 +22,14 @@ export class ProfileService {
     return this.repo.getProfile(userId);
   }
 
+  /**
+   * Changes the profile fields named in `patch` and returns the result.
+   *
+   * A field is only written when `patch` names it, which is how clearing a
+   * field is told apart from leaving it alone. Text that is blank or only
+   * spaces is stored as null. A patch naming no fields reads the profile back
+   * unchanged.
+   */
   async updateProfile (userId: string, patch: ProfilePatch) {
     const data: ProfilePatch = {};
     if (Object.prototype.hasOwnProperty.call(patch, "name")) data.name = normalizeNullable(patch.name ?? null);

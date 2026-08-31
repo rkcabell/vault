@@ -11,7 +11,7 @@ type UseInfiniteScrollOptions = {
   onLoadMore: () => void;
   /**
    * Extra viewport margin (px) so loading starts before the sentinel is
-   * actually visible. Defaults to 600.
+   * visible. Defaults to 600.
    */
   rootMargin?: number;
 };

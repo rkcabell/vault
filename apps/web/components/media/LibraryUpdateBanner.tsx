@@ -1,18 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import dynamic from "next/dynamic";
 import { Loader2 } from "lucide-react";
 import { useIndexProgress } from "@/components/contexts/IndexProgressContext";
 import { useDeleteProgress } from "@/components/contexts/DeleteProgressContext";
 import { emitTagsUpdated } from "@/lib/tags";
-import { toast } from "@/components/ui/Toaster";
-
-// Hard-stop the background queues. Development/testing only; absent in prod builds.
-const DevAbortButton =
-  process.env.NODE_ENV === "development"
-    ? dynamic(() => import("@/components/dev/DevAbortButton"))
-    : null;
 
 /**
  * Ephemeral Library banner that surfaces live background work — directory-scan
@@ -24,7 +16,7 @@ const DevAbortButton =
  * than flashing at "0" and immediately disappearing.
  */
 export function LibraryUpdateBanner() {
-  const { status: index } = useIndexProgress();
+  const { status: index, stop: cancelScan } = useIndexProgress();
   const { status: del, abort } = useDeleteProgress();
 
   const [abortDismissed, setAbortDismissed] = useState(false);
@@ -72,15 +64,20 @@ export function LibraryUpdateBanner() {
             <strong className="font-medium text-foreground">{index.indexed.toLocaleString()}</strong> indexed ·{" "}
             {index.filtered.toLocaleString()} filtered
           </span>
-          {DevAbortButton && (
-            <div className="ml-auto shrink-0">
-              <DevAbortButton
-                onAbortStart={() => setAbortDismissed(true)}
-                onSuccess={() => emitTagsUpdated()}
-                onError={(message) => toast(message, { variant: "error" })}
-              />
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              // Hide the row on click rather than on the response: the walk
+              // stops between batches, so the poll can report progress for a
+              // moment after cancelling and read as a button that did nothing.
+              setAbortDismissed(true);
+              void cancelScan().then(() => emitTagsUpdated());
+            }}
+            className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-muted-foreground/80 hover:bg-muted hover:text-foreground"
+            aria-label="Cancel scan"
+          >
+            Cancel scan
+          </button>
         </div>
       )}
 

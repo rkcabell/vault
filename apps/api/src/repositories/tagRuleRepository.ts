@@ -1,3 +1,6 @@
+/**
+ * Reads and writes the tagging rules a user has configured.
+ */
 import type { Prisma, PrismaClient, TagRuleSource } from "@prisma/client";
 import { DEFAULT_TAG_RULES } from "../lib/tags/rules/defaults.js";
 import type { TagRuleInput } from "../lib/tags/rules/evaluateRules.js";
@@ -13,6 +16,12 @@ export type TagRuleCreateData = {
 
 export type TagRuleUpdateData = Partial<TagRuleCreateData>;
 
+/**
+ * Stores one user's tagging rules.
+ *
+ * Every read and write is filtered by the owning user, so a rule id from one
+ * account can never reach another account's rows.
+ */
 export class TagRuleRepository {
   constructor (private readonly prisma: PrismaClient) {}
 
@@ -24,7 +33,7 @@ export class TagRuleRepository {
     });
   }
 
-  /** Enabled rules in the plain shape evaluateRules() consumes. */
+  /** Returns the user's enabled rules in the shape evaluateRules reads, in evaluation order. */
   async listEnabled (userId: string): Promise<TagRuleInput[]> {
     const rows = await this.prisma.tagRule.findMany({
       where: { userId, enabled: true },
@@ -58,7 +67,7 @@ export class TagRuleRepository {
     });
   }
 
-  /** Update a rule the user owns. Returns the updated row, or null if not found. */
+  /** Changes the fields present in `data` on a rule the user owns. Returns the updated rule, or null when the user owns no such rule. */
   async update (userId: string, id: string, data: TagRuleUpdateData) {
     const { count } = await this.prisma.tagRule.updateMany({
       where: { id, userId },
@@ -75,13 +84,13 @@ export class TagRuleRepository {
     return this.findById(userId, id);
   }
 
-  /** Delete a rule the user owns. Returns true when a row was removed. */
+  /** True if a rule the user owns was deleted. False means the user owns no rule with that id. */
   async remove (userId: string, id: string): Promise<boolean> {
     const { count } = await this.prisma.tagRule.deleteMany({ where: { id, userId } });
     return count > 0;
   }
 
-  /** Create the default rule set for a new user (mirrors the migration seed). */
+  /** Gives a new account the starting set of rules from DEFAULT_TAG_RULES. */
   async seedDefaults (userId: string): Promise<void> {
     await this.prisma.tagRule.createMany({
       data: DEFAULT_TAG_RULES.map(rule => ({

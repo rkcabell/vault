@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
+import { buttonVariants } from "@/components/ui/Button";
 import { CopyCheck } from "lucide-react";
 
 /** Entry point to the duplicate-review page (exact byte-identical copies). */
@@ -16,12 +16,13 @@ export function DuplicatesCard () {
         </CardDescription>
       </CardHeader>
       <CardContent className="px-6 pb-6 pt-0">
-        <Button asChild variant="outline" size="sm" className="gap-1.5">
-          <Link href="/duplicates">
-            <CopyCheck className="h-4 w-4" />
-            Review duplicates
-          </Link>
-        </Button>
+        <Link
+          href="/duplicates"
+          className={buttonVariants({ variant: "outline", size: "sm", className: "gap-1.5" })}
+        >
+          <CopyCheck className="h-4 w-4" />
+          Review duplicates
+        </Link>
       </CardContent>
     </Card>
   );

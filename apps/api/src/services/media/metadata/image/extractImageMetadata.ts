@@ -2,6 +2,15 @@ import sharp from "sharp";
 import type { ImageMetadata } from "../types.js";
 import { parseExif } from "./exif.js";
 
+/**
+ * Reads an image's dimensions and camera fields, combining what sharp reports
+ * about the pixels with the EXIF block when the file carries one.
+ */
+
+/**
+ * Returns an image's camera and dimension fields, or null when the buffer
+ * cannot be read as an image.
+ */
 export async function extractImageMetadata (buffer: Buffer): Promise<ImageMetadata | null> {
   try {
     const info = await sharp(buffer, { failOn: "none" }).metadata();
@@ -34,6 +43,7 @@ export async function extractImageMetadata (buffer: Buffer): Promise<ImageMetada
   }
 }
 
+// A number here is the EXIF ColorSpace tag. Any other name is passed through.
 function normalizeColorSpace (space?: string | number | null): string | null {
   if (space === null || space === undefined) return null;
   if (typeof space === "number") {
@@ -48,6 +58,7 @@ function normalizeColorSpace (space?: string | number | null): string | null {
   return normalized.toUpperCase();
 }
 
+// sharp reports bit depth as the name of a C type.
 function mapBitDepth (depth?: string | null): number | null {
   if (!depth) return null;
   switch (depth) {

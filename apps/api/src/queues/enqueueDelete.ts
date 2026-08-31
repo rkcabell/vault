@@ -1,31 +1,28 @@
 import type { Queue } from "bullmq";
 
-/** Filter that selects which media to delete (mirrors the GET/DELETE list filters,
- *  minus pagination). An empty object means "every media item this user owns". */
+/**
+ * Job that deletes many items in the background.
+ */
+
+/** Selects which media to delete, using the same filters as the library list.
+ *  An empty object means every item the user owns. */
 export type DeleteJobFilters = {
   queryText?: string | null;
   tags?: string[];
   excludeTags?: string[];
   thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
-  textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
+  textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED" | "NEEDS_OCR";
   excludeUnpacked?: boolean;
-  /** "only" restricts the job to items whose source file has vanished — the
-   *  library's "Missing files" view. This MUST be carried through: without it a
-   *  select-all delete launched from that view would match the whole library. */
+  /** "only" restricts the job to items whose source file is missing, which is
+   *  the library's "Missing files" view. Carrying it through matters: without
+   *  it, a select-all from that view matches the whole library. */
   missing?: "only";
 };
 
 /**
- * A request to delete media in the background. The actual set-based delete +
- * thumbnail unlinks run in the worker so a huge selection never blocks the HTTP
- * request or starves the Prisma pool (see worker/deleteWorker.ts).
- *
- * Exactly one source is used:
- *   - `ids`     — hand-picked multi-select. The list is bounded by what a user
- *                 can select, so carrying it in job data is fine.
- *   - `filters` — "select all (matching a filter)". The worker re-selects rows
- *                 in chunks, keeping memory flat for unbounded libraries. An
- *                 absent/empty filter object deletes every item the user owns.
+ * The items to delete, given one way or the other. `ids` is a hand-picked
+ * selection, bounded by what a person can select. `filters` is a select-all,
+ * which the worker re-runs in chunks so memory stays flat over a large library.
  */
 export type DeleteJobData = {
   userId: string;
@@ -33,22 +30,22 @@ export type DeleteJobData = {
   filters?: DeleteJobFilters;
 };
 
-/** Live progress attached to the BullMQ job, polled by GET /api/media/delete/status. */
+/** Live progress, read back off the job by the delete status route. */
 export type DeleteJobProgress = {
   /** Total to delete: ids.length, or the up-front count for a filter job. */
   total: number;
   deleted: number;
-  /** Chunks whose delete rejected (left for a later retry/reconcile). */
+  /** Chunks whose delete failed, left for a later run to pick up. */
   failed: number;
-  /** True when stopped early by an abort (see lib/media/deleteAbort). */
+  /** True when an abort stopped the job early. */
   aborted?: boolean;
 };
 
 export const DELETE_QUEUE = process.env.DELETE_QUEUE ?? "delete_queue";
 
 export async function enqueueDelete (queue: Queue<DeleteJobData>, job: DeleteJobData): Promise<string> {
-  // Unlike index (one scan per root), a user can fire several distinct deletes;
-  // a timestamp keeps each jobId unique. The userId prefix gates status reads.
+  // A user can start several distinct deletes, so a timestamp keeps each jobId
+  // unique. The userId prefix is what gates status reads.
   const jobId = `delete-${job.userId}-${Date.now()}`;
 
   await queue.add("delete", job, {

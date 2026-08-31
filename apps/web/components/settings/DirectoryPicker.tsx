@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
+import { formatBytes } from "@/lib/media/utils";
 import { Button } from "@/components/ui/Button";
 import { Folder, FolderPlus, FolderUp, HardDrive, Loader2, X } from "lucide-react";
 
@@ -14,15 +15,6 @@ type DirListing = {
   roots: DriveRoot[];
   redirected?: boolean;
 };
-
-/** Compact binary byte size, e.g. "120 GB". */
-function formatBytes(n: number): string {
-  const GB = 1024 ** 3;
-  const TB = 1024 ** 4;
-  if (n >= TB) return `${(n / TB).toFixed(1)} TB`;
-  if (n >= GB) return `${(n / GB).toFixed(n < 10 * GB ? 1 : 0)} GB`;
-  return `${Math.max(1, Math.round(n / 1024 ** 2))} MB`;
-}
 
 /**
  * Browse directories on the SERVER (not the client machine) so the user can

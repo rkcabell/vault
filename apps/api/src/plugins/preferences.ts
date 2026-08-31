@@ -1,3 +1,6 @@
+/**
+ * Puts the preferences service on the Fastify instance for routes to use.
+ */
 import fp from "fastify-plugin";
 import { PreferencesService } from "../services/preferencesService.js";
 import { PreferencesRepository } from "../repositories/preferencesRepository.js";

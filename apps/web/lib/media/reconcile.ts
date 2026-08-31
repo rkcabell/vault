@@ -50,13 +50,33 @@ export async function startReconcile (path?: string): Promise<{ jobIds: string[]
   return (await res.json()) as { jobIds: string[] };
 }
 
-/** The running sweep (if any) and the most recent finished one. */
-export async function getReconcileState (): Promise<ReconcileState> {
+/**
+ * Stop the in-flight reconcile sweep and drop any queued ones, leaving an
+ * index scan (if any) running.
+ */
+export async function stopReconcile (): Promise<void> {
+  const res = await apiFetch("/api/jobs/cancel-reconcile", { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    let msg = `Could not stop the check (${res.status})`;
+    try {
+      const data = await res.json();
+      msg = data?.message || data?.error || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+}
+
+/**
+ * The running sweep (if any) and the most recent finished one. `null` means the
+ * server could not be reached — distinct from `{ active: null, last: null }`,
+ * which means the server answered "nothing has ever run".
+ */
+export async function getReconcileState (): Promise<ReconcileState | null> {
   try {
     const res = await apiFetch("/api/media/index/reconcile/state", { credentials: "include" });
-    if (!res.ok) return { active: null, last: null };
+    if (!res.ok) return null;
     return (await res.json()) as ReconcileState;
   } catch {
-    return { active: null, last: null };
+    return null;
   }
 }

@@ -54,7 +54,7 @@ function makeRow (over: Partial<Row> & Pick<Row, "id" | "sourcePath">): Row {
 /**
  * In-memory stand-in for MediaRepository. Move detection is a conversation
  * between the add and unlink handlers through stored state, so a fake that
- * actually holds rows is the only way these tests mean anything.
+ * holds rows is the only way these tests mean anything.
  */
 function makeDeps (opts: { rows?: Row[]; idsByPrefix?: string[] } = {}) {
   const store = new Map<string, Row>(opts.rows?.map(r => [r.id, r]) ?? []);
@@ -62,8 +62,7 @@ function makeDeps (opts: { rows?: Row[]; idsByPrefix?: string[] } = {}) {
   const deleted: Array<{ userId: string; id: string }> = [];
   const regenerated: Array<{ userId: string; id: string }> = [];
   const events: Array<{ mediaId: string; field: string; value: string }> = [];
-  const thumbCalls: unknown[][] = [];
-  const ocrCalls: unknown[][] = [];
+
 
   const byPath = (p: string) => [...store.values()].find(r => r.sourcePath === p) ?? null;
   const toCandidate = (r: Row) => ({
@@ -132,13 +131,9 @@ function makeDeps (opts: { rows?: Row[]; idsByPrefix?: string[] } = {}) {
     },
   } as any;
 
-  const thumbQueue = { addBulk: async (jobs: unknown[]) => { thumbCalls.push(jobs); return []; } } as any;
-  const ocrQueue = { addBulk: async (jobs: unknown[]) => { ocrCalls.push(jobs); return []; } } as any;
 
   const deps = {
     mediaRepository,
-    thumbQueue,
-    ocrQueue,
     listTagRules: async () => [],
     publishJobUpdate: (e: any) => { events.push({ mediaId: e.mediaId, field: e.field, value: e.value }); },
     deleteMedia: async (userId: string, id: string) => { deleted.push({ userId, id }); store.delete(id); },
@@ -149,7 +144,7 @@ function makeDeps (opts: { rows?: Row[]; idsByPrefix?: string[] } = {}) {
     now: () => NOW,
   } as any;
 
-  return { deps, store, created, deleted, regenerated, events, thumbCalls, ocrCalls };
+  return { deps, store, created, deleted, regenerated, events };
 }
 
 test("add: indexes a new file under an allowed root", async () => {
@@ -161,7 +156,11 @@ test("add: indexes a new file under an allowed root", async () => {
   assert.equal(t.created.length, 1);
   assert.equal(t.created[0].sourcePath, path.join(ROOT, "a.pdf"));
   assert.equal(t.created[0].sourceState, "READY");
-  assert.equal(t.thumbCalls.flat().length, 1);
+  // Left at PENDING for the derivative feeder rather than pushed to a queue —
+  // the watcher fires per file, and pushing here is the same unbounded fan-out
+  // the pull model exists to stop when a whole folder lands at once.
+  assert.equal(t.created[0].thumbState, "PENDING");
+  assert.equal(t.created[0].textState, "PENDING");
 });
 
 test("add: skips files inside an excluded folder", async () => {
@@ -294,10 +293,10 @@ test("move: an unlink+add pair keeps the original row, id and metadata", async (
   await h.onUnlink(from);
   await h.onAdd(to);
 
-  // No new row, no re-thumbnail, no re-OCR — the bytes never changed.
+  // No new row, and crucially no state reset — the bytes never changed, so the
+  // surviving row keeps its READY derivatives instead of going back into the
+  // feeder's claim set.
   assert.equal(t.created.length, 0);
-  assert.equal(t.thumbCalls.flat().length, 0);
-  assert.equal(t.ocrCalls.flat().length, 0);
   const row = t.store.get("media-1")!;
   assert.equal(row.sourcePath, to);
   assert.equal(row.missingSince, null);

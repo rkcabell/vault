@@ -1,6 +1,7 @@
 {
   "name": "web",
   "private": true,
+  "type": "module",
   "scripts": {
     "clean": "node scripts/clean-next.mjs",
     "dev": "next dev --turbo -p 3000",

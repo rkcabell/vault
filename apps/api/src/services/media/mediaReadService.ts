@@ -4,6 +4,7 @@ import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { StorageAdapter } from "../../adapters/storage/types.js";
 import type { OcrJobData } from "../ocrProcessingService.js";
 import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
+import { textJobId } from "../../queues/enqueueText.js";
 import { openSourceStream } from "../../adapters/storage/openSource.js";
 import { inferTextSource } from "../../lib/media/textSource.js";
 import { detectTextLanguage } from "../../lib/text/detectLanguage.js";
@@ -14,10 +15,16 @@ import { exceedsTextSize, isPlainTextMime, TEXT_TOO_LARGE_REASON, TEXT_UNSUPPORT
 import type { MediaMetadata } from "./metadata/types.js";
 
 /**
- * Validate and coerce a Prisma JsonValue (stored in Media.document.pages) into
- * a typed PdfTextPage array. Returns null if any item is missing required fields
- * so callers can treat the stored value as absent rather than partially valid.
- * `numChars` is back-filled from text.length when absent (legacy rows).
+ * Reads a single media item for the detail page, and streams its thumbnail or
+ * its source file. The detail payload comes from one database join and opens no
+ * files.
+ */
+
+/**
+ * Converts the JSON stored in `Media.document.pages` into typed pages. Returns
+ * null when any entry is missing a required field, so a partly valid value is
+ * treated as absent. `numChars` falls back to the text length for rows that do
+ * not carry it.
  */
 function normalizePdfTextPages (value: unknown): PdfTextPage[] | null {
   if (!Array.isArray(value)) return null;
@@ -43,53 +50,24 @@ function normalizePdfTextPages (value: unknown): PdfTextPage[] | null {
   return out;
 }
 
-// Prisma JSON fields come through as broad JsonValue; normalize before using as typed page arrays.
-// function parsePdfTextPages (value: unknown): PdfTextPage[] | null {
-//   if (!Array.isArray(value)) return null;
-
-//   const pages: PdfTextPage[] = [];
-//   for (const item of value) {
-//     if (typeof item !== "object" || item === null) return null;
-//     const rec = item as Record<string, unknown>;
-
-//     const pageNumber = rec.pageNumber;
-//     const text = rec.text;
-//     const numChars = rec.numChars;
-
-//     if (typeof pageNumber !== "number") return null;
-//     if (typeof text !== "string") return null;
-
-//     pages.push({
-//       pageNumber,
-//       text,
-//       numChars: typeof numChars === "number" ? numChars : text.length,
-//     });
-//   }
-
-//   return pages;
-// }
-
 type MediaReadDeps = {
   repository: MediaRepository;
   storage: StorageAdapter;
   bucket: string;
   logger: FastifyBaseLogger;
+  /** Tier 2 (`ocr_queue`). Read before `textQueue`: when both hold a job for one
+   *  item, the OCR run is the one still in progress. */
   ocrQueue?: Queue<OcrJobData>;
+  /** Tier 1 (`text_queue`). */
+  textQueue?: Queue<OcrJobData>;
 };
 
-/**
- * Factory for the media read service. All returned functions close over `deps`
- * so the service can be constructed once per request scope or application lifetime.
- */
 export function createMediaReadService (deps: MediaReadDeps) {
   /**
-   * Fetch text-state metadata for display in the UI.
-   * Queries BullMQ when `textState` is PENDING (show attempt progress) or ERROR
-   * (surface the real failure reason). For UNSUPPORTED there is no job — the
-   * reason is derived from the file itself (too large vs. unsupported type) so the
-   * detail page can explain why extraction was skipped. Returns null in all other
-   * states to avoid unnecessary Redis round-trips on the read path.
-   * On lookup failure, logs a warning and returns null rather than throwing.
+   * Returns what the detail page shows about text extraction: attempt progress
+   * while `textState` is PENDING, the failure reason when it is ERROR, and a
+   * fixed reason when it is UNSUPPORTED. Null in every other state, and null
+   * when the job lookup fails.
    */
   const getOcrJobMeta = async (
     mediaId: string,
@@ -101,23 +79,27 @@ export function createMediaReadService (deps: MediaReadDeps) {
     textAttemptsMade: number | null;
     textAttemptsTotal: number | null;
   } | null> => {
-    // UNSUPPORTED items never ran a job; surface a static reason without hitting Redis.
-    // Mirror the worker's skip rule: only plain-text over the size cap is "too large";
-    // everything else marked UNSUPPORTED is an unsupported type.
+    // An UNSUPPORTED item never ran a job. The reason is derived the same way
+    // the worker decides to skip one: only plain text over the size cap counts
+    // as too large.
     if (textState === "UNSUPPORTED") {
       const isTooLarge = isPlainTextMime((mimeType ?? "").toLowerCase()) && exceedsTextSize(sizeBytes);
       const textError = isTooLarge ? TEXT_TOO_LARGE_REASON : TEXT_UNSUPPORTED_REASON;
       return { textError, textAttemptsMade: null, textAttemptsTotal: null };
     }
 
-    if (!deps.ocrQueue) return null;
+    if (!deps.ocrQueue && !deps.textQueue) return null;
 
     const includeAttempts = textState === "PENDING";
     const includeError = textState === "ERROR";
     if (!includeAttempts && !includeError) return null;
 
     try {
-      const match = await deps.ocrQueue.getJob(`ocr-${mediaId}`);
+      // Both tiers key on the same job id, in separate BullMQ key spaces, so a
+      // PENDING row's job can be on either.
+      const jobId = textJobId(mediaId);
+      const match =
+        (await deps.ocrQueue?.getJob(jobId)) ?? (await deps.textQueue?.getJob(jobId));
 
       if (!match) return null;
 
@@ -148,9 +130,8 @@ export function createMediaReadService (deps: MediaReadDeps) {
   };
 
   /**
-   * Return a paginated slice of the raw extracted text for a document.
-   * Ownership is enforced by scoping the DB lookup to `userId`.
-   * `hasMore` indicates whether additional content exists beyond this chunk.
+   * Returns a slice of a document's extracted text. The lookup is scoped to
+   * `userId`, which is the ownership check.
    */
   const getTextChunk = async (userId: string, id: string, offset: number, limit: number) => {
     const media = await deps.repository.findDocumentForUser(userId, id);
@@ -176,16 +157,9 @@ export function createMediaReadService (deps: MediaReadDeps) {
   };
 
   /**
-   * Assemble the full detail payload for a single media item.
-   *
-   * Combines:
-   * - Core media fields from the DB (state, keys, timestamps, tags)
-   * - Segmented text (split into logical sections for the reader UI)
-   * - Language detection on the raw text
-   * - Stored extraction metadata (EXIF, PDF info, etc.) merged with live text stats
-   * - OCR job progress / error details from BullMQ (only when relevant to textState)
-   *
-   * No S3 downloads occur on this path; all data comes from the DB join.
+   * Returns everything the detail page renders for one item: its stored fields,
+   * its text split into sections, the detected language, the extraction
+   * metadata, and the state of any text job. One database join supplies it all.
    */
   const getMediaDetail = async (userId: string, id: string) => {
     const media = await deps.repository.findDetail(userId, id);
@@ -202,7 +176,6 @@ export function createMediaReadService (deps: MediaReadDeps) {
     });
     const detectedLanguage = media.document ? detectTextLanguage(rawText) : null;
 
-    // Read stored metadata from joined DB query — no S3 download on the read path.
     const storedData = media.extractedMetadata?.data as Partial<MediaMetadata> | null | undefined;
     const textStats = buildTextStats(media.document);
     const metadata: MediaMetadata | null =
@@ -212,8 +185,8 @@ export function createMediaReadService (deps: MediaReadDeps) {
 
     const { ...mediaPayload } = media;
     const jobMeta = await getOcrJobMeta(media.id, media.textState, media.mimeType, media.sizeBytes);
-    // The subset of this item's tags the system applied (origin AUTO). The
-    // frontend uses it to sort/style user-made tags ahead of auto ones.
+    // The tags on this item that the system applied, so the UI can show the
+    // user's own tags first.
     const autoTags = await deps.repository.listAutoTagNames(userId, media.tags);
 
     return {
@@ -255,9 +228,16 @@ export function createMediaReadService (deps: MediaReadDeps) {
   };
 
   /**
-   * Stream the WebP thumbnail for a media item directly from S3.
-   * Returns null (with a warning log) if the object is missing or the request
-   * fails, so the caller can return a 404 without crashing the request.
+   * Returns how many items sit ahead of this one in the tier-1 text backlog.
+   * Null when the item is not the caller's, or is no longer waiting.
+   */
+  const getTextQueuePosition = async (userId: string, id: string) => {
+    return deps.repository.countTextBacklogAhead(userId, id);
+  };
+
+  /**
+   * Streams an item's thumbnail from storage. Returns null when the object is
+   * missing or the read fails.
    */
   const getThumbnail = async (id: string) => {
     const thumbKey = computeThumbKey(id);
@@ -278,10 +258,9 @@ export function createMediaReadService (deps: MediaReadDeps) {
   };
 
   /**
-   * Stream the original file for an in-place indexed item, read read-only from
-   * its source path. Managed items return null here — they download via a
-   * presigned URL (getDownloadUrl), not this proxy. Returns null when the item
-   * is missing, not in-place, or the source file is gone.
+   * Streams the original file of an item indexed in place, read-only from its
+   * source path. Returns null when the item is missing, is not indexed in place,
+   * or its file is gone. A managed item downloads through `getDownloadUrl`.
    */
   const getSourceStream = async (
     userId: string,
@@ -315,10 +294,17 @@ export function createMediaReadService (deps: MediaReadDeps) {
     }
   };
 
+  /** Returns the fields the "reveal in file manager" action needs to resolve a path. */
+  const getStorageKey = async (userId: string, id: string) => {
+    return deps.repository.findStorageKey(userId, id);
+  };
+
   return {
     getTextChunk,
     getMediaDetail,
+    getTextQueuePosition,
     getThumbnail,
     getSourceStream,
+    getStorageKey,
   };
 }

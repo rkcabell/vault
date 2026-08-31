@@ -73,7 +73,7 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
   const thumbContainerRef = useRef<HTMLDivElement>(null);
   const snapHeightRef = useRef<number | null>(null);
   // Set when the image loads: min(naturalCardHeight, 75% viewport).
-  // Prevents the drag bar from going below a height the image can't actually display at.
+  // Prevents the drag bar from going below a height the image can't display at.
   const maxHeightRef = useRef<number>(0);
   // Imperative handle for the left/right panel group — used to link horizontal panel
   // width to vertical thumb height so both expand together.
@@ -137,7 +137,7 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
     };
 
     // Capture the panel's actual current position so the first mousemove never teleports.
-    // The offset is the gap between where the panel actually is vs. where the formula
+    // The offset is the gap between where the panel is vs. where the formula
     // would put it for the current thumb height, and it stays constant for the whole drag.
     const initialLeft = panelGroupRef.current?.getLayout()?.left ?? DEFAULT_LEFT_PCT;
     const panelOffset = initialLeft - leftPctFor(startHeight);
@@ -493,6 +493,7 @@ const handleDelete = (e: React.MouseEvent) => {
                 <MediaTextPanel
                   id={id}
                   textState={media.textState}
+                  textQueuedAt={media.textQueuedAt}
                   textError={media.textError}
                   document={document}
                   highlightTerms={highlightTerms}

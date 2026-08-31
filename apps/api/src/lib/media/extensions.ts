@@ -1,8 +1,15 @@
 /**
- * Extracts the extension from a filename, lowercased and without the leading dot.
- * extOf("archive.tar.gz") -> "gz"
- * extOf(".env") -> ""
- * extOf("file") -> ""
+ * Reads and normalizes file extensions, so a filename and a blacklist entry the
+ * user typed compare the same way.
+ */
+
+/**
+ * Returns a filename's extension, lowercased and without the dot. Only the last
+ * one counts, and a name that is all extension has none.
+ *
+ *     extOf("archive.tar.gz") -> "gz"
+ *     extOf(".env")           -> ""
+ *     extOf("file")           -> ""
  */
 export function extOf (name: string): string {
   const dot = name.lastIndexOf(".");
@@ -10,8 +17,7 @@ export function extOf (name: string): string {
 }
 
 /**
- * Normalize user-provided extensions into a lowercase, dotless, unique array.
- * Used by blacklist
+ * Normalizes extensions the user typed into a lowercase, dotless, unique list.
  */
 export function normalizeExtensions (exts: string[] | undefined): string[] {
   if (!exts) return [];

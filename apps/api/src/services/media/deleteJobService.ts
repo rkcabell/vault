@@ -7,10 +7,16 @@ import {
 } from "../../queues/enqueueDelete.js";
 import { signalDeleteAbort, type AbortRedis } from "../../lib/media/deleteAbort.js";
 
+/**
+ * Starts bulk deletions and reports their progress. The row deletes and
+ * thumbnail unlinks happen in the delete worker, so a large selection does not
+ * hold the HTTP request open or exhaust the database connection pool.
+ */
+
 type DeleteJobServiceDeps = {
   deleteQueue: Queue<DeleteJobData>;
   logger: { info: (obj: object, msg: string) => void };
-  /** Used to bump the delete-abort epoch (stops in-flight delete jobs). */
+  /** Bumps the delete-abort epoch, which stops in-flight delete jobs. */
   redis?: Pick<AbortRedis, "incr">;
 };
 
@@ -29,12 +35,6 @@ export type DeleteStatus = {
   failed: number;
 };
 
-/**
- * Drives background bulk deletion: enqueues a delete job and reports its
- * progress. The actual set-based delete + thumbnail unlinks happen in the delete
- * worker (see worker/deleteWorker.ts), so a huge selection never blocks the HTTP
- * request or starves the Prisma pool.
- */
 export function createDeleteJobService (deps: DeleteJobServiceDeps) {
   const startDelete = async (userId: string, input: StartDeleteInput): Promise<{ jobId: string }> => {
     const jobId = await enqueueDelete(deps.deleteQueue, {
@@ -49,8 +49,8 @@ export function createDeleteJobService (deps: DeleteJobServiceDeps) {
     return { jobId };
   };
 
-  // Map a BullMQ job to the wire status. Progress is updated as chunks complete;
-  // returnvalue holds the final counts once the job completes.
+  // Progress stops updating as the last chunk completes. The return value holds
+  // the final counts.
   const toStatus = async (
     job: NonNullable<Awaited<ReturnType<typeof deps.deleteQueue.getJob>>>,
   ): Promise<DeleteStatus> => {
@@ -71,8 +71,9 @@ export function createDeleteJobService (deps: DeleteJobServiceDeps) {
   };
 
   /**
-   * Read a delete job's live progress. Only the owning user may read their job —
-   * the jobId embeds the userId, checked here. Returns null when unknown.
+   * Returns a delete job's live progress, or null when the job is unknown or
+   * belongs to another user. The jobId embeds the userId, which is the
+   * ownership check.
    */
   const getStatus = async (userId: string, jobId: string): Promise<DeleteStatus | null> => {
     if (!jobId.startsWith(`delete-${userId}-`)) return null;
@@ -81,11 +82,7 @@ export function createDeleteJobService (deps: DeleteJobServiceDeps) {
     return toStatus(job);
   };
 
-  /**
-   * Find this user's in-flight delete (if any) so the UI can re-attach after a
-   * reload without remembering the jobId. Returns the most recent non-terminal
-   * job owned by the user, else null.
-   */
+  /** Returns the user's most recent unfinished delete, or null when there is none. */
   const getActive = async (userId: string): Promise<DeleteStatus | null> => {
     const jobs = await deps.deleteQueue.getJobs(["active", "waiting", "delayed"]);
     const prefix = `delete-${userId}-`;
@@ -95,7 +92,8 @@ export function createDeleteJobService (deps: DeleteJobServiceDeps) {
     return mine[0] ? toStatus(mine[0]) : null;
   };
 
-  /** Stop every in-flight delete that started before now (epoch bump). */
+  /** Stops every in-flight delete that started before now. Returns null when no
+   *  Redis connection was provided. */
   const abort = async (): Promise<{ epoch: number } | null> => {
     if (!deps.redis) return null;
     const epoch = await signalDeleteAbort(deps.redis);

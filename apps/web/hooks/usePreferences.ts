@@ -11,7 +11,7 @@ const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
   libraryViewMode: "library:viewMode",
   libraryGridCols: "library:gridCols",
   libraryIsCompactList: "library:isCompactList",
-  autoTagOnUpload: "prefs:autoTagOnUpload",
+  autoTagOnIngest: "prefs:autoTagOnIngest",
   extractMetadata: "prefs:extractMetadata",
   detectDuplicates: "prefs:detectDuplicates",
   lowMemoryMode: "prefs:lowMemoryMode",
@@ -23,6 +23,9 @@ const LS_KEYS: Partial<Record<keyof Preferences, string>> = {
   yellowHighlight: "prefs:yellowHighlight",
   lightTheme: "prefs:lightTheme",
   darkTheme: "prefs:darkTheme",
+  ocrMode: "prefs:ocrMode",
+  ocrTimeoutCapMinutes: "prefs:ocrTimeoutCapMinutes",
+  sidecarMode: "prefs:sidecarMode",
 };
 
 // Keys whose values are JSON objects rather than scalars.
@@ -30,11 +33,20 @@ const LS_JSON_KEYS: Partial<Record<keyof Preferences, string>> = {
   exploreBucketColors: "prefs:exploreBucketColors",
 };
 
+// Superseded localStorage keys, read as a fallback and deleted on the next
+// write of their replacement. Without this a renamed preference silently reverts
+// to its default on the first load after the rename, before /api/init lands.
+const LS_LEGACY_KEYS: Partial<Record<keyof Preferences, string>> = {
+  autoTagOnIngest: "prefs:autoTagOnUpload",
+};
+
 function readFromLocalStorage(): Partial<Preferences> {
   const out: Partial<Preferences> = {};
   try {
     for (const [key, lsKey] of Object.entries(LS_KEYS) as [keyof Preferences, string][]) {
-      const raw = localStorage.getItem(lsKey);
+      const legacyKey = LS_LEGACY_KEYS[key];
+      const raw = localStorage.getItem(lsKey)
+        ?? (legacyKey ? localStorage.getItem(legacyKey) : null);
       if (raw === null) continue;
       const defaultVal = DEFAULT_PREFERENCES[key];
       if (typeof defaultVal === "boolean") {
@@ -50,9 +62,11 @@ function readFromLocalStorage(): Partial<Preferences> {
     if (out.libraryViewMode !== undefined && !["grid", "list"].includes(out.libraryViewMode)) delete out.libraryViewMode;
     if (out.libraryGridCols !== undefined && ![4, 5, 6, 7, 8].includes(out.libraryGridCols)) delete out.libraryGridCols;
     if (out.soonWindowDays !== undefined && (out.soonWindowDays < 2 || out.soonWindowDays > 14)) delete out.soonWindowDays;
+    if (out.ocrTimeoutCapMinutes !== undefined && (out.ocrTimeoutCapMinutes < 1 || out.ocrTimeoutCapMinutes > 60)) delete out.ocrTimeoutCapMinutes;
     if (out.themePreference !== undefined && !["system", "light", "dark"].includes(out.themePreference)) delete out.themePreference;
     if (out.lightTheme !== undefined && !["default", "latte", "sandstone", "mist", "lavender", "dream", "cotton-candy", "mint", "garden"].includes(out.lightTheme)) delete out.lightTheme;
     if (out.darkTheme !== undefined && !["new-moon", "matrix", "charcoal", "solarized"].includes(out.darkTheme)) delete out.darkTheme;
+    if (out.sidecarMode !== undefined && !["off", "snapshot"].includes(out.sidecarMode)) delete out.sidecarMode;
 
     for (const [key, lsKey] of Object.entries(LS_JSON_KEYS) as [keyof Preferences, string][]) {
       const raw = localStorage.getItem(lsKey);
@@ -70,6 +84,8 @@ function syncToLocalStorage(patch: Partial<Preferences>) {
     for (const [key, lsKey] of Object.entries(LS_KEYS) as [keyof Preferences, string][]) {
       if (!(key in patch)) continue;
       localStorage.setItem(lsKey, String(patch[key]));
+      const legacyKey = LS_LEGACY_KEYS[key];
+      if (legacyKey) localStorage.removeItem(legacyKey);
     }
     for (const [key, lsKey] of Object.entries(LS_JSON_KEYS) as [keyof Preferences, string][]) {
       if (!(key in patch)) continue;

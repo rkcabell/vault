@@ -11,6 +11,12 @@ import {
 } from "../../lib/media/indexRoots.js";
 import path from "node:path";
 
+/**
+ * Starts index scans of a folder on the server and reports their progress. A
+ * requested directory is checked against the allow-list before anything is
+ * enqueued. The walk and the row creation happen in the index worker.
+ */
+
 type IndexServiceDeps = {
   indexQueue: Queue<IndexJobData>;
   logger: { info: (obj: object, msg: string) => void };
@@ -25,9 +31,11 @@ export type StartIndexInput = {
   skipNonContent: boolean;
 };
 
+/** `disabled` when no indexing roots are configured. `already_running` when the
+ *  user already has a scan that has not finished. */
 export type StartIndexResult =
   | { ok: true; jobId: string }
-  | { ok: false; reason: "disabled" | "not_allowed" | "not_found" | "not_dir" };
+  | { ok: false; reason: "disabled" | "not_allowed" | "not_found" | "not_dir" | "already_running" };
 
 export type IndexStatus = {
   jobId: string;
@@ -40,11 +48,6 @@ export type IndexStatus = {
   filtered: number;
 };
 
-/**
- * Drives in-place indexing: validates a server-side directory against the
- * allow-list, enqueues a scan job, and reports its progress. The actual walk +
- * row creation happens in the index worker (see worker/indexWorker.ts).
- */
 export function createIndexService (deps: IndexServiceDeps) {
   const startIndex = async (userId: string, input: StartIndexInput, allowedRoots: string[]): Promise<StartIndexResult> => {
     if (allowedRoots.length === 0) return { ok: false, reason: "disabled" };
@@ -62,6 +65,11 @@ export function createIndexService (deps: IndexServiceDeps) {
     }
     if (!st.isDirectory()) return { ok: false, reason: "not_dir" };
 
+    // One walk per user, counting every root. `enqueueIndex` only dedupes a
+    // repeat of the same root. This is a check rather than a lock: two requests
+    // arriving together can both pass it.
+    if (await getActive(userId)) return { ok: false, reason: "already_running" };
+
     const jobId = await enqueueIndex(deps.indexQueue, {
       userId,
       rootPath: requested,
@@ -76,8 +84,8 @@ export function createIndexService (deps: IndexServiceDeps) {
     return { ok: true, jobId };
   };
 
-  // Map a BullMQ job to the wire status. Progress is updated during the walk;
-  // returnvalue holds the final counts once the job completes.
+  // Progress stops updating at the walk's last tick. The return value holds the
+  // final counts.
   const toStatus = async (job: NonNullable<Awaited<ReturnType<typeof deps.indexQueue.getJob>>>): Promise<IndexStatus> => {
     const state = await job.getState();
     const live = (typeof job.progress === "object" ? job.progress : null) as IndexJobProgress | null;
@@ -97,8 +105,9 @@ export function createIndexService (deps: IndexServiceDeps) {
   };
 
   /**
-   * Read a scan job's live progress. Only the owning user may read their job —
-   * the jobId embeds the userId, checked here. Returns null when unknown.
+   * Returns a scan job's live progress, or null when the job is unknown or
+   * belongs to another user. The jobId embeds the userId, which is the
+   * ownership check.
    */
   const getStatus = async (userId: string, jobId: string): Promise<IndexStatus | null> => {
     if (!jobId.startsWith(`index-${userId}-`)) return null;
@@ -107,11 +116,7 @@ export function createIndexService (deps: IndexServiceDeps) {
     return toStatus(job);
   };
 
-  /**
-   * Find this user's in-flight scan (if any) so the UI can re-attach after a
-   * reload without remembering the jobId. Scans only the non-terminal states;
-   * returns the first job whose id is owned by the user, else null.
-   */
+  /** Returns the user's unfinished scan, or null when there is none. */
   const getActive = async (userId: string): Promise<IndexStatus | null> => {
     const jobs = await deps.indexQueue.getJobs(["active", "waiting", "delayed"]);
     const prefix = `index-${userId}-`;

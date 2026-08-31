@@ -1,14 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PassThrough, Readable } from "node:stream";
-import archiver from "archiver";
+import { PassThrough } from "node:stream";
 import { createMediaActionsService } from "@/services/media/mediaActionsService.js";
 
 // ── mock builders ─────────────────────────────────────────────────────────────
 
 type MediaKeys = { storageKey: string; thumbnailKey?: string | null; sourcePath?: string | null; mimeType?: string | null };
 type TextJobMedia = { id: string; storageKey: string; title?: string | null; sourcePath?: string | null; mimeType?: string | null };
-type BulkItem = { id: string; storageKey: string; title: string; mimeType: string | null; filename: string };
 
 function makeRepo (overrides: {
   findMediaKeys?: (_userId: string, _id: string) => Promise<MediaKeys | null>;
@@ -16,36 +14,43 @@ function makeRepo (overrides: {
   findMediaForUpdate?: (_userId: string, _id: string) => Promise<{ id: string } | null>;
   updateMetadata?: (_id: string, _data: unknown) => Promise<unknown>;
   findForTextJob?: (_userId: string, _id: string) => Promise<TextJobMedia | null>;
-  setTextStatePending?: (_id: string) => Promise<void>;
+  setTextStatePending?: (_id: string) => Promise<boolean>;
   setTextState?: (_id: string, _state: string) => Promise<void>;
   findStorageKey?: (_userId: string, _id: string) => Promise<{ storageKey: string } | null>;
   resetThumbState?: (_id: string) => Promise<void>;
-  findBulkDownloadItems?: (_userId: string, _ids: string[]) => Promise<BulkItem[]>;
   markThumbUnsupported?: (_ids: string[]) => Promise<void>;
   markTextUnsupported?: (_ids: string[]) => Promise<void>;
-  findDetail?: (_userId: string, _id: string) => Promise<unknown>;
-  createMedia?: (_data: unknown) => Promise<{ id: string; storageKey: string }>;
-  setLinkedBundle?: (_mediaId: string, _bundleId: string) => Promise<void>;
+  claimNeedsOcrBatch?: (_userId: string, _limit: number) => Promise<
+    { id: string; storageKey: string; sourcePath: string | null; title: string }[]
+  >;
+  countNeedsOcr?: (_userId: string) => Promise<number>;
 } = {}) {
+  // `Media.mimeType` is non-nullable and both selects include it, so a row
+  // without one is not a state the service can be handed. Fixtures that don't
+  // care which type it is get a renderable, extractable default rather than
+  // exercising the unreachable empty-mime branch.
+  const withMime = <T extends { mimeType?: string | null }>(
+    fn: ((_userId: string, _id: string) => Promise<T | null>) | undefined,
+    fallback: () => Promise<T | null>,
+  ) => async (userId: string, id: string) => {
+    const row = await (fn ?? fallback)(userId, id);
+    return row && !row.mimeType ? { ...row, mimeType: "application/pdf" } : row;
+  };
+
   return {
-    findMediaKeys: overrides.findMediaKeys ?? (async () => null),
+    findMediaKeys: withMime(overrides.findMediaKeys, async () => null),
     deleteMedia: overrides.deleteMedia ?? (async () => {}),
     findMediaForUpdate: overrides.findMediaForUpdate ?? (async () => null),
     updateMetadata: overrides.updateMetadata ?? (async () => ({})),
-    findForTextJob: overrides.findForTextJob ?? (async () => null),
-    setTextStatePending: overrides.setTextStatePending ?? (async () => {}),
+    findForTextJob: withMime(overrides.findForTextJob, async () => null),
+    setTextStatePending: overrides.setTextStatePending ?? (async () => true),
     setTextState: overrides.setTextState ?? (async () => {}),
     findStorageKey: overrides.findStorageKey ?? (async () => null),
     resetThumbState: overrides.resetThumbState ?? (async () => {}),
-    findBulkDownloadItems: overrides.findBulkDownloadItems ?? (async () => []),
     markThumbUnsupported: overrides.markThumbUnsupported ?? (async () => {}),
     markTextUnsupported: overrides.markTextUnsupported ?? (async () => {}),
-    findDetail: overrides.findDetail ?? (async () => null),
-    createMedia: overrides.createMedia ?? (async (data: unknown) => {
-      const d = data as { id: string; storageKey: string };
-      return { id: d.id, storageKey: d.storageKey };
-    }),
-    setLinkedBundle: overrides.setLinkedBundle ?? (async () => {}),
+    claimNeedsOcrBatch: overrides.claimNeedsOcrBatch ?? (async () => []),
+    countNeedsOcr: overrides.countNeedsOcr ?? (async () => 0),
   } as unknown as Parameters<typeof createMediaActionsService>[0]["repository"];
 }
 
@@ -97,13 +102,18 @@ function makeBundleRepo () {
   } as unknown as Parameters<typeof createMediaActionsService>[0]["bundleRepository"];
 }
 
-function makeService (repoOverrides = {}, s3Overrides = {}, ocrQueueOverrides = {}, thumbQueueOverrides = {}) {
+function makeService (repoOverrides = {}, s3Overrides = {}, textQueueOverrides = {}, thumbQueueOverrides = {}) {
+  // One mock stands in for both text tiers: these tests observe *that* a job was
+  // enqueued and *that* a stale one was cleared, not which of the two queues took
+  // it. Which tier a job routes to is asserted separately, below.
+  const q = makeQueue(textQueueOverrides);
   return createMediaActionsService({
     repository: makeRepo(repoOverrides),
     bundleRepository: makeBundleRepo(),
     storage: makeS3(s3Overrides),
     bucket: "test-bucket",
-    ocrQueue: makeQueue(ocrQueueOverrides),
+    textQueue: q,
+    ocrQueue: q,
     thumbQueue: makeThumbQueue(thumbQueueOverrides),
   });
 }
@@ -238,7 +248,7 @@ test("enqueueTextExtraction: sets textState to PENDING", async () => {
   const svc = makeService(
     {
       findForTextJob: async () => ({ id: "m1", storageKey: "k" }),
-      setTextStatePending: async () => { pendingSet = true; },
+      setTextStatePending: async () => { pendingSet = true; return true; },
     },
     {},
     { getJob: async () => null, add: async () => {} },
@@ -265,14 +275,37 @@ test("enqueueTextExtraction: forwards language and rotation options", async () =
   assert.equal(job.rotation, "90");
 });
 
-test("enqueueTextExtraction: returns { ok: true } on success", async () => {
+test("enqueueTextExtraction: returns { ok: true, queued: true } on success", async () => {
   const svc = makeService(
     { findForTextJob: async () => ({ id: "m1", storageKey: "k" }) },
     {},
     { getJob: async () => null, add: async () => {} },
   );
   const result = await svc.enqueueTextExtraction("u", "m1", {});
-  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(result, { ok: true, queued: true });
+});
+
+// setTextStatePending is guarded on PENDING/READY/ERROR/NEEDS_OCR, so it refuses
+// an UNSUPPORTED row — which a text/* file over MAX_TEXT_BYTES reaches via the
+// worker despite clearing ocrSupported. Enqueueing past the refusal produced a
+// job the worker discarded unrun, under a UI that said the run had started.
+test("enqueueTextExtraction: a refused state transition enqueues nothing", async () => {
+  const jobs: unknown[] = [];
+  const svc = makeService(
+    {
+      findForTextJob: async () => ({ id: "m1", storageKey: "k", mimeType: "text/plain" }),
+      setTextStatePending: async () => false,
+    },
+    {},
+    {
+      getJob: async () => null,
+      add: async (_name: string, data: unknown) => { jobs.push(data); },
+    },
+  );
+
+  const result = await svc.enqueueTextExtraction("u", "m1", {});
+  assert.deepEqual(result, { ok: true, queued: false });
+  assert.equal(jobs.length, 0);
 });
 
 test("enqueueTextExtraction: in-place item carries allowedRoots", async () => {
@@ -323,7 +356,7 @@ test("enqueueTextExtraction: marks unsupported file types (audio/mpeg) as unsupp
   );
 
   const result = await svc.enqueueTextExtraction("u", "m1", {});
-  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(result, { ok: true, queued: false });
   assert.deepEqual(unsupportedIds, ["m1"]);
   assert.equal(jobs.length, 0);
 });
@@ -335,7 +368,7 @@ test("enqueueTextExtraction: still queues supported file types (PDF)", async () 
     {
       findForTextJob: async () => ({ id: "m1", storageKey: "k", mimeType: "application/pdf" }),
       markTextUnsupported: async (ids: string[]) => { unsupportedIds = ids; },
-      setTextStatePending: async () => {},
+      setTextStatePending: async () => true,
     },
     {},
     {
@@ -347,6 +380,109 @@ test("enqueueTextExtraction: still queues supported file types (PDF)", async () 
   await svc.enqueueTextExtraction("u", "m1", {});
   assert.equal(unsupportedIds.length, 0);
   assert.equal(jobs.length, 1);
+});
+
+// ── enqueueTextExtraction: which tier gets the job ─────────────────────
+
+/** Wire the two tiers to separate spies so routing is observable. */
+function makeRoutedService (repoOverrides = {}) {
+  const textAdds: { data: unknown; opts: unknown }[] = [];
+  const ocrAdds: { data: unknown; opts: unknown }[] = [];
+  const gotJob: string[] = [];
+  const svc = createMediaActionsService({
+    repository: makeRepo(repoOverrides),
+    bundleRepository: makeBundleRepo(),
+    storage: makeS3(),
+    bucket: "test-bucket",
+    textQueue: makeQueue({
+      getJob: async (id: string) => { gotJob.push(`text:${id}`); return null; },
+      add: async (_n: string, data: unknown, opts?: unknown) => { textAdds.push({ data, opts }); },
+    }),
+    ocrQueue: makeQueue({
+      getJob: async (id: string) => { gotJob.push(`ocr:${id}`); return null; },
+      add: async (_n: string, data: unknown, opts?: unknown) => { ocrAdds.push({ data, opts }); },
+    }),
+    thumbQueue: makeThumbQueue(),
+  });
+  return { svc, textAdds, ocrAdds, gotJob };
+}
+
+test("enqueueTextExtraction: an unforced job goes to the text queue, not the OCR queue", async () => {
+  const { svc, textAdds, ocrAdds } = makeRoutedService({
+    findForTextJob: async () => ({ id: "m1", storageKey: "k", mimeType: "application/pdf", textState: "PENDING" }),
+  });
+
+  await svc.enqueueTextExtraction("u", "m1", {});
+
+  assert.equal(textAdds.length, 1, "native extraction belongs on the cheap queue");
+  assert.equal(ocrAdds.length, 0);
+  assert.equal((textAdds[0].data as { forceOcr?: boolean }).forceOcr, false);
+});
+
+test("enqueueTextExtraction: forceOcr sends the job to the OCR queue", async () => {
+  const { svc, textAdds, ocrAdds } = makeRoutedService({
+    findForTextJob: async () => ({ id: "m1", storageKey: "k", mimeType: "application/pdf", textState: "PENDING" }),
+  });
+
+  await svc.enqueueTextExtraction("u", "m1", { forceOcr: true });
+
+  assert.equal(ocrAdds.length, 1, "Tesseract work must not land on the text pool");
+  assert.equal(textAdds.length, 0);
+  assert.equal((ocrAdds[0].data as { forceOcr?: boolean }).forceOcr, true);
+});
+
+test("enqueueTextExtraction: a NEEDS_OCR row routes to the OCR queue without an explicit force", async () => {
+  // The row has already had its native pass and come up empty, so "extract text"
+  // can only mean tier 2 — and tier 2 only ever runs off ocr_queue.
+  const { svc, textAdds, ocrAdds } = makeRoutedService({
+    findForTextJob: async () => ({ id: "m1", storageKey: "k", mimeType: "application/pdf", textState: "NEEDS_OCR" }),
+  });
+
+  await svc.enqueueTextExtraction("u", "m1", {});
+
+  assert.equal(ocrAdds.length, 1);
+  assert.equal(textAdds.length, 0);
+});
+
+test("enqueueTextExtraction: clears the stale job from both tiers before re-queueing", async () => {
+  // BullMQ silently drops an add when the id already exists, and the same id is
+  // used in both key spaces — clearing only one queue leaves a re-extraction that
+  // sometimes does nothing at all.
+  const { svc, gotJob } = makeRoutedService({
+    findForTextJob: async () => ({ id: "m1", storageKey: "k", mimeType: "application/pdf", textState: "PENDING" }),
+  });
+
+  await svc.enqueueTextExtraction("u", "m1", {});
+
+  assert.deepEqual(gotJob.sort(), ["ocr:ocr-m1", "text:ocr-m1"]);
+});
+
+test("enqueueTextExtraction: user-initiated work outranks the background sweep", async () => {
+  const { svc, ocrAdds } = makeRoutedService({
+    findForTextJob: async () => ({ id: "m1", storageKey: "k", mimeType: "application/pdf", textState: "NEEDS_OCR" }),
+  });
+
+  await svc.enqueueTextExtraction("u", "m1", {});
+
+  const opts = ocrAdds[0].opts as { priority?: number };
+  assert.equal(opts.priority, 1, "background NEEDS_OCR sweeps enqueue at 20; the user jumps them");
+});
+
+test("cancelTextExtraction: removes the job from both tiers", async () => {
+  const removed: string[] = [];
+  const svc = createMediaActionsService({
+    repository: makeRepo({ findForTextJob: async () => ({ id: "m1", storageKey: "k" }) }),
+    bundleRepository: makeBundleRepo(),
+    storage: makeS3(),
+    bucket: "test-bucket",
+    textQueue: makeQueue({ getJob: async () => ({ remove: async () => { removed.push("text"); } }) }),
+    ocrQueue: makeQueue({ getJob: async () => ({ remove: async () => { removed.push("ocr"); } }) }),
+    thumbQueue: makeThumbQueue(),
+  });
+
+  await svc.cancelTextExtraction("u", "m1");
+
+  assert.deepEqual(removed.sort(), ["ocr", "text"]);
 });
 
 // ── cancelTextExtraction ──────────────────────────────────────────────────────
@@ -612,417 +748,148 @@ test("prioritizeThumbnail: swallows errors when the job can't be reprioritized",
   assert.deepEqual(result, { ok: false });
 });
 
-// ── getBulkDownloadItems ──────────────────────────────────────────────────────
+// ── extractAllScannedText ─────────────────────────────────────────────────────
 
-test("getBulkDownloadItems: returns empty array when no owned items found", async () => {
-  const svc = makeService();
-  const result = await svc.getBulkDownloadItems("u", ["id-1", "id-2"]);
-  assert.deepEqual(result, []);
-});
-
-test("getBulkDownloadItems: forwards userId and ids to repository", async () => {
-  let calledWith: { userId: string; ids: string[] } | null = null;
-  const svc = makeService({
-    findBulkDownloadItems: async (userId: string, ids: string[]) => {
-      calledWith = { userId, ids };
-      return [];
+/** A repo whose NEEDS_OCR backlog is `total` rows, claimed in bounded batches. */
+function makeBacklogRepo (total: number, extra: Record<string, unknown> = {}) {
+  let remaining = total;
+  let next = 0;
+  const claims: number[] = [];
+  const repo = makeRepo({
+    claimNeedsOcrBatch: async (_userId: string, limit: number) => {
+      claims.push(limit);
+      const take = Math.min(limit, remaining);
+      remaining -= take;
+      return Array.from({ length: take }, () => {
+        const n = next++;
+        return { id: `m${n}`, storageKey: `k${n}`, sourcePath: null, title: `Scan ${n}` };
+      });
     },
+    countNeedsOcr: async () => remaining,
+    ...extra,
   });
-
-  await svc.getBulkDownloadItems("user-42", ["a", "b", "c"]);
-  assert.deepEqual(calledWith, { userId: "user-42", ids: ["a", "b", "c"] });
-});
-
-test("getBulkDownloadItems: returns items from repository", async () => {
-  const items: BulkItem[] = [
-    { id: "m1", storageKey: "k1", title: "Photo", mimeType: "image/jpeg", filename: "photo.jpg" },
-    { id: "m2", storageKey: "k2", title: "Doc", mimeType: "application/pdf", filename: "doc.pdf" },
-  ];
-  const svc = makeService({ findBulkDownloadItems: async () => items });
-  const result = await svc.getBulkDownloadItems("u", ["m1", "m2"]);
-  assert.deepEqual(result, items);
-});
-
-// ── streamBulkArchive ─────────────────────────────────────────────────────────
-
-function collectStream (dest: PassThrough): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    dest.on("data", (chunk: Buffer) => chunks.push(chunk));
-    dest.on("end", () => resolve(Buffer.concat(chunks)));
-    dest.on("error", reject);
-  });
+  return { repo, claims };
 }
 
-const noopLogger = { error: () => {} };
-
-test("streamBulkArchive: produces non-empty zip output", async () => {
-  const items: BulkItem[] = [
-    { id: "m1", storageKey: "k1", title: "Photo", mimeType: "image/jpeg", filename: "photo.jpg" },
-  ];
-  const svc = makeService({}, { getObjectStream: async () => ({ body: makeReadableStream("image-data"), etag: null, contentLength: null }) });
-
-  const dest = new PassThrough();
-  const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger, []);
-  const buf = await collected;
-
-  // Zip files begin with the PK magic bytes (0x50 0x4B)
-  assert.ok(buf.length > 0, "output is non-empty");
-  assert.equal(buf[0], 0x50, "starts with P (zip magic)");
-  assert.equal(buf[1], 0x4b, "starts with K (zip magic)");
-});
-
-test("streamBulkArchive: calls getObjectStream for each item", async () => {
-  const keys: string[] = [];
-  const items: BulkItem[] = [
-    { id: "m1", storageKey: "key/a", title: "A", mimeType: "image/png", filename: "a.png" },
-    { id: "m2", storageKey: "key/b", title: "B", mimeType: "image/png", filename: "b.png" },
-  ];
-  const svc = makeService({}, {
-    getObjectStream: async (args: unknown) => {
-      keys.push((args as { key: string }).key);
-      return { body: makeReadableStream(), etag: null, contentLength: null };
-    },
+function makeBacklogService (total: number, extra: Record<string, unknown> = {}) {
+  const bulks: { data: { mediaId: string; forceOcr?: boolean }; opts: { priority?: number } }[][] = [];
+  const { repo, claims } = makeBacklogRepo(total, extra);
+  const svc = createMediaActionsService({
+    repository: repo,
+    bundleRepository: makeBundleRepo(),
+    storage: makeS3(),
+    bucket: "test-bucket",
+    textQueue: makeQueue(),
+    ocrQueue: {
+      getJob: async () => null,
+      addBulk: async (jobs: { data: { mediaId: string; forceOcr?: boolean }; opts: { priority?: number } }[]) => { bulks.push(jobs); },
+    } as unknown as Parameters<typeof createMediaActionsService>[0]["ocrQueue"],
+    thumbQueue: makeThumbQueue(),
   });
-
-  const dest = new PassThrough();
-  await svc.streamBulkArchive(items, dest, noopLogger, []);
-
-  assert.deepEqual(keys, ["key/a", "key/b"]);
-});
-
-test("streamBulkArchive: skips items where S3 returns null", async () => {
-  const items: BulkItem[] = [
-    { id: "missing", storageKey: "gone", title: "Gone", mimeType: null, filename: "gone.txt" },
-    { id: "present", storageKey: "here", title: "Here", mimeType: "text/plain", filename: "here.txt" },
-  ];
-  let streamCalls = 0;
-  const svc = makeService({}, {
-    getObjectStream: async (args: unknown) => {
-      streamCalls++;
-      const key = (args as { key: string }).key;
-      if (key === "gone") return null;
-      return { body: makeReadableStream("content"), etag: null, contentLength: null };
-    },
-  });
-
-  const dest = new PassThrough();
-  const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger, []);
-  const buf = await collected;
-
-  assert.equal(streamCalls, 2, "attempted both items");
-  assert.ok(buf.length > 0, "still produced a zip (from the present item)");
-});
-
-test("streamBulkArchive: deduplicates filenames when two items share a title", async () => {
-  // We verify deduplication indirectly: the archive must finalize without error,
-  // meaning archiver accepted two distinct entry names (no collision crash).
-  const items: BulkItem[] = [
-    { id: "m1", storageKey: "k1", title: "Report", mimeType: "application/pdf", filename: "report.pdf" },
-    { id: "m2", storageKey: "k2", title: "Report", mimeType: "application/pdf", filename: "report2.pdf" },
-  ];
-  const svc = makeService({}, {
-    getObjectStream: async () => ({ body: makeReadableStream("data"), etag: null, contentLength: null }),
-  });
-
-  const dest = new PassThrough();
-  const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger, []);
-  const buf = await collected;
-
-  // Zip contains both entries — a zip with 2 files is always larger than one with 1
-  assert.ok(buf.length > 0);
-  // The central directory contains filenames; check both expected names appear in the raw bytes
-  const content = buf.toString("binary");
-  assert.ok(content.includes("Report.pdf"), "first entry has plain name");
-  assert.ok(content.includes("Report_2.pdf"), "second entry has deduplicated name");
-});
-
-test("streamBulkArchive: falls back to original filename extension for unknown mimeType", async () => {
-  const items: BulkItem[] = [
-    { id: "m1", storageKey: "k1", title: "Mystery", mimeType: "application/octet-stream", filename: "mystery.dat" },
-  ];
-  const svc = makeService({}, {
-    getObjectStream: async () => ({ body: makeReadableStream(), etag: null, contentLength: null }),
-  });
-
-  const dest = new PassThrough();
-  const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger, []);
-  const buf = await collected;
-
-  assert.ok(buf.toString("binary").includes("Mystery.dat"), "uses extension from original filename");
-});
-
-test("streamBulkArchive: falls back to original filename extension when mimeType is null", async () => {
-  const items: BulkItem[] = [
-    { id: "m1", storageKey: "k1", title: "NoType", mimeType: null, filename: "notype.heic" },
-  ];
-  const svc = makeService({}, {
-    getObjectStream: async () => ({ body: makeReadableStream(), etag: null, contentLength: null }),
-  });
-
-  const dest = new PassThrough();
-  const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger, []);
-  const buf = await collected;
-
-  assert.ok(buf.toString("binary").includes("NoType.heic"), "uses extension from original filename");
-});
-
-test("streamBulkArchive: produces no extension when mimeType and filename both lack one", async () => {
-  const items: BulkItem[] = [
-    { id: "m1", storageKey: "k1", title: "Bare", mimeType: null, filename: "bare" },
-  ];
-  const svc = makeService({}, {
-    getObjectStream: async () => ({ body: makeReadableStream(), etag: null, contentLength: null }),
-  });
-
-  const dest = new PassThrough();
-  const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger, []);
-  const buf = await collected;
-
-  // Entry is stored as just "Bare" with no extension
-  assert.ok(buf.toString("binary").includes("Bare"), "entry exists");
-  assert.ok(!buf.toString("binary").includes("Bare."), "no spurious extension appended");
-});
-
-test("streamBulkArchive: falls back to item id when title sanitizes to empty string", async () => {
-  const items: BulkItem[] = [
-    { id: "abc-123", storageKey: "k1", title: "///", mimeType: "image/png", filename: "img.png" },
-  ];
-  const svc = makeService({}, {
-    getObjectStream: async () => ({ body: makeReadableStream(), etag: null, contentLength: null }),
-  });
-
-  const dest = new PassThrough();
-  const collected = collectStream(dest);
-  await svc.streamBulkArchive(items, dest, noopLogger, []);
-  const buf = await collected;
-
-  assert.ok(buf.toString("binary").includes("abc-123.png"), "falls back to item id");
-});
-
-// ── unpackArchive ─────────────────────────────────────────────────────────────
-
-/** Build a real ZIP buffer so the actual extractArchive/unzipper path runs. */
-function buildZip (entries: [string, string][]): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const archive = archiver("zip");
-    const chunks: Buffer[] = [];
-    archive.on("data", (c: Buffer) => chunks.push(c));
-    archive.on("end", () => resolve(Buffer.concat(chunks)));
-    archive.on("error", reject);
-    for (const [name, content] of entries) archive.append(content, { name });
-    void archive.finalize();
-  });
+  return { svc, bulks, claims };
 }
 
-test("unpackArchive: only enqueues thumb/OCR for compatible entries, marks the rest FAILED", async () => {
-  const zip = await buildZip([
-    ["photo.png", "png-bytes"],   // thumb + ocr
-    ["clip.mp4", "mp4-bytes"],    // thumb only
-    ["notes.txt", "text-bytes"],  // neither
-  ]);
+test("extractAllScannedText: queues the whole backlog as forced tier-2 work", async () => {
+  const { svc, bulks } = makeBacklogService(3);
 
-  const thumbBulks: { mediaId: string }[][] = [];
-  const ocrBulks: { mediaId: string }[][] = [];
-  let thumbUnsupported: string[] | null = null;
-  let textUnsupported: string[] | null = null;
-  // Map storageKey → assigned media id so we can resolve which file each id is.
-  const idToName = new Map<string, string>();
+  const result = await svc.extractAllScannedText("u");
 
+  assert.deepEqual(result, { queued: 3, remaining: 0 });
+  const jobs = bulks.flat();
+  assert.equal(jobs.length, 3);
+  // Every one of these rows already had native extraction run and come up empty,
+  // so anything but forceOcr would redo the native pass and re-park them.
+  assert.ok(jobs.every(j => j.data.forceOcr === true), "all jobs force tier 2");
+  assert.ok(jobs.every(j => j.opts.priority === 1), "user work outranks the background sweep");
+});
+
+test("extractAllScannedText: no backlog is a clean no-op", async () => {
+  const { svc, bulks } = makeBacklogService(0);
+
+  const result = await svc.extractAllScannedText("u");
+
+  assert.deepEqual(result, { queued: 0, remaining: 0 });
+  assert.equal(bulks.length, 0, "an empty claim must not open a queue round-trip");
+});
+
+test("extractAllScannedText: claims in chunks rather than one unbounded query", async () => {
+  const { svc, claims } = makeBacklogService(600);
+
+  const result = await svc.extractAllScannedText("u");
+
+  assert.equal(result.queued, 600);
+  assert.ok(claims.length > 1, "the backlog is drained in batches");
+  assert.ok(claims.every(c => c <= 250), `each claim is bounded, got ${claims.join(",")}`);
+});
+
+test("extractAllScannedText: honours the caller's limit and reports what is left", async () => {
+  // Each job is minutes of a core, so one press must not commit the box to a
+  // month of OCR — it queues a slice and hands back the rest.
+  const { svc, bulks } = makeBacklogService(1000);
+
+  const result = await svc.extractAllScannedText("u", [], 400);
+
+  assert.equal(result.queued, 400);
+  assert.equal(result.remaining, 600);
+  assert.equal(bulks.flat().length, 400);
+});
+
+test("extractAllScannedText: in-place rows carry the allow-list snapshot", async () => {
+  const bulks: { data: { sourcePath?: string; allowedRoots?: string[] } }[][] = [];
   const svc = createMediaActionsService({
     repository: makeRepo({
-      findDetail: async () => ({
-        id: "arc-1", storageKey: "k/archive.zip", mimeType: "application/zip",
-        title: "archive", filename: "archive.zip",
-      }),
-      createMedia: async (data: unknown) => {
-        const d = data as { id: string; storageKey: string; filename: string };
-        idToName.set(d.id, d.filename);
-        return { id: d.id, storageKey: d.storageKey };
-      },
-      markThumbUnsupported: async (ids: string[]) => { thumbUnsupported = ids; },
-      markTextUnsupported: async (ids: string[]) => { textUnsupported = ids; },
-      setLinkedBundle: async () => {},
+      claimNeedsOcrBatch: async () => [
+        { id: "m1", storageKey: "external/u/m1/scan.pdf", sourcePath: "/nas/scan.pdf", title: "Scan" },
+        { id: "m2", storageKey: "managed/k", sourcePath: null, title: "Upload" },
+      ],
+      countNeedsOcr: async () => 0,
     }),
-    bundleRepository: {
-      createBundle: async () => ({ id: "bundle-1" }),
-      addItems: async () => true,
-      updateBundle: async () => {},
-      setSourceMedia: async () => {},
-      deleteBundle: async () => {},
-    } as unknown as Parameters<typeof createMediaActionsService>[0]["bundleRepository"],
-    storage: {
-      // Hand the unpacker a real zip stream.
-      getObjectStream: async () => ({ body: Readable.from(zip), etag: null, contentLength: null }),
-      // Drain each extracted entry stream so unzipper advances to the next.
-      putObject: async ({ body }: { body: Readable }) => {
-        await new Promise<void>((res, rej) => {
-          body.on("end", res);
-          body.on("error", rej);
-          body.resume();
-        });
-      },
-    } as unknown as Parameters<typeof createMediaActionsService>[0]["storage"],
-    bucket: "test-bucket",
-    ocrQueue: { addBulk: async (jobs: { data: { mediaId: string } }[]) => { ocrBulks.push(jobs.map(j => j.data)); } } as unknown as Parameters<typeof createMediaActionsService>[0]["ocrQueue"],
-    thumbQueue: { addBulk: async (jobs: { data: { mediaId: string } }[]) => { thumbBulks.push(jobs.map(j => j.data)); } } as unknown as Parameters<typeof createMediaActionsService>[0]["thumbQueue"],
-  });
-
-  const result = await svc.unpackArchive("u", "arc-1");
-  assert.deepEqual(result, { bundleId: "bundle-1" });
-
-  const thumbNames = (thumbBulks.flat()).map(j => idToName.get(j.mediaId)).sort();
-  const ocrNames = (ocrBulks.flat()).map(j => idToName.get(j.mediaId)).sort();
-  assert.deepEqual(thumbNames, ["clip.mp4", "photo.png"], "thumb only for image + video");
-  assert.deepEqual(ocrNames, ["notes.txt", "photo.png"], "text extraction for image (OCR) + txt (direct read)");
-
-  const thumbUnsupportedNames = (thumbUnsupported as string[] | null ?? []).map(id => idToName.get(id));
-  const textUnsupportedNames = ((textUnsupported as string[] | null ?? []).map(id => idToName.get(id))).sort();
-  assert.deepEqual(thumbUnsupportedNames, ["notes.txt"], "txt marked thumb-unsupported");
-  assert.deepEqual(textUnsupportedNames, ["clip.mp4"], "only video marked text-unsupported");
-});
-
-// ── abortProcessing ───────────────────────────────────────────────────────────
-
-type ObQueue = Parameters<typeof createMediaActionsService>[0]["ocrQueue"];
-
-type QueueCalls = { drained: boolean; paused: boolean; resumed: boolean; cleaned: string[] };
-
-/** A fake queue that records the abort lifecycle. `failOn` makes one step throw. */
-function makeAbortQueue (
-  name: string,
-  log: Record<string, QueueCalls>,
-  opts: { failOn?: "pause" | "drain" | "clean" } = {},
-) {
-  const calls: QueueCalls = { drained: false, paused: false, resumed: false, cleaned: [] };
-  log[name] = calls;
-  return {
-    pause: async () => { if (opts.failOn === "pause") throw new Error("x"); calls.paused = true; },
-    drain: async () => { if (opts.failOn === "drain") throw new Error("x"); calls.drained = true; },
-    clean: async (_g: number, _l: number, type: string) => { if (opts.failOn === "clean") throw new Error("x"); calls.cleaned.push(type); },
-    resume: async () => { calls.resumed = true; },
-  } as unknown as ObQueue;
-}
-
-const castThumb = (q: ObQueue) => q as unknown as Parameters<typeof createMediaActionsService>[0]["thumbQueue"];
-const castUnpack = (q: ObQueue) => q as unknown as Parameters<typeof createMediaActionsService>[0]["unpackQueue"];
-const castIndex = (q: ObQueue) => q as unknown as Parameters<typeof createMediaActionsService>[0]["indexQueue"];
-
-test("abortProcessing: pauses, drains, cleans, then resumes the index queue only", async () => {
-  const log: Record<string, QueueCalls> = {};
-  const svc = createMediaActionsService({
-    repository: makeRepo(),
     bundleRepository: makeBundleRepo(),
     storage: makeS3(),
     bucket: "test-bucket",
-    ocrQueue: makeAbortQueue("ocr", log),
-    thumbQueue: castThumb(makeAbortQueue("thumb", log)),
-    unpackQueue: castUnpack(makeAbortQueue("unpack", log)),
-    indexQueue: castIndex(makeAbortQueue("index", log)),
+    textQueue: makeQueue(),
+    ocrQueue: {
+      getJob: async () => null,
+      addBulk: async (jobs: { data: { sourcePath?: string; allowedRoots?: string[] } }[]) => { bulks.push(jobs); },
+    } as unknown as Parameters<typeof createMediaActionsService>[0]["ocrQueue"],
+    thumbQueue: makeThumbQueue(),
   });
 
-  const result = await svc.abortProcessing();
-  assert.equal(result.ok, true);
-  // Only the index queue (the producer) is drained — thumb/ocr jobs already
-  // enqueued are left to finish so no thumbnails or text are lost mid-walk.
-  assert.deepEqual(result.cleared, ["index"]);
-  assert.equal(log["index"].paused, true, "index paused");
-  assert.equal(log["index"].drained, true, "index drained");
-  assert.deepEqual(log["index"].cleaned.sort(), ["completed", "failed"], "index cleaned terminal");
-  assert.equal(log["index"].resumed, true, "index resumed");
-  for (const name of ["ocr", "thumb", "unpack"]) {
-    assert.equal(log[name].paused, false, `${name} untouched`);
-    assert.equal(log[name].drained, false, `${name} untouched`);
-  }
+  await svc.extractAllScannedText("u", ["/nas"]);
+
+  const [inPlace, managed] = bulks.flat();
+  // Without the snapshot the worker re-validates the path against an empty
+  // allow-list and the source read is rejected.
+  assert.equal(inPlace.data.sourcePath, "/nas/scan.pdf");
+  assert.deepEqual(inPlace.data.allowedRoots, ["/nas"]);
+  assert.equal(managed.data.sourcePath, undefined, "managed rows read from storage, not disk");
+  assert.equal(managed.data.allowedRoots, undefined);
 });
 
-test("abortProcessing: bumps the index-abort epoch so an in-flight walk stops", async () => {
-  const log: Record<string, QueueCalls> = {};
-  let incrCalls = 0;
-  let incrKey = "";
+test("extractAllScannedText: clears stale jobs on both tiers before re-queueing", async () => {
+  const removed: string[] = [];
   const svc = createMediaActionsService({
-    repository: makeRepo(),
+    repository: makeRepo({
+      claimNeedsOcrBatch: async () =>
+        removed.length === 0
+          ? [{ id: "m1", storageKey: "k", sourcePath: null, title: "Scan" }]
+          : [],
+      countNeedsOcr: async () => 0,
+    }),
     bundleRepository: makeBundleRepo(),
     storage: makeS3(),
     bucket: "test-bucket",
-    ocrQueue: makeAbortQueue("ocr", log),
-    thumbQueue: castThumb(makeAbortQueue("thumb", log)),
-    indexQueue: castIndex(makeAbortQueue("index", log)),
-    redis: { incr: async (key: string) => { incrCalls++; incrKey = key; return incrCalls; } },
+    textQueue: makeQueue({ getJob: async () => ({ remove: async () => { removed.push("text"); } }) }),
+    ocrQueue: {
+      getJob: async () => ({ remove: async () => { removed.push("ocr"); } }),
+      addBulk: async () => {},
+    } as unknown as Parameters<typeof createMediaActionsService>[0]["ocrQueue"],
+    thumbQueue: makeThumbQueue(),
   });
 
-  await svc.abortProcessing();
-  assert.equal(incrCalls, 1, "abort epoch incremented exactly once");
-  assert.equal(incrKey, "vault:index:abort-epoch");
-});
+  await svc.extractAllScannedText("u");
 
-test("abortProcessing: still drains the index queue when no redis is wired (signal skipped)", async () => {
-  const log: Record<string, QueueCalls> = {};
-  const svc = createMediaActionsService({
-    repository: makeRepo(),
-    bundleRepository: makeBundleRepo(),
-    storage: makeS3(),
-    bucket: "test-bucket",
-    ocrQueue: makeAbortQueue("ocr", log),
-    thumbQueue: castThumb(makeAbortQueue("thumb", log)),
-    indexQueue: castIndex(makeAbortQueue("index", log)),
-    // no redis
-  });
-
-  const result = await svc.abortProcessing();
-  assert.deepEqual(result.cleared, ["index"]);
-});
-
-test("abortProcessing: never obliterates (no active jobs are yanked mid-process)", async () => {
-  let obliterated = false;
-  const q = { pause: async () => {}, drain: async () => {}, clean: async () => {}, resume: async () => {},
-    obliterate: async () => { obliterated = true; } } as unknown as ObQueue;
-  const svc = createMediaActionsService({
-    repository: makeRepo(), bundleRepository: makeBundleRepo(), storage: makeS3(), bucket: "b",
-    ocrQueue: q, thumbQueue: castThumb(q), indexQueue: castIndex(q),
-  });
-  await svc.abortProcessing();
-  assert.equal(obliterated, false, "must not call obliterate — that causes the Missing-key worker error");
-});
-
-test("abortProcessing: no-ops cleanly when the index queue isn't wired", async () => {
-  const log: Record<string, QueueCalls> = {};
-  const svc = createMediaActionsService({
-    repository: makeRepo(),
-    bundleRepository: makeBundleRepo(),
-    storage: makeS3(),
-    bucket: "test-bucket",
-    ocrQueue: makeAbortQueue("ocr", log),
-    thumbQueue: castThumb(makeAbortQueue("thumb", log)),
-    // indexQueue intentionally omitted
-  });
-
-  const result = await svc.abortProcessing();
-  assert.equal(result.ok, true);
-  assert.deepEqual(result.cleared, []);
-});
-
-test("abortProcessing: a failing drain still resumes the queue (never left paused)", async () => {
-  const log: Record<string, QueueCalls> = {};
-  const svc = createMediaActionsService({
-    repository: makeRepo(),
-    bundleRepository: makeBundleRepo(),
-    storage: makeS3(),
-    bucket: "test-bucket",
-    ocrQueue: makeAbortQueue("ocr", log),
-    thumbQueue: castThumb(makeAbortQueue("thumb", log)),
-    indexQueue: castIndex(makeAbortQueue("index", log, { failOn: "drain" })),
-  });
-
-  const result = await svc.abortProcessing();
-  assert.equal(result.ok, true);
-  // index drain threw → not reported as cleared, but it must still be resumed.
-  assert.deepEqual(result.cleared, []);
-  assert.equal(log["index"].resumed, true, "failing queue is resumed in finally");
+  // A background-sweep job still waiting under this id would otherwise make the
+  // bulk add a silent no-op for that row.
+  assert.deepEqual(removed.sort(), ["ocr", "text"]);
 });

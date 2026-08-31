@@ -1,11 +1,14 @@
-// apps/api/src/plugins/jwt.ts
+/**
+ * Signs and verifies the access and refresh tokens that keep a browser signed
+ * in, and puts them on the Fastify instance.
+ */
 import fp from "fastify-plugin";
 import jwt from "jsonwebtoken";
 import type { FastifyPluginAsync } from "fastify";
 import type { JwtPayload, SignOptions } from "jsonwebtoken";
 
-// Tokens always include `sub`; `tv` (tokenVersion) is present on tokens minted
-// after the session-eviction change and absent on older ones.
+// `tv` is optional because tokens signed before token versioning existed carry
+// none. See {@link JwtAdapter} for what the claim means.
 type AccessClaims = JwtPayload & { sub: string; tv?: number };
 type RefreshClaims = JwtPayload & { sub: string; tv?: number };
 
@@ -21,7 +24,7 @@ declare module "fastify" {
 }
 
 const jwtPlugin: FastifyPluginAsync = async (app) => {
-  // Idempotent in dev/hot-reload
+  // Re-registering during a hot reload must not throw.
   if (app.hasDecorator("jwt")) return;
 
   const accessSecret = app.config.JWT_SECRET;

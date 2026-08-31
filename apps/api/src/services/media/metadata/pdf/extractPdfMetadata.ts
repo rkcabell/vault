@@ -2,13 +2,22 @@ import { loadPdfJs } from "../../../pdf/loadPdfJs.js";
 import type { PdfMetadata } from "../types.js";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 
+/**
+ * Reads what a PDF records about itself: its title, author, producer, page
+ * count and dates.
+ */
+
 const MAX_PDF_PAGES = 2000;
 
+/**
+ * Returns a PDF's document information, or null when it cannot be opened.
+ * Past `MAX_PDF_PAGES` only the page count is read.
+ */
 export async function extractPdfMetadata(buffer: Buffer): Promise<PdfMetadata | null> {
   try {
     const pdfjs = await loadPdfJs();
-    // Copy into a fresh ArrayBuffer — pdfjs transfers (detaches) the buffer it
-    // receives, which would corrupt any other view over the same ArrayBuffer.
+    // pdf.js detaches the buffer it is handed, so it gets a copy. The caller's
+    // buffer goes on to other extractors.
     const data = new Uint8Array(buffer);
 
     const init: DocumentInitParameters & { disableWorker?: boolean } = {
@@ -68,6 +77,7 @@ function parseBoolean(value: unknown): boolean | null {
   return null;
 }
 
+// A PDF date reads D:20240115103000. Anything else is returned unchanged.
 function parsePdfDate(value?: string | null): string | null {
   if (!value) return null;
   const match = value.match(/^D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?/);

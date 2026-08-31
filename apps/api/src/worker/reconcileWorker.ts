@@ -9,11 +9,9 @@ import type {
 import { assertUnderAllowedRoot, canonicalizeAbsPath } from "../lib/media/indexRoots.js";
 import { normalizeExtensions } from "../lib/media/extensions.js";
 import { matchIdentity } from "../lib/media/matchIdentity.js";
+import { sameMtime } from "../lib/media/sourceMtime.js";
 import { hashFileStreaming } from "../lib/media/hashFile.js";
 import { deriveTitle } from "../lib/media/deriveTitle.js";
-import { enqueueThumbBulk, type EnqueueThumbBulkItem } from "../queues/enqueueThumbnail.js";
-import { enqueueOcrBulk } from "../queues/enqueueOcr.js";
-import { enqueueHashBulk, type EnqueueHashItem } from "../queues/enqueueHash.js";
 import { walkFiles, type WalkFilters, type WalkStats } from "./indexWalk.js";
 import {
   type DiscoveredFile,
@@ -28,8 +26,8 @@ type ReconcileLogger = {
   error: (obj: object, msg: string) => void;
 };
 
-/** A minimal stat — injectable so tests don't touch the real filesystem. The
- *  type predicates are optional so stubs can return just `{ size, mtimeMs }`. */
+/** The parts of a stat this worker reads. The type predicates are optional, so
+ *  a stub can return only `{ size, mtimeMs }`. */
 type StatLike = {
   size: number;
   mtimeMs?: number;
@@ -40,23 +38,21 @@ type StatLike = {
 export type ReconcileWorkerDeps = IndexCoreDeps & {
   mediaRepository: MediaRepository;
   logger: ReconcileLogger;
-  /** Stat one source file — defaults to fs.lstat. Test seam. */
+  /** Stats one source file. Defaults to fs.lstat. */
   statFile?: (absPath: string) => Promise<StatLike>;
-  /** Stream-hash a file to break a tie between move candidates. Test seam. */
+  /** Hashes a file, to break a tie between move candidates. */
   hashFile?: (absPath: string) => Promise<string | null>;
-  /** Enumerate the files on disk under a root — defaults to the shared walk. Test seam. */
+  /** Lists the files on disk under a root. Defaults to the shared walk. */
   walkRoot?: (root: string, filters: WalkFilters, stats: WalkStats) => AsyncGenerator<DiscoveredFile>;
   /**
-   * Reads the current abort epoch (see lib/media/indexAbort). Deliberately the
-   * *same* epoch the index scan reads, so one "stop" control cancels whichever
-   * of the two is running. Defaults to "never abort".
+   * Reads the current abort epoch. Reconcile keeps a counter of its own, so
+   * stopping a sweep does not stop an index scan. Absent, a sweep never aborts.
    */
   readAbortEpoch?: () => Promise<number>;
-  /** Override the batch size (tests use a small value). */
   batchSize?: number;
 };
 
-/** How many newly-discovered files to insert + enqueue per batch. */
+/** How many newly-discovered files are written to the database at a time. */
 const BATCH_SIZE = 200;
 /** Cap on ids per tombstone/revive UPDATE, mirroring the watcher's batching. */
 const UPDATE_BATCH_SIZE = 500;
@@ -64,31 +60,13 @@ const UPDATE_BATCH_SIZE = 500;
 const TICK_MS = 250;
 
 /**
- * Reconcile one indexing root: a bidirectional diff between the library and the
- * disk.
+ * Reconciles one indexing root: a two-way comparison between the library and the
+ * disk. It is the only thing that sees drift, because the watcher observes
+ * events only while the process runs, and an index scan skips a path that
+ * already has a row.
  *
- * This exists because neither of the other two mechanisms can see drift. The
- * live watcher only observes events while the process is running, and a plain
- * index scan skips any path that already has a row — so a file deleted, moved,
- * or edited while Vault was down is invisible to both, permanently. Running
- * this is what keeps "indexed in place" meaning the library still matches
- * what is actually on disk.
- *
- * The two halves:
- *
- *   library → disk   stat every row under the root. Gone: tombstone it (never
- *                    delete — the row holds tags, title, starred state, bundle
- *                    membership, reminders and extracted text, and the file may
- *                    simply have moved). Different size/mtime: the bytes changed
- *                    under us, so every derived artifact is stale and is
- *                    re-queued. Back at its old path: revive it.
- *
- *   disk → library   walk the root. A file that has a row was already settled by
- *                    the pass above. A file without one is either the other half
- *                    of a move — matched against the tombstones by identity
- *                    rather than re-indexed, which is what preserves the user's
- *                    metadata and the stable `Media.id` behind any bookmarked
- *                    link — or genuinely new.
+ * docs/OVERVIEW.md describes both passes in full. The invariants the code below
+ * rests on are commented where they apply.
  */
 export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<ReconcileJobData> {
   const statFile = deps.statFile ?? (async (p: string) => lstat(p));
@@ -130,9 +108,7 @@ export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<
     deps.logger.info({ userId, root }, "reconcile started");
     let aborted = false;
 
-    // -------------------------------------------------------------------
-    // Library → disk: is every row's file still there, and still the same?
-    // -------------------------------------------------------------------
+    // Library to disk: is every row's file still there, and still the same?
     const rows = await deps.mediaRepository.listReconcileEntries(userId, root);
     // Keyed by the stored (already canonical) sourcePath so the walk below can
     // ask "do I already know this file?" without a query per file.
@@ -140,33 +116,19 @@ export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<
 
     const vanished: string[] = [];
     const returned: string[] = [];
-    // Re-derivation work for rows whose bytes changed, queued in batches so a
-    // large edited folder doesn't open one round-trip per file.
-    let thumbItems: EnqueueThumbBulkItem[] = [];
-    let hashItems: EnqueueHashItem[] = [];
-    let ocrItems: { mediaId: string; userId: string; storageKey: string; allowedRoots: string[] }[] = [];
-
-    const flushDerivations = async () => {
-      const [t, h, o] = [thumbItems, hashItems, ocrItems];
-      thumbItems = []; hashItems = []; ocrItems = [];
-      await Promise.all([
-        t.length > 0 ? enqueueThumbBulk(deps.thumbQueue, t) : Promise.resolve(),
-        h.length > 0 && deps.hashQueue ? enqueueHashBulk(deps.hashQueue, h) : Promise.resolve(),
-        o.length > 0 ? enqueueOcrBulk(deps.ocrQueue, o) : Promise.resolve(),
-      ]);
-    };
 
     /**
      * The bytes at a known path changed under us. Record the new size/mtime,
-     * invalidate everything derived from the old bytes, and queue exactly the
-     * work a first index would have queued for this type and size.
+     * invalidate everything derived from the old bytes, and reset the states
+     * a first index would have set for this type and size — the
+     * derivative feeder (thumb, text, hash) claims from there.
      */
     const reprocessChanged = async (row: ReconcileEntry, size: number, mtimeMs: number | null) => {
       const plan = planDerivations(row.mimeType, size);
-      // Only advance fileDate while it is still the untouched mtime. Once the
-      // thumb worker has upgraded it to an embedded EXIF/PDF date, that date is
-      // better information than the file's timestamp and must not be clobbered
-      // (the re-queued thumb job refreshes it if the embedded date changed too).
+      // fileDate moves on only while it is still the file's modified time. Once
+      // the thumbnail worker has replaced it with a date read from inside the
+      // file, that one is better and must not be overwritten. The re-queued
+      // thumbnail job refreshes it if the embedded date changed too.
       const fileDateWasMtime =
         row.fileDate === null ||
         (row.mtimeMs !== null && row.fileDate.getTime() === Math.trunc(row.mtimeMs));
@@ -176,14 +138,10 @@ export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<
         sizeBytes: size,
         mtimeMs,
         resetThumb: plan.thumb,
-        resetText: plan.ocr,
+        resetText: plan.text,
+        resetHash: plan.hash,
         ...(fileDate ? { fileDate } : {}),
       });
-
-      const target = { mediaId: row.id, userId, storageKey: row.storageKey, allowedRoots };
-      if (plan.thumb) thumbItems.push({ ...target, sourcePath: row.sourcePath });
-      if (plan.hash) hashItems.push({ ...target, sourcePath: row.sourcePath });
-      if (plan.ocr) ocrItems.push(target);
     };
 
     for (const row of rows) {
@@ -207,7 +165,7 @@ export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<
       // catches an edit on a row that predates the sourceMtimeMs column.
       const changed =
         row.sizeBytes !== st.size ||
-        (row.mtimeMs !== null && mtimeMs !== null && row.mtimeMs !== mtimeMs);
+        (row.mtimeMs !== null && mtimeMs !== null && !sameMtime(row.mtimeMs, mtimeMs));
 
       if (changed) {
         await reprocessChanged(row, st.size, mtimeMs);
@@ -218,9 +176,6 @@ export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<
         // or the item stays flagged missing until a manual refresh.
         if (row.missingSince !== null) {
           deps.publishJobUpdate?.({ userId, mediaId: row.id, field: "mediaMoved", value: "1" });
-        }
-        if (thumbItems.length + hashItems.length + ocrItems.length >= batchSize) {
-          await flushDerivations();
         }
       } else {
         if (row.missingSince !== null) returned.push(row.id);
@@ -240,19 +195,15 @@ export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<
         }
       }
     }
-    await flushDerivations();
 
-    // Tombstone, never delete. The file may have moved (the second half of this
-    // sweep looks for exactly that) or the drive may simply be unmounted. The
-    // missing-sweeper in worker/index.ts is the only thing that deletes, and
-    // only once the grace period has passed without the file coming back.
+    // Tombstone rather than delete: the file may have moved, or the drive may
+    // simply be unmounted. Only the missing-sweeper in worker/index.ts deletes,
+    // and only once the grace period has passed.
     //
-    // Skipped entirely on abort, and that asymmetry is deliberate: the half of
-    // the sweep that recognises a tombstone as a move never runs when aborted,
-    // while the missing-sweeper *will* hard-delete these rows once the grace
-    // period lapses. Writing them here would mean a cancelled check can cost the
-    // user rows for files that had merely moved. Deferring costs nothing — the
-    // next sweep re-derives the same list.
+    // Skipped entirely on abort. The pass that recognises a tombstone as a move
+    // never runs when aborted, while the sweeper still deletes once the grace
+    // period lapses, so tombstoning here would let a cancelled sweep destroy
+    // rows for files that had only moved.
     if (!aborted) {
       for (let i = 0; i < vanished.length; i += UPDATE_BATCH_SIZE) {
         progress.missing += await deps.mediaRepository.markMissing(
@@ -275,26 +226,18 @@ export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<
     }
     progress.revived = returned.length;
 
-    // -------------------------------------------------------------------
-    // Disk → library: is every file on disk in the library?
-    // -------------------------------------------------------------------
+    // Disk to library: is every file on disk in the library?
     //
-    // Every tombstone the sweeper has not yet taken counts as a move candidate,
-    // not just the recent ones the live watcher considers. The watcher's window
-    // is sized to how long an OS takes to emit an unlink/add pair; here the file
-    // may have moved days ago while Vault was off, and the only meaningful bound
-    // is the grace period that has kept the row alive at all. Deliberately not
-    // scoped to this root either, so a move between two indexed roots matches.
+    // Every tombstone the sweeper has not yet taken is a move candidate, not just
+    // the recent ones the watcher considers: the file may have moved days ago
+    // while Vault was off, so the only meaningful bound is the grace period.
+    // Deliberately not scoped to this root, so a move between roots matches.
     //
-    // Bucketed by size, because that pool is unbounded and `matchIdentity` is
-    // linear in what it is handed. Two costs collapse: the per-file scan of
-    // every tombstone in the library, and — far worse — the fact that
-    // `matchIdentity` reports `ambiguous` whenever *any* candidate carries a
-    // contentHash, which makes the caller stream-hash the file. Unbucketed, one
-    // hashed tombstone anywhere forces a full byte-read of every new file in the
-    // sweep. Bucketing is sound rather than merely fast: a move preserves size
-    // exactly (both metadata tiers already require it), and equal content hashes
-    // imply equal size, so a different-sized candidate can never be this file.
+    // Bucketed by size, because that pool is unbounded and `matchIdentity`
+    // reports `ambiguous` whenever *any* candidate carries a contentHash — so
+    // unbucketed, one hashed tombstone anywhere forces a full byte-read of every
+    // new file in the sweep. Sound as well as fast: a move preserves size
+    // exactly, and equal hashes imply equal size.
     const candidatesBySize = new Map<number, MoveCandidateRow[]>();
     if (!aborted) {
       for (const c of await deps.mediaRepository.findMoveCandidates(userId, new Date(0))) {
@@ -305,11 +248,10 @@ export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<
     }
 
     /**
-     * Try to explain a file with no row as an already-known item that moved.
-     * Hashing happens only to break a genuine tie among same-size candidates —
-     * hashing every unmatched file would cost far more than the re-index this
-     * exists to avoid. A consumed candidate leaves its bucket so two files can
-     * never claim the same row.
+     * Tries to explain a file with no row as an item that moved. It hashes only
+     * to break a real tie among same-size candidates: hashing every unmatched
+     * file would take far longer than the re-index this avoids. A candidate
+     * that matches leaves its bucket, so two files cannot claim one row.
      */
     const rematch = async (file: DiscoveredFile, canonical: string): Promise<boolean> => {
       const bucket = candidatesBySize.get(file.size);
@@ -373,10 +315,6 @@ export function createReconcileProcessor (deps: ReconcileWorkerDeps): Processor<
           continue;
         }
 
-        // A sidecar lookup belongs here: a file with no row and no tombstone but
-        // a sidecar beside it should be created hydrated from that sidecar
-        // rather than bare. Sidecars do not exist yet — until they do, an
-        // unmatched file is simply new.
         batch.push(file);
         if (batch.length >= batchSize) {
           // Check before flushing so an aborted sweep doesn't insert the batch in hand.

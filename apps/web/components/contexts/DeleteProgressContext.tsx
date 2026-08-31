@@ -15,7 +15,7 @@ import { toast } from "@/components/ui/Toaster";
 
 const POLL_MS = 1500;
 // Consecutive failed status polls before giving up on tracking the job. The
-// poll silently swallowing errors forever was exactly how the library ended up
+// poll silently swallowing errors forever was how the library ended up
 // stale with no signal — after ~12 s of failures, surface it and stop.
 const MAX_POLL_MISSES = 8;
 
@@ -49,7 +49,7 @@ export function DeleteProgressProvider ({ children }: { children: ReactNode }) {
     setStatus(next);
     if (!next) return;
 
-    // Fire the completion side effects exactly once per job.
+    // Fire the completion side effects once per job.
     if (isTerminal(next) && toastedJobRef.current !== next.jobId) {
       toastedJobRef.current = next.jobId;
       emitTagsUpdated();

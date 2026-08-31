@@ -1,4 +1,9 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { normalizePreferenceKeys } from "@vault/types";
+
+/**
+ * Reads and writes the preferences JSON stored on each user row.
+ */
 
 export class PreferencesRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -11,8 +16,8 @@ export class PreferencesRepository {
     return row?.preferences ?? null;
   }
 
-  /** Raw preferences for every user — used by the index watcher to discover
-   *  which roots to watch across all accounts (single-user in practice). */
+  /** Returns every user's raw preferences. The index watcher reads this to
+   *  find the roots to watch across all accounts. */
   async listAll () {
     return this.prisma.user.findMany({ select: { id: true, preferences: true } });
   }
@@ -23,11 +28,9 @@ export class PreferencesRepository {
       select: { preferences: true },
     });
 
-    const rawExisting = row?.preferences;
-    const existing: Prisma.InputJsonObject =
-      rawExisting && typeof rawExisting === "object" && !Array.isArray(rawExisting)
-        ? (rawExisting as Prisma.InputJsonObject)
-        : {};
+    // Normalizing on the way in means a write also retires legacy key names,
+    // rather than merging on top of them.
+    const existing = normalizePreferenceKeys(row?.preferences) as Prisma.InputJsonObject;
     const merged: Prisma.InputJsonObject = { ...existing, ...(patch as Prisma.InputJsonObject) };
 
     const updated = await this.prisma.user.update({

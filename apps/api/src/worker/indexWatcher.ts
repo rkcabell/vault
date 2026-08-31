@@ -11,6 +11,17 @@ import { hashFileStreaming } from "../lib/media/hashFile.js";
 import { deriveTitle } from "../lib/media/deriveTitle.js";
 import { type IndexCoreDeps, indexFiles, isBlacklisted } from "./indexCore.js";
 
+/**
+ * Keeps the library in step with the filesystem while the process runs: a new
+ * file is indexed, a deleted one is tombstoned, and a changed one has its
+ * thumbnail refreshed.
+ *
+ * It is best-effort. On bind mounts and network shares the operating system may
+ * report nothing at all, even with polling on, so the periodic reconcile sweep
+ * is the authority. Configs are re-read on an interval, so adding or removing a
+ * root takes effect without a restart.
+ */
+
 /** Cap on ids per tombstone UPDATE, so moving a directory of 100k files does
  *  not build a single unbounded `IN` list. Mirrors the scan's batching. */
 const MISSING_BATCH_SIZE = 500;
@@ -21,8 +32,8 @@ type WatchLogger = {
   error: (obj: object, msg: string) => void;
 };
 
-/** A minimal stat — injectable so handler tests don't touch the real FS. The
- *  type predicates are optional so test stubs can return just `{ size }`. */
+/** The parts of a stat these handlers read. The type predicates are optional,
+ *  so a stub can return only `{ size }`. */
 type StatLike = { size: number; mtimeMs?: number; isDirectory?: () => boolean; isSymbolicLink?: () => boolean };
 
 export type IndexWatcherDeps = IndexCoreDeps & {
@@ -33,11 +44,11 @@ export type IndexWatcherDeps = IndexCoreDeps & {
    *  Carries allowedRoots so the worker can re-validate an in-place source read. */
   regenerateThumbnail: (userId: string, id: string, allowedRoots: string[]) => Promise<unknown>;
   logger: WatchLogger;
-  /** Override the file stat used on `add` — defaults to fs.lstat. Test seam. */
+  /** Stats a file on `add`. Defaults to fs.lstat. */
   statFile?: (absPath: string) => Promise<StatLike>;
-  /** Stream-hash a file to break a tie between move candidates. Only called
-   *  when cheap metadata was inconclusive. Defaults to a streaming sha256;
-   *  returns null if the file cannot be read. Test seam. */
+  /** Hashes a file to break a tie between move candidates, and is called only
+   *  when the cheap signals were inconclusive. Returns null when the file
+   *  cannot be read. */
   hashFile?: (absPath: string) => Promise<string | null>;
   /** Current time in epoch ms — injectable so tests can drive the
    *  move-detection window without sleeping. */
@@ -62,13 +73,12 @@ function isFiltered (absPath: string, config: IndexConfig): boolean {
 }
 
 /**
- * Serialize async work so events are applied one at a time in arrival order.
+ * Applies events one at a time, in the order they arrived.
  *
- * Move detection reads and writes the same tombstone set from both the `unlink`
- * and `add` handlers, and chokidar fires them concurrently. Without this, the
- * two halves of a move can interleave — both sides observing a state neither
- * has finished writing — and a rematch is missed or applied twice. Rejections
- * are contained so one failed event cannot poison the rest of the chain.
+ * Move detection reads and writes the same tombstones from both the `unlink`
+ * and the `add` handler, and chokidar fires the two at once. Interleaved, the
+ * halves of a move are missed or applied twice. A rejection is contained, so
+ * one failed event does not stop the rest.
  */
 function createSerialQueue (): <T>(fn: () => Promise<T>) => Promise<T> {
   let tail: Promise<unknown> = Promise.resolve();
@@ -80,12 +90,9 @@ function createSerialQueue (): <T>(fn: () => Promise<T>) => Promise<T> {
 }
 
 /**
- * The filesystem-event handlers, decoupled from chokidar so they can be unit
- * tested with injected deps + a fake config list. `getConfigs` is read fresh on
- * every event so settings changes (re-synced by the watcher) take effect without
- * re-wiring handlers.
- *
- * The handlers returned here are serialized against each other — see
+ * The filesystem-event handlers, kept apart from chokidar itself. `getConfigs`
+ * is read afresh on every event, so a settings change takes effect without the
+ * handlers being rewired. They are serialized against each other; see
  * {@link createSerialQueue}.
  */
 export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: () => IndexConfig[]) {
@@ -101,8 +108,8 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
   /**
    * Try to explain a newly-appeared file as an already-known item that moved or
    * was renamed. Returns true when it did, meaning the caller must not index it
-   * as new. Hashing happens only to break a genuine tie — hashing every added
-   * file would cost more than the re-index this exists to avoid.
+   * as new. It hashes only to break a real tie: hashing every added file would
+   * take longer than the re-index this avoids.
    */
   const rematchMovedFile = async (
     config: IndexConfig,
@@ -166,12 +173,11 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
       const canonical = canonicalizeAbsPath(absPath);
       const atSamePath = await deps.mediaRepository.findIdentityBySourcePath(config.userId, canonical);
 
-      // A tombstoned row at this exact path means the file came back where it
-      // was — a drive remounting, or a deletion the user undid. Revive it. This
-      // has to be handled before anything else: the bytes may differ from what
-      // we last saw, in which case no identity match would fire and the row
-      // would stay marked missing forever while `indexFiles` skipped the path
-      // as already-indexed.
+      // A tombstoned row at this exact path means the file came back where it was
+      // (drive remounted, deletion undone). Must be handled before move matching:
+      // the bytes may differ from what we last saw, so no identity match would
+      // fire and the row would stay missing forever while `indexFiles` skipped
+      // the path as already-indexed.
       if (atSamePath?.missingSince) {
         await deps.mediaRepository.applyMove(config.userId, atSamePath.id, {
           sourcePath: canonical,
@@ -179,8 +185,7 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
           sizeBytes: st.size,
           mtimeMs: st.mtimeMs ?? null,
         });
-        // Unlike a move, the content here may genuinely have changed while we
-        // were not watching, so the thumbnail cannot be trusted.
+
         await deps.regenerateThumbnail(config.userId, atSamePath.id, config.allowedRoots);
         deps.publishJobUpdate?.({
           userId: config.userId, mediaId: atSamePath.id, field: "mediaMoved", value: "1",
@@ -189,10 +194,9 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
         return;
       }
 
-      // Before creating anything: is this a file we already know, that simply
-      // moved? Creating a new row here is what used to destroy the user's tags,
-      // title, starred state, bundles, reminders and extracted text. A live row
-      // already sitting on this path rules a move out.
+      // Is this a file we already know, that simply moved? Indexing it fresh
+      // would destroy the user's tags, title, starred state, bundles, reminders
+      // and extracted text. A live row already on this path rules a move out.
       if (!atSamePath) {
         const moved = await rematchMovedFile(config, absPath, {
           basename: name,
@@ -218,9 +222,9 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
       // upper-cased drive letter, which a raw resolve does not guarantee.
       const id = await deps.mediaRepository.findIdBySourcePath(config.userId, canonicalizeAbsPath(absPath));
       if (!id) return void (await onAdd(absPath)); // changed before we ever saw an add
-      // Refresh the thumbnail to reflect the edited bytes. Text re-extraction on
-      // change is intentionally deferred — doing it correctly needs mime-aware,
-      // allow-list-carrying OCR enqueue (see enqueueTextExtraction in-place gap).
+      // Refreshes the thumbnail for the edited bytes. Text is not re-extracted
+      // on a change: that needs an enqueue that carries the allow-list, which
+      // this path does not have.
       await deps.regenerateThumbnail(config.userId, id, config.allowedRoots);
       deps.logger.info({ userId: config.userId, path: absPath }, "watch: refreshed changed file");
     } catch (err) {
@@ -229,11 +233,11 @@ export function createIndexEventHandlers (deps: IndexWatcherDeps, getConfigs: ()
   };
 
   /**
-   * Handle the reverse event ordering: on some platforms, and across
-   * filesystems, the move's `add` lands before its `unlink`. By the time we get
-   * here a bare new row already exists for the destination, holding none of the
-   * user's metadata. Transplant the vanished row onto that path and drop the
-   * bare one, so the surviving row is the one with the history and the id.
+   * Handles the reverse event order: on some platforms, and across
+   * filesystems, a move's `add` arrives before its `unlink`. By then a bare new
+   * row already exists for the destination, holding none of the user's
+   * metadata. The vanished row is moved onto that path and the bare one
+   * deleted, so the row that survives is the one with the history and the id.
    *
    * Returns true when the disappearance was resolved as a move.
    */
@@ -364,16 +368,6 @@ export type CreateIndexWatcherOptions = {
   resyncIntervalMs?: number;
 };
 
-/**
- * Live in-place indexing. Watches every user's allowed roots and keeps the Media
- * table in sync with the filesystem: new files get indexed, deleted files/folders
- * get pruned, changed files get their thumbnail + text refreshed.
- *
- * This is best-effort — on bind mounts / network shares inotify may silently
- * no-op even with polling, so a periodic reconciliation scan (see worker/index.ts)
- * is the authoritative backstop. The watcher re-reads configs on an interval so
- * Settings changes (add/remove a root or exclude) take effect without a restart.
- */
 export function createIndexWatcher (
   deps: IndexWatcherDeps,
   loadConfigs: () => Promise<IndexConfig[]>,

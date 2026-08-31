@@ -45,24 +45,8 @@ export async function searchMedia (
   return r.items
 }
 
-export async function initUpload (
-  filename: string,
-  mime: string
-): Promise<{ id: string; putUrl: string }> {
-  return http(`/media`, {
-    method: 'POST',
-    body: JSON.stringify({ filename, mime })
-  })
-}
-
 export async function getMediaById (id: string): Promise<MediaDetailResponse> {
   return http<MediaDetailResponse>(`/media/${id}`)
-}
-
-export async function finalizeUpload (id: string): Promise<void> {
-  await http(`/media/${id}/finalize`, {
-    method: 'POST'
-  })
 }
 
 export async function getThumbnailUrl (id: string): Promise<string | null> {
@@ -133,6 +117,10 @@ export interface WorkerQueueCounts {
 }
 
 export interface WorkerCounts {
+  /** Tier-1 text extraction (native pdf.js / plain-text reads). Normally near
+   *  empty even mid-index — a deep queue here means the workers are down. */
+  text:  { active: boolean; count: number; counts: WorkerQueueCounts }
+  /** Tier-2 OCR (Tesseract). A deep backlog here is expected and fine. */
   ocr:   { active: boolean; count: number; counts: WorkerQueueCounts }
   thumb: { active: boolean; count: number; counts: WorkerQueueCounts }
 }

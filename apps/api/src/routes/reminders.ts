@@ -1,4 +1,7 @@
-// File: reminders.ts
+/**
+ * Serves the reminders screen: listing what is due, and creating, editing,
+ * completing, snoozing and cancelling a reminder.
+ */
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { requireAuth } from "../utils/authGuard.js";
@@ -16,6 +19,7 @@ import { ReminderRRuleError, advanceRecurringDue, isRecurrenceExpired, validateR
 type ReminderStatusDb = "ACTIVE" | "COMPLETED" | "CANCELED";
 type ReminderStatusApi = "active" | "completed" | "canceled";
 
+/** One reminder as the reminders screen renders it, with dates already turned into strings. */
 type ReminderOverviewRow = {
   id: string;
   title: string;
@@ -30,6 +34,7 @@ type ReminderOverviewRow = {
   rrule: string | null;
 };
 
+/** One finished reminder, shown in the completed list. */
 type ReminderCompletedRow = {
   id: string;
   title: string;
@@ -39,6 +44,7 @@ type ReminderCompletedRow = {
   dueAt: string;
 };
 
+/** A whole reminder as returned after it is created or changed. */
 type ReminderOutput = {
   id: string;
   userId: string;
@@ -59,6 +65,8 @@ type ReminderOutput = {
 };
 
 const paramsSchema = z.object({ id: z.string().uuid() }).strict();
+// Accepts both a date string and a timestamp, and refuses anything that does
+// not read as a real moment.
 const dateSchema = z.coerce.date().refine(value => !Number.isNaN(value.getTime()), "Invalid datetime");
 
 const createReminderSchema = z
@@ -93,17 +101,22 @@ const updateReminderSchema = z
     { message: "Provide at least one field to update" },
   );
 
+// The stored status names are upper case; the screen uses lower case.
 function toStatusApi(status: ReminderStatusDb): ReminderStatusApi {
   if (status === "ACTIVE") return "active";
   if (status === "COMPLETED") return "completed";
   return "canceled";
 }
 
+// Returns the recurrence rule with surrounding space removed, treating an empty
+// string as no rule at all.
 function normalizeRRuleInput(rrule: string | null | undefined) {
   const nextValue = rrule?.trim() ?? null;
   return nextValue && nextValue.length > 0 ? nextValue : null;
 }
 
+// Builds one row of the reminders screen, working out which group it belongs
+// to and turning its dates into strings.
 function toOverviewRow(
   reminder: {
     id: string;
@@ -139,6 +152,8 @@ function toOverviewRow(
   } satisfies ReminderOverviewRow;
 }
 
+// Orders rows the way the screen shows them: snoozed reminders last, then by
+// group, then by the date each is due.
 function sortOverviewRows(rows: ReminderOverviewRow[]) {
   const nowMs = Date.now();
 
@@ -210,6 +225,8 @@ function toCompletedRow(reminder: {
   } satisfies ReminderCompletedRow;
 }
 
+// Refuses a reminder attached to a media item the user does not own. Does
+// nothing when the reminder is attached to no item.
 async function assertMediaOwnership(
   app: {
     prisma: {
@@ -234,6 +251,8 @@ async function assertMediaOwnership(
 }
 
 export const remindersRoutes: FastifyPluginAsync = async app => {
+  // The figures shown on the reminders button: how many are waiting now, and
+  // how many of those are overdue, due today or due soon.
   app.get("/summary", { preHandler: [requireAuth] }, async req => {
     const userId = req.userId!;
     const now = new Date();
@@ -279,6 +298,9 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
     };
   });
 
+  // The reminders list. `view=all` returns every active reminder; `view=overview`
+  // returns only those that are due to be shown now, padded out with ones that
+  // are not yet due when too few are showing.
   app.get("/", { preHandler: [requireAuth] }, async req => {
     const userId = req.userId!;
     const query = z
@@ -344,7 +366,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
     } as const;
 
     if (query.view === "all") {
-      // Return all active reminders regardless of remindAt visibility
+      // Every active reminder, including those that are not yet due to be shown.
       const allReminders = await app.prisma.reminder.findMany({
         where: { userId, status: "ACTIVE" },
         take: query.limit,
@@ -356,13 +378,12 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
       return { items: rows };
     }
 
-    // view=overview: visible-now reminders with backfill
-
-    // Over-fetch a bounded amount so we can sort accurately without loading all rows.
-    // (limit max is 100, so 20x bounded at 500 keeps this cheap)
+    // Grouping and ordering happen here rather than in the query, because the
+    // group a reminder falls in depends on its own timezone. More rows are read
+    // than are returned, up to a fixed ceiling.
     const prefetch = Math.min(query.limit * 20, 500);
 
-    // 1) Fetch visible-now reminders only (DB-side), then sort + take limit.
+    // The reminders that are due to be shown now.
     const visibleReminders = await app.prisma.reminder.findMany({
       where: {
         userId,
@@ -381,8 +402,8 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
       return { items: visibleRows.slice(0, query.limit) };
     }
 
-    // 2) Backfill with hidden reminders (DB-side) so the overview can reach the requested limit.
-    // Hidden means: not visible now => remindAt > now OR snoozedUntil > now
+    // Too few to fill the screen, so it is padded out with reminders that are
+    // snoozed or not yet due.
     const remaining = query.limit - visibleRows.length;
 
     const hiddenReminders = await app.prisma.reminder.findMany({
@@ -401,6 +422,8 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
     return { items: [...visibleRows, ...fallbackRows.slice(0, remaining)] };
   });
 
+  // Creates a reminder. The browser sends its timezone in an `x-timezone`
+  // header, which decides what "today" means for this reminder from then on.
   app.post("/", { preHandler: [requireAuth] }, async (req, reply) => {
     const userId = req.userId!;
     const body = createReminderSchema.parse(req.body ?? {});
@@ -450,6 +473,8 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
     return reply.code(201).send({ reminder: toReminderOutput(reminder) });
   });
 
+  // Changes a reminder. Editing anything that affects its timing works out a new
+  // date for it to start showing.
   app.patch<{ Params: { id: string } }>("/:id", { preHandler: [requireAuth] }, async (req, reply) => {
     const userId = req.userId!;
     const { id } = paramsSchema.parse(req.params);
@@ -525,6 +550,8 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
     return reply.send({ reminder: toReminderOutput(updated) });
   });
 
+  // Marks a reminder done. One that repeats moves on to its next date and stays
+  // active, unless the recurrence has reached its end.
   app.post<{ Params: { id: string } }>(
     "/:id/complete",
     { preHandler: [requireAuth] },
@@ -594,6 +621,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
     },
   );
 
+  // Hides a reminder until a chosen moment.
   app.post<{ Params: { id: string } }>("/:id/snooze", { preHandler: [requireAuth] }, async (req, reply) => {
     const userId = req.userId!;
     const { id } = paramsSchema.parse(req.params);
@@ -621,6 +649,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
     return reply.send({ ok: true });
   });
 
+  // Brings a snoozed reminder back now.
   app.post<{ Params: { id: string } }>("/:id/unsnooze", { preHandler: [requireAuth] }, async (req, reply) => {
     const userId = req.userId!;
     const { id } = paramsSchema.parse(req.params);
@@ -642,6 +671,7 @@ export const remindersRoutes: FastifyPluginAsync = async app => {
     return reply.send({ ok: true });
   });
 
+  // Cancels a reminder without marking it done.
   app.post<{ Params: { id: string } }>("/:id/cancel", { preHandler: [requireAuth] }, async (req, reply) => {
     const userId = req.userId!;
     const { id } = paramsSchema.parse(req.params);

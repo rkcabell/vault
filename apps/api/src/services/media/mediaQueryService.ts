@@ -4,6 +4,11 @@ import type { MediaRepository, MediaListFilters } from "../../repositories/media
 import { buildStorageTreemap, type BuildTreemapOpts } from "../../lib/media/storageTreemap.js";
 import { buildCategoryBreakdown } from "../../lib/media/categoryBreakdown.js";
 
+/**
+ * Reads the library for the browse and overview screens: paged listings, tag
+ * counts, and the storage breakdowns. Every read here is filtered to one user.
+ */
+
 const SORT_OPTIONS = [
   "createdAt_desc",
   "createdAt_asc",
@@ -23,10 +28,11 @@ type ListMediaInput = {
   tags?: string[];
   excludeTags?: string[];
   thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
-  textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
+  /** NEEDS_OCR backs the library's "Scanned — text not extracted" filter. */
+  textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED" | "NEEDS_OCR";
   mimeTypePrefix?: string;
   excludeUnpacked?: boolean;
-  /** "only" narrows to items whose source file has vanished. */
+  /** "only" narrows to items whose source file is missing. */
   missing?: "only";
   sort?: typeof SORT_OPTIONS[number];
   limit?: number;
@@ -48,20 +54,20 @@ function buildOrderBy (sort?: typeof SORT_OPTIONS[number]) {
     case "mimeType_asc":
       return [{ mimeType: "asc" as const }, { id: "asc" as const }];
     case "starred_first":
-      // All levels share a direction so the raw path can keyset-paginate with
-      // a single row-value comparison (see mediaRepository._listMediaRaw).
+      // Every level shares one direction, so the raw path can keyset-paginate
+      // with a single row-value comparison (mediaRepository._listMediaRaw).
       return [{ starred: "desc" as const }, { createdAt: "desc" as const }, { id: "desc" as const }];
     case "fileDate_desc":
-      // The file's own date (EXIF/PDF/mtime), nullable. The repository routes
-      // this sort through the raw keyset path, which orders NULLS LAST; the
-      // plain "desc" keeps the orderBy shape derivable like every other sort.
+      // The date carried by the file itself: EXIF, PDF metadata, or the file's
+      // modified time. It is nullable, and the repository sorts these last
+      // through the raw keyset path.
       return [{ fileDate: "desc" as const }, { id: "desc" as const }];
     default:
       return [{ createdAt: "desc" as const }, { id: "desc" as const }];
   }
 }
 
-/** TTL for first-page search results. Short enough to feel live; long enough to absorb rapid pagination clicks. */
+/** Applies to first-page results only. Later pages are never cached. */
 const SEARCH_CACHE_TTL_SECONDS = 10;
 
 async function fetchPage (repository: MediaRepository, userId: string, listFilters: MediaListFilters, take: number) {
@@ -109,8 +115,8 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
 
     const isFirstPage = !query.cursor;
 
-    // Cache first-page results in Redis to absorb repeated identical queries.
-    // Paginated pages are cheap (keyset cursor) and vary per click, so not cached.
+    // Later pages read through a keyset cursor and change with every click, so
+    // only the first page is worth caching.
     if (isFirstPage && deps.redis) {
       const cacheKey = searchCacheKey(userId, query);
       const cached = await deps.redis.get(cacheKey).catch(() => null);
@@ -118,7 +124,7 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
         try {
           return JSON.parse(cached) as Awaited<ReturnType<typeof fetchPage>>;
         } catch {
-          // corrupted cache entry — fall through to DB
+          // A corrupted entry falls through to the database.
         }
       }
       const result = await fetchPage(deps.repository, userId, listFilters, take);
@@ -133,28 +139,28 @@ export function createMediaQueryService (deps: MediaQueryDeps) {
     return deps.repository.listTopTags(userId, limit);
   };
 
-  /** Per-file sizes for the whole vault — powers the storage treemap. */
-  // Returns a bounded, representative set of tiles for the storage treemap:
-  // the largest files exactly, plus a stratified byte-weighted sample of the
-  // long tail. Keeps the payload + client DOM small while staying proportional
-  // to real storage. See lib/media/storageTreemap.ts.
+  /** Returns the tiles for the storage treemap: the largest files, plus a
+   *  byte-weighted sample of the rest. The set is bounded, not one tile per file. */
   const listAllSizes = async (userId: string, opts?: BuildTreemapOpts) => {
     const rows = await deps.repository.listAllMediaSizes(userId);
     return buildStorageTreemap(rows, opts);
   };
 
-  /** Aggregate counts/storage/type breakdown for the overview header + viz. */
+  /** Returns the library's item count, storage used, and type breakdown. */
   const getStats = async (userId: string) => {
     return deps.repository.getMediaStats(userId);
   };
 
-  /** Per-category storage totals (count + bytes) — powers the overview
-   *  "storage by file type" graph. Buckets the whole vault filename-aware,
-   *  consistent with the per-file treemap. See lib/media/categoryBreakdown.ts. */
+  /** Returns storage totals per file category, over the whole library.
+   *  Categories are read from the filename, matching the treemap. */
   const getCategoryBreakdown = async (userId: string) => {
     const rows = await deps.repository.listAllMediaSizes(userId);
     return buildCategoryBreakdown(rows);
   };
 
-  return { listMedia, listTopTags, listAllSizes, getStats, getCategoryBreakdown };
+  /** Returns how many items are waiting for OCR. This is the set behind the
+   *  library's "Scanned — text not extracted" filter. */
+  const countScannedAwaitingOcr = (userId: string) => deps.repository.countNeedsOcr(userId);
+
+  return { listMedia, listTopTags, listAllSizes, getStats, getCategoryBreakdown, countScannedAwaitingOcr };
 }

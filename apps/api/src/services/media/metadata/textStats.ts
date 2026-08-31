@@ -1,5 +1,13 @@
 import type { TextStats } from "./types.js";
 
+/**
+ * Counts the characters, words and pages in a document's extracted text.
+ */
+
+/**
+ * Returns counts over a document's extracted text, or null when it has none.
+ * The per-page figures are null unless the document was stored with pages.
+ */
 export function buildTextStats (
   document?: { rawText?: string | null; pages?: unknown | null } | null,
 ): TextStats | null {

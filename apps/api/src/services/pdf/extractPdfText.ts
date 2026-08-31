@@ -2,10 +2,16 @@ import { loadPdfJs, getStandardFontDataUrl } from "./loadPdfJs.js";
 import { MIN_PAGE_CHARS, shouldFallbackToOcr } from "./shouldFallbackToOcr.js";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 
+/**
+ * Reads the text out of a PDF with pdf.js, and reassembles it into lines and
+ * paragraphs from the position of each piece on the page.
+ */
+
 export type PdfTextPage = { pageNumber: number; text: string; numChars: number };
 
 /**
- * Extract text from a PDF buffer using pdf.js.
+ * Extracts a PDF's text page by page. `needsOcr` reports that too little came
+ * back for the document to have been born digital.
  */
 export async function extractPdfText (
   input: Uint8Array | Buffer,
@@ -66,8 +72,6 @@ export async function extractPdfText (
         onProgress({ current: pageNumber, total: doc.numPages });
       }
 
-      // Early exit: if the first N pages are all blank, needsOcr will be true
-      // regardless of remaining pages — no need to scan the rest.
       if (pageNumber >= EARLY_EXIT_BLANK_PAGES && totalChars === 0) {
         break;
       }
@@ -75,8 +79,7 @@ export async function extractPdfText (
 
     const fullText = stripNulls(pages.map(p => p.text).join("\n\n")).trim();
 
-    // Keep totals consistent with what you actually persist/use.
-    // totalChars above is already based on sanitized page text.
+    // totalChars counts the sanitized page text, which is what gets stored.
     const needsOcr = shouldFallbackToOcr({
       totalChars,
       pagesWithText,
@@ -101,8 +104,8 @@ export async function extractPdfText (
 }
 
 /**
- * Postgres (and Prisma->Postgres) cannot store NUL (\0) in TEXT.
- * pdf.js extraction can sometimes include embedded NULs due to font/encoding artifacts.
+ * Postgres cannot store a NUL byte in a TEXT column, and a font or encoding
+ * artifact can leave one in what pdf.js returns.
  */
 function stripNulls (s: string): string {
   return s.includes("\0") ? s.replace(/\0/g, "") : s;
@@ -126,6 +129,8 @@ function buildTextWithParagraphs (items: TextItem[]): string {
   return mergeLinesIntoParagraphs(lines);
 }
 
+// Groups text items into lines, by the y coordinate when most of them carry
+// one, and by pdf.js's own end-of-line flag when they do not.
 function buildLines (
   items: Array<{ str?: string; hasEOL?: boolean; transform?: number[]; height?: number }>,
 ): Line[] {
@@ -195,11 +200,14 @@ function getItemPosition (item: {
   return { y, height };
 }
 
+// How far apart two baselines must be to count as separate lines.
 function getLineThreshold (lineHeight: number | null, itemHeight: number | null): number {
   const base = Math.max(lineHeight ?? 0, itemHeight ?? 0);
   return base > 0 ? base * 0.6 : 2;
 }
 
+// Joins lines into paragraphs, breaking where the gap runs wider than the
+// document's usual line spacing.
 function mergeLinesIntoParagraphs (lines: Line[]): string {
   if (!lines.length) return "";
 
@@ -226,6 +234,7 @@ function mergeLinesIntoParagraphs (lines: Line[]): string {
   return paragraphs.join("\n");
 }
 
+// A trailing hyphen, ordinary or soft, means a word was split across the break.
 function joinLineText (current: string, next: string): string {
   if (current.endsWith("-")) {
     return `${current.slice(0, -1)}${next}`;
@@ -255,8 +264,7 @@ function getBaselineLineGap (lines: Line[]): number | null {
 }
 
 function toPdfJsData (input: Uint8Array | Buffer): Uint8Array {
-  // Copy into a fresh ArrayBuffer — pdf.js may transfer (detach) the buffer it
-  // receives, so a view into Node.js's shared pool would cause
-  // "Unable to deserialize cloned data" on subsequent access.
+  // pdf.js may detach the buffer it is handed, and a view into Node's shared
+  // pool would then fail with "Unable to deserialize cloned data".
   return new Uint8Array(input);
 }

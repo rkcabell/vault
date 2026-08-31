@@ -5,6 +5,8 @@ import { StorageSettingsCard } from "@/components/settings/StorageSettingsCard";
 import { IndexingSettingsCard } from "@/components/settings/IndexingSettingsCard";
 import { ExploreSettingsCard } from "@/components/settings/ExploreSettingsCard";
 import { DuplicatesCard } from "@/components/settings/DuplicatesCard";
+import { MetadataBackupCard } from "@/components/settings/MetadataBackupCard";
+import { SettingsChapters, SettingsSection } from "@/components/settings/SettingsChapters";
 
 export default function SettingsPage() {
   return (
@@ -14,26 +16,40 @@ export default function SettingsPage() {
         <p className="text-sm text-muted-foreground">Configure your account and app preferences.</p>
       </div>
 
+      <SettingsChapters />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
+        <SettingsSection id="general" className="lg:col-span-2">
           <GeneralSettingsCard />
-        </div>
+        </SettingsSection>
         <div className="lg:col-span-1">
           <AppearanceCard />
         </div>
       </div>
 
-      <StorageSettingsCard />
+      <SettingsSection id="storage">
+        <StorageSettingsCard />
+      </SettingsSection>
 
-      <IndexingSettingsCard />
+      <SettingsSection id="index">
+        <IndexingSettingsCard />
+      </SettingsSection>
 
-      <DuplicatesCard />
+      <SettingsSection id="metadata">
+        <MetadataBackupCard />
+      </SettingsSection>
 
-      <ExploreSettingsCard />
+      <SettingsSection id="duplicates">
+        <DuplicatesCard />
+      </SettingsSection>
 
-      <div className="max-w-2xl">
+      <SettingsSection id="explore">
+        <ExploreSettingsCard />
+      </SettingsSection>
+
+      <SettingsSection id="tags" className="max-w-2xl">
         <ManageTagsCard />
-      </div>
+      </SettingsSection>
     </div>
   );
 }

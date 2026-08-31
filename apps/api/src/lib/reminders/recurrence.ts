@@ -1,3 +1,7 @@
+/**
+ * Reads the recurrence rules stored on repeating reminders and works out the
+ * next date one comes due.
+ */
 type RecurrenceFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
 
 type ParsedRRule = {
@@ -6,6 +10,8 @@ type ParsedRRule = {
   until?: Date;
 };
 
+// Only these three RRULE parts are understood. Anything else is rejected
+// rather than ignored, so a rule is never applied with part of it dropped.
 const SUPPORTED_KEYS = new Set(["FREQ", "INTERVAL", "UNTIL"]);
 const SUPPORTED_FREQUENCIES = new Set<RecurrenceFrequency>([
   "DAILY",
@@ -14,6 +20,7 @@ const SUPPORTED_FREQUENCIES = new Set<RecurrenceFrequency>([
   "YEARLY",
 ]);
 
+/** Signals that a recurrence rule uses syntax or options this app does not support. */
 export class ReminderRRuleError extends Error {}
 
 function parsePositiveInt(value: string, key: string) {
@@ -24,6 +31,7 @@ function parsePositiveInt(value: string, key: string) {
   return parsed;
 }
 
+// Reads an RRULE string into the three fields the app uses.
 function parseRRule(rrule: string): ParsedRRule {
   const trimmed = rrule.trim();
   if (!trimmed) throw new ReminderRRuleError("RRULE cannot be empty");
@@ -67,6 +75,9 @@ function parseRRule(rrule: string): ParsedRRule {
   };
 }
 
+// Adds whole months in UTC, clamping the day to the last day of the target
+// month. The 31st of a month therefore becomes the 30th or 28th where the
+// target month is shorter, and does not spill into the following month.
 function addMonths(date: Date, months: number) {
   const year = date.getUTCFullYear();
   const month = date.getUTCMonth();
@@ -95,6 +106,7 @@ function addMonths(date: Date, months: number) {
   );
 }
 
+/** Returns the date the reminder next comes due after `currentDueAt`, following `rrule`. */
 export function advanceRecurringDue(currentDueAt: Date, rrule: string) {
   const { frequency, interval } = parseRRule(rrule);
 
@@ -113,11 +125,12 @@ export function advanceRecurringDue(currentDueAt: Date, rrule: string) {
   return addMonths(currentDueAt, interval * 12);
 }
 
+/** Throws ReminderRRuleError if `rrule` is one the app cannot apply. */
 export function validateRRule(rrule: string) {
   parseRRule(rrule);
 }
 
-/** Returns true when the given next-due date is past the UNTIL bound in the rrule. */
+/** True if `nextDue` falls after the UNTIL date in `rrule`, meaning the reminder has finished repeating. */
 export function isRecurrenceExpired(nextDue: Date, rrule: string): boolean {
   const { until } = parseRRule(rrule);
   return until !== undefined && nextDue.getTime() > until.getTime();

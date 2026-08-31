@@ -79,6 +79,34 @@ services:
       - web
     restart: unless-stopped
 
+  # Tier 1: native pdf.js / plain-text reads. Cheap, high concurrency, and
+  # deliberately its own container so a scanned-PDF backlog on jobs-ocr cannot
+  # stop a born-digital library from becoming searchable.
+  jobs-text:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.prod
+      target: jobs
+    command: [ "node", "apps/api/dist/worker/text.js" ]
+    env_file: ../../.env.prod
+    environment:
+      STORAGE_FS_PATH: /data/vault
+    volumes:
+      - vault-data:/data/vault
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  # Tier 2: ocrmypdf/Tesseract. One subprocess per concurrency slot, each
+  # costing roughly a core and up to a gigabyte — scale by replicas, not by
+  # raising OCR_CONCURRENCY.
   jobs-ocr:
     build:
       context: ../..

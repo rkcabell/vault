@@ -1,3 +1,7 @@
+/**
+ * Describes a request to re-apply the user's tagging rules across their whole
+ * library, and hands it to the worker that carries it out.
+ */
 import type { Queue } from "bullmq";
 import type { OrganizePreviewItem } from "@vault/types";
 

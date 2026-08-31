@@ -6,13 +6,13 @@ info:
     Vault HTTP JSON API.
 
     Conventions:
-    - JSON request/response bodies use `application/json` unless otherwise noted.
-    - Error responses use the `ErrorResponse` schema.
-    - Pagination: list endpoints use `limit` with cursor-based pagination via `cursor`/`nextCursor`. The media list also supports page-based pagination via `page`/`nextPage` when `cursor` is omitted. Max `limit` for media list is 100.
-    - IDs are strings; media IDs are validated as UUIDs in path parameters.
+    - Request and response bodies are `application/json` unless noted.
+    - Errors use the `ErrorResponse` schema.
+    - List endpoints paginate with `limit` and `cursor`/`nextCursor`. Max `limit` for the media list is 100.
+    - Media IDs are UUIDs.
     - Timestamps are RFC3339 `date-time` strings.
-    - Auth: `requireAuth` prefers `Authorization: Bearer <token>` and falls back to the `access_token` cookie. `/api/auth/me` is cookie-only.
-    - Query array params use `style: form` with `explode: true` (e.g., `tags=one&tags=two`).
+    - Auth prefers `Authorization: Bearer <token>` and falls back to the `access_token` cookie. `/api/auth/me` is cookie-only.
+    - Multi-value filters (`tags`, `excludeTags`) are comma-separated strings, not repeated params.
 servers:
   - url: http://127.0.0.1:8000
     description: Local dev
@@ -20,10 +20,17 @@ tags:
   - name: Auth
   - name: Profile
   - name: Media
+  - name: Ingest
+  - name: Indexing
+  - name: Duplicates
   - name: Tags
+  - name: Tag Rules
   - name: Bundles
   - name: Reminders
   - name: Preferences
+  - name: Jobs
+  - name: Sidecars
+  - name: Storage
   - name: Server
   - name: Init
   - name: Health
@@ -112,6 +119,12 @@ paths:
                     statusCode: 400
                     error: "Bad Request"
                     message: "User already exists"
+        "403":
+          description: Registration is disabled on this server (`DISABLE_REGISTRATION`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -119,9 +132,7 @@ paths:
   /api/auth/login:
     post:
       summary: Log in and set auth cookies
-      description: |
-        Sets `access_token` (20 h) and `refresh_token` (7 d) httpOnly cookies.
-        Rate limited to 30 attempts/min per IP and 10 attempts/min per email.
+      description: Sets `access_token` (20 h) and `refresh_token` (7 d) httpOnly cookies.
       tags:
         - Auth
       operationId: auth_login
@@ -188,11 +199,7 @@ paths:
   /api/auth/refresh:
     post:
       summary: Refresh the access token
-      description: |
-        Issues a new access token from a valid refresh token. The refresh token's
-        tokenVersion must still match the user's current tokenVersion; a password
-        reset bumps tokenVersion, so refresh tokens issued before the reset are
-        rejected with 401.
+      description: Replaces both cookies and returns the new tokens in the body. Prefers the `refresh_token` cookie, falling back to `refresh` in the body. Both cookies are cleared on 401.
       tags:
         - Auth
       operationId: auth_refresh
@@ -202,7 +209,7 @@ paths:
         timeWindow: "1 minute"
         keyBy: IP
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -213,7 +220,7 @@ paths:
                   refresh: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.refresh"
       responses:
         "200":
-          description: Access token issued
+          description: Tokens issued
           content:
             application/json:
               schema:
@@ -221,9 +228,11 @@ paths:
               examples:
                 success:
                   value:
+                    ok: true
                     access: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.access"
+                    refresh: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.refresh"
         "401":
-          description: Invalid or expired token
+          description: Missing, invalid or expired refresh token
           content:
             application/json:
               schema:
@@ -242,14 +251,7 @@ paths:
   /api/auth/logout:
     post:
       summary: Log out (clear auth cookies)
-      description: |
-        Clears the access_token and refresh_token cookies. Stateless JWTs cannot be
-        revoked server-side, so the tokens themselves stay valid until they expire
-        (or are evicted when the user's tokenVersion changes).
-
-        There is no self-service password reset: password recovery is admin-only via
-        the reset-password CLI (`pnpm reset-password --email <addr>`), which sets the
-        password directly and bumps tokenVersion so prior sessions can no longer refresh.
+      description: Clears the auth cookies. Stateless JWTs stay valid until they expire or the user's tokenVersion changes.
       tags:
         - Auth
       operationId: auth_logout
@@ -351,74 +353,22 @@ paths:
   # Media
   # ---------------------------------------------------------------------------
   /api/media:
-    post:
-      summary: Initialize a media upload
-      description: Returns a presigned S3 PUT URL. Upload the file directly to that URL, then call `/finalize`.
-      tags:
-        - Media
-      operationId: media_initUpload
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/MediaInitUploadRequest"
-            examples:
-              init:
-                value:
-                  filename: "receipt.pdf"
-                  mimeType: "application/pdf"
-                  sizeBytes: 24576
-                  title: "January receipt"
-                  tags:
-                    - "receipt"
-                    - "2026"
-      responses:
-        "200":
-          description: Upload initialized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MediaInitUploadResponse"
-              examples:
-                success:
-                  value:
-                    id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
-                    uploadUrl: "https://s3.example.com/presigned-put"
-                    storageKey: "usr_123/7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9/receipt.pdf"
-        "400":
-          description: Bad request
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                badRequest:
-                  value:
-                    statusCode: 400
-                    error: "Bad Request"
-                    message: "receipt.pdf exceeds the documents limit (250 MB max)."
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
     get:
-      summary: List media for the current user
-      description: If `cursor` is provided, `page` is ignored.
-      tags:
-        - Media
-      operationId: media_list
+      summary: List media
+      description: "`totalCount` and `hasExtractedItems` are returned on the first page only. `tag` and `tags` are mutually exclusive."
+      tags: [Media]
+      operationId: listMedia
       parameters:
         - in: query
           name: q
           schema:
             type: string
-          description: Search text (alias of `search`).
+          description: Free-text search over title and extracted text.
         - in: query
           name: search
           schema:
             type: string
-          description: Search text (alias of `q`).
+          description: Alias for `q`. `q` wins when both are sent.
         - in: query
           name: tag
           schema:
@@ -427,12 +377,14 @@ paths:
         - in: query
           name: tags
           schema:
-            type: array
-            items:
-              type: string
-          style: form
-          explode: true
-          description: Multiple tag filters. Mutually exclusive with `tag`.
+            type: string
+          description: Comma-separated tags; an item must carry all of them. Mutually exclusive with `tag`.
+          example: "invoice,2026"
+        - in: query
+          name: excludeTags
+          schema:
+            type: string
+          description: Comma-separated tags to exclude.
         - in: query
           name: thumbState
           schema:
@@ -441,6 +393,11 @@ paths:
           name: textState
           schema:
             $ref: "#/components/schemas/MediaWorkerState"
+        - in: query
+          name: mimeType
+          schema:
+            type: string
+          description: MIME type prefix match (e.g. `image/`).
         - in: query
           name: sort
           schema:
@@ -456,13 +413,18 @@ paths:
           name: cursor
           schema:
             type: string
-          description: Cursor for pagination.
+          description: Media ID of the last item on the previous page.
         - in: query
-          name: page
+          name: excludeUnpacked
           schema:
-            type: integer
-            minimum: 1
-          description: Page number when not using cursor pagination.
+            type: boolean
+          description: Hide items that were extracted from an archive.
+        - in: query
+          name: missing
+          schema:
+            type: string
+            enum: [only]
+          description: "`only` restricts the list to items whose source file has vanished."
       responses:
         "200":
           description: Media list
@@ -470,72 +432,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaListResponse"
-              examples:
-                cursorMode:
-                  value:
-                    items:
-                      - id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
-                        title: "January receipt"
-                        thumbState: "READY"
-                        textState: "READY"
-                        createdAt: "2026-01-29T18:35:00Z"
-                        tags:
-                          - "receipt"
-                          - "application-pdf"
-                        mimeType: "application/pdf"
-                    nextCursor: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
-                    nextPage: null
-                pageMode:
-                  value:
-                    items:
-                      - id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
-                        title: "January receipt"
-                        thumbState: "READY"
-                        textState: "READY"
-                        createdAt: "2026-01-29T18:35:00Z"
-                        tags:
-                          - "receipt"
-                          - "application-pdf"
-                        mimeType: "application/pdf"
-                    nextCursor: null
-                    nextPage: 2
         "400":
-          description: Invalid filters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                badRequest:
-                  $ref: "#/components/examples/ErrorBadRequest"
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     delete:
-      summary: Bulk delete media matching filter params
+      summary: Bulk delete media
       description: |
-        Deletes all media items matching the given filters for the current user.
-        If no filters are provided, all media is deleted.
-      tags:
-        - Media
-      operationId: media_bulkDelete
+        Enqueues a background delete; poll `/api/media/delete/status`. Send `{ ids }`
+        for hand-picked items, or use the query filters.
+
+        **An empty filter with no body deletes every item the user owns.**
+      tags: [Media]
+      operationId: bulkDeleteMedia
       parameters:
         - in: query
           name: q
           schema:
             type: string
-          description: Search text filter.
         - in: query
           name: tags
           schema:
             type: string
-          description: Comma-separated tag filters.
+          description: Comma-separated tags.
         - in: query
           name: excludeTags
           schema:
             type: string
-          description: Comma-separated tags to exclude.
         - in: query
           name: thumbState
           schema:
@@ -548,232 +473,645 @@ paths:
           name: excludeUnpacked
           schema:
             type: boolean
-          description: Exclude items that were extracted from an archive.
-      responses:
-        "200":
-          description: Bulk delete result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BulkDeleteResponse"
-              examples:
-                success:
-                  value:
-                    count: 42
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-  /api/media/batch-init:
-    post:
-      summary: Initialize multiple uploads in a batch
-      tags:
-        - Media
-      operationId: media_batchInit
+        - in: query
+          name: missing
+          schema:
+            type: string
+            enum: [only]
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/MediaBatchInitRequest"
-            examples:
-              init:
-                value:
-                  items:
-                    - filename: "receipt.pdf"
-                      mimeType: "application/pdf"
-                      sizeBytes: 24576
-                      title: "January receipt"
-                      tags: "receipt,2026"
-                    - filename: "scan.png"
-                      mimeType: "image/png"
-                      sizeBytes: 10240
+              $ref: "#/components/schemas/BulkDeleteRequest"
       responses:
-        "200":
-          description: Batch initialized
+        "202":
+          description: Delete job enqueued
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MediaBatchInitResponse"
+                $ref: "#/components/schemas/JobIdResponse"
               examples:
                 success:
                   value:
-                    items:
-                      - id: "8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da"
-                        storageKey: "usr_123/8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da/receipt.pdf"
-                        putUrl: "https://s3.example.com/presigned-put-1"
-                      - id: "b5d3adbb-2bd5-4b22-9412-7d1c54a89b7b"
-                        storageKey: "usr_123/b5d3adbb-2bd5-4b22-9412-7d1c54a89b7b/scan.png"
-                        putUrl: "https://s3.example.com/presigned-put-2"
-        "400":
-          $ref: "#/components/responses/BadRequest"
+                    jobId: "delete-9f1c8a2e-1717000000000"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-  /api/media/batch-finalize:
-    post:
-      summary: Finalize multiple uploads
-      tags:
-        - Media
-      operationId: media_batchFinalize
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/MediaBatchFinalizeRequest"
-            examples:
-              finalize:
-                value:
-                  ids:
-                    - "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
-                    - "8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da"
-      responses:
-        "200":
-          description: Batch finalized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MediaFinalizeResponse"
-              examples:
-                success:
-                  value:
-                    ok: true
-                    count: 2
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-  /api/media/bulk-download:
-    post:
-      summary: Download multiple media items as a zip
-      description: Streams the selected media items as a single zip archive (max 50 items).
-      tags:
-        - Media
-      operationId: media_bulkDownload
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/BulkDownloadRequest"
-            examples:
-              download:
-                value:
-                  ids:
-                    - "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
-                    - "8f0c1c5c-1c60-4c06-9e3d-7d0bfae7a4da"
-      responses:
-        "200":
-          description: Zip archive stream
-          headers:
-            Content-Disposition:
-              schema:
-                type: string
-              example: 'attachment; filename="vault-download.zip"'
-          content:
-            application/zip:
-              schema:
-                type: string
-                format: binary
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-  /api/media/tags:
+
+  /api/media/stats:
     get:
-      summary: List top tags for the current user
-      tags:
-        - Media
-      operationId: media_listTags
+      summary: Library totals and type breakdown
+      description: Backs the overview header. `typeBreakdown` is the top 20 MIME types by count.
+      tags: [Media]
+      operationId: getMediaStats
+      responses:
+        "200":
+          description: Aggregate stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaStatsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/storage:
+    get:
+      summary: Per-file sizes for the storage treemap
+      description: "Returns the largest files exactly, plus a byte-weighted sample of the long tail. Sampled tiles carry `sampled: true`."
+      tags: [Media]
+      operationId: getMediaStorage
       parameters:
         - in: query
-          name: limit
+          name: top
           schema:
             type: integer
             minimum: 1
-            maximum: 200
-            default: 50
-          description: Maximum number of tags to return.
+            maximum: 2000
+          description: How many largest files to return exactly.
+        - in: query
+          name: sample
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 2000
+          description: How many representative tail tiles to sample.
       responses:
         "200":
-          description: Tag list
+          description: Treemap tiles
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TagsResponse"
-              examples:
-                success:
-                  value:
-                    tags:
-                      - name: "receipt"
-                        count: 12
-                      - name: "application-pdf"
-                        count: 9
+                $ref: "#/components/schemas/MediaStorageResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-  /api/media/events:
-    get:
-      summary: Subscribe to real-time media processing updates
-      description: |
-        Server-Sent Events (SSE) stream. Each event carries the updated field and value
-        for a media item owned by the authenticated user. A keep-alive ping comment is
-        sent every 25 seconds.
 
-        Event format:
-        ```
-        data: {"mediaId":"<uuid>","field":"<field>","value":"<value>"}
-        ```
-      tags:
-        - Media
-      operationId: media_events
+  /api/media/storage/categories:
+    get:
+      summary: Storage totals per file-type bucket
+      tags: [Media]
+      operationId: getMediaStorageCategories
       responses:
         "200":
-          description: SSE stream established
+          description: Per-category counts and bytes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCategoryBreakdown"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/text/scanned/count:
+    get:
+      summary: Size of the deferred-OCR backlog
+      description: "Items at `textState: NEEDS_OCR`. Drained by `POST /api/media/batch/text/scanned`."
+      tags: [Media]
+      operationId: countScannedAwaitingOcr
+      responses:
+        "200":
+          description: Backlog size
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                required:
+                  - count
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/duplicates:
+    get:
+      summary: List byte-identical duplicate groups
+      description: Groups share a SHA-256 `contentHash`. A non-zero `unhashedCount` means the list is incomplete.
+      tags: [Duplicates]
+      operationId: listDuplicates
+      responses:
+        "200":
+          description: Duplicate groups, largest reclaimable space first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DuplicateGroupsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/duplicates/scan:
+    post:
+      summary: Backfill missing content hashes
+      description: Marks every READY item without a `contentHash` for hashing. Returns how many rows were reset.
+      tags: [Duplicates]
+      operationId: startDuplicateScan
+      responses:
+        "200":
+          description: Rows queued for hashing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  queued:
+                    type: integer
+                required:
+                  - ok
+                  - queued
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/media/events:
+    get:
+      summary: Server-Sent Events stream of media state changes
+      description: "Emits per-item state flips plus `mediaCreated`/`mediaDeleted`. Sends a `: ping` comment every 25 s."
+      tags: [Media]
+      operationId: mediaEvents
+      responses:
+        "200":
+          description: Event stream
           content:
             text/event-stream:
               schema:
                 type: string
               examples:
                 update:
-                  value: "data: {\"mediaId\":\"7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9\",\"field\":\"thumbState\",\"value\":\"READY\"}"
+                  summary: One event frame
+                  value: |
+                    data: {"mediaId":"3f2a...","field":"thumbState","value":"READY"}
         "401":
           $ref: "#/components/responses/Unauthorized"
-  /api/media/{id}/finalize:
+
+  /api/media/bulk-download:
     post:
-      summary: Finalize a single upload
-      tags:
-        - Media
-      operationId: media_finalize
-      parameters:
-        - $ref: "#/components/parameters/MediaId"
+      summary: Download several items as a zip
+      description: Streams `application/zip`. In-place sources are re-validated against the allow-list as they are read.
+      tags: [Media]
+      operationId: bulkDownload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkDownloadRequest"
       responses:
         "200":
-          description: Upload finalized
+          description: Zip archive
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/media/unpack-new:
+    post:
+      summary: Auto-unpack archives that just entered the library
+      description: "`count` is how many IDs were submitted; `queued` is how many unpack jobs exist afterwards. Omitting `autoUnpack` falls back to the `autoUnpackArchives` preference."
+      tags: [Media]
+      operationId: unpackNewMedia
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UnpackNewRequest"
+      responses:
+        "200":
+          description: Unpack result
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MediaFinalizeResponse"
-              examples:
-                success:
-                  value:
-                    ok: true
-                    count: 1
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  count:
+                    type: integer
+                  queued:
+                    type: integer
+                required:
+                  - ok
+                  - count
+                  - queued
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
+
+  # --- Batch derivative operations -------------------------------------------
+  # "batch" is a literal path segment, kept distinct from /{id}/* so Fastify
+  # cannot parse it as a media ID.
+
+  /api/media/batch/thumbnail:
+    post:
+      summary: Re-generate thumbnails for many items
+      tags: [Media]
+      operationId: batchRegenerateThumbnails
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaIdBatchRequest"
+      responses:
+        "200":
+          description: Queue result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchQueueResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/batch/text:
+    post:
+      summary: Re-run text extraction for many items
+      description: Tier 1 only — native extraction. Never shells out to Tesseract.
+      tags: [Media]
+      operationId: batchExtractText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaIdBatchRequest"
+      responses:
+        "200":
+          description: Queue result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchQueueResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/batch/text/scanned:
+    post:
+      summary: Drain the deferred-OCR backlog
+      description: Queues tier-2 OCR for items at `NEEDS_OCR`. Bounded; `remaining` reports what is left.
+      tags: [Media]
+      operationId: extractAllScannedText
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                limit:
+                  type: integer
+                  minimum: 1
+                  description: Maximum jobs to queue in this call. Capped server-side.
+      responses:
+        "200":
+          description: Queue result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queued:
+                    type: integer
+                  remaining:
+                    type: integer
+                    description: Items still at NEEDS_OCR after this call.
+                required:
+                  - queued
+                  - remaining
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/batch/thumbnail/prioritize:
+    post:
+      summary: Promote thumbnails for on-screen items
+      description: Moves already-pending work to the front of the queue; generates nothing. Both counts are `0` when `DERIVATIVE_FEED_ENABLED=false`.
+      tags: [Media]
+      operationId: prioritizeThumbnails
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaIdBatchRequest"
+      responses:
+        "200":
+          description: Promotion result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/batch/text/prioritize:
+    post:
+      summary: Promote text extraction for specific items
+      description: Tier 1 only. Forced OCR is `POST /api/media/{id}/text` with `forceOcr`.
+      tags: [Media]
+      operationId: prioritizeText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaIdBatchRequest"
+      responses:
+        "200":
+          description: Promotion result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # --- In-place indexing -----------------------------------------------------
+
+  /api/media/index/roots:
+    get:
+      summary: Configured indexing roots
+      description: An empty `roots` array means in-place indexing is disabled.
+      tags: [Indexing]
+      operationId: getIndexRoots
+      responses:
+        "200":
+          description: Allowed roots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  roots:
+                    type: array
+                    items:
+                      type: string
+                required:
+                  - enabled
+                  - roots
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/index:
+    post:
+      summary: Scan a server-side folder and index its files in place
+      description: Adds files not already indexed; `POST /api/media/index/reconcile` picks up deletions, moves and edits. The path must sit under `indexAllowedRoots`. Poll `/api/media/index/status`.
+      tags: [Indexing]
+      operationId: startIndex
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartIndexRequest"
+      responses:
+        "200":
+          description: Scan enqueued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobIdResponse"
+        "400":
+          description: Indexing disabled, or the path is not a directory
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Path is outside every allowed root
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: A scan is already running for this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/media/index/status:
+    get:
+      summary: Poll scan progress
+      tags: [Indexing]
+      operationId: getIndexStatus
+      parameters:
+        - in: query
+          name: jobId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Scan status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/media/index/active:
+    get:
+      summary: The user's in-flight scan
+      description: Lets the UI re-attach after a reload. `status` is null when nothing is running.
+      tags: [Indexing]
+      operationId: getActiveIndex
+      responses:
+        "200":
+          description: Active scan, or null
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    anyOf:
+                      - $ref: "#/components/schemas/IndexStatus"
+                      - type: "null"
+                required:
+                  - status
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/index/reconcile:
+    post:
+      summary: Reconcile the allowed folders against the library
+      description: Picks up deletions, moves and edits. A missing file is tombstoned (`missingSince`) rather than deleted. `path` narrows the sweep to one root; omitting it reconciles all, returning one job ID per root.
+      tags: [Indexing]
+      operationId: startReconcile
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path:
+                  type: string
+                  minLength: 1
+      responses:
+        "200":
+          description: Reconcile enqueued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobIds:
+                    type: array
+                    items:
+                      type: string
+                required:
+                  - jobIds
+        "400":
+          description: In-place indexing is disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Path is outside every allowed root
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/media/index/reconcile/state:
+    get:
+      summary: Running and most recent reconcile sweeps
+      description: One round-trip for live progress (`active`) and the last finished summary (`last`).
+      tags: [Indexing]
+      operationId: getReconcileState
+      responses:
+        "200":
+          description: Reconcile state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active:
+                    anyOf:
+                      - $ref: "#/components/schemas/ReconcileStatus"
+                      - type: "null"
+                  last:
+                    anyOf:
+                      - $ref: "#/components/schemas/ReconcileStatus"
+                      - type: "null"
+                required:
+                  - active
+                  - last
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # --- Bulk delete jobs ------------------------------------------------------
+
+  /api/media/delete/status:
+    get:
+      summary: Poll bulk-delete progress
+      tags: [Media]
+      operationId: getDeleteStatus
+      parameters:
+        - in: query
+          name: jobId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Delete status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/media/delete/active:
+    get:
+      summary: The user's in-flight bulk delete
+      tags: [Media]
+      operationId: getActiveDelete
+      responses:
+        "200":
+          description: Active delete job, or null
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    anyOf:
+                      - $ref: "#/components/schemas/DeleteStatus"
+                      - type: "null"
+                required:
+                  - status
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/media/delete/abort:
+    post:
+      summary: Stop in-flight bulk deletes
+      description: Already-deleted items are not restored. `epoch` is null when Redis is unavailable.
+      tags: [Media]
+      operationId: abortDelete
+      responses:
+        "200":
+          description: Abort signalled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  epoch:
+                    type: [integer, "null"]
+                required:
+                  - epoch
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # --- Single item -----------------------------------------------------------
+
   /api/media/{id}:
     get:
       summary: Get media detail
-      tags:
-        - Media
-      operationId: media_getDetail
+      description: Opening an item whose `thumbState` is `PENDING` also promotes its thumbnail.
+      tags: [Media]
+      operationId: getMedia
       parameters:
         - $ref: "#/components/parameters/MediaId"
       responses:
@@ -783,64 +1121,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaDetailResponse"
-              examples:
-                success:
-                  value:
-                    media:
-                      id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
-                      userId: "usr_123"
-                      title: "January receipt"
-                      filename: "receipt.pdf"
-                      mimeType: "application/pdf"
-                      sizeBytes: 24576
-                      storageKey: "usr_123/7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9/receipt.pdf"
-                      createdAt: "2026-01-29T18:35:00Z"
-                      updatedAt: "2026-01-29T18:35:30Z"
-                      tags:
-                        - "receipt"
-                        - "application-pdf"
-                      thumbState: "READY"
-                      thumbError: null
-                      textState: "READY"
-                      thumbnailKey: "usr_123/7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9/thumb.webp"
-                      hasText: true
-                      hasThumb: true
-                      textError: null
-                      textAttemptsMade: null
-                      textAttemptsTotal: null
-                    document:
-                      rawText: "Lorem ipsum..."
-                      textSource: "OCR"
-                      textTotalLength: 1200
-                      textLanguage: "English"
-                      textLanguageStatus: "ok"
-                    metadata:
-                      text:
-                        totalChars: 1200
-                        totalWords: 220
-                        pageCount: 1
-                        pagesWithText: 1
-                        avgCharsPerPage: 1200
-                        avgWordsPerPage: 220
-                      pdf:
-                        pageCount: 1
-                        encrypted: false
-                    permissions:
-                      canEdit: true
-                      canDelete: true
-                      canDownload: true
-                      canOcr: true
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
     patch:
-      summary: Update media metadata
-      tags:
-        - Media
-      operationId: media_update
+      summary: Update media title or tags
+      description: Tags are normalized (lowercased, trimmed, deduplicated). Sending `tags` replaces the whole list.
+      tags: [Media]
+      operationId: updateMedia
       parameters:
         - $ref: "#/components/parameters/MediaId"
       requestBody:
@@ -849,13 +1138,6 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/MediaUpdateRequest"
-            examples:
-              update:
-                value:
-                  title: "January receipt (updated)"
-                  tags:
-                    - "receipt"
-                    - "2026"
       responses:
         "200":
           description: Updated media
@@ -863,68 +1145,90 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaUpdateResponse"
-              examples:
-                success:
-                  value:
-                    media:
-                      id: "7a1b54a0-5e98-4f1e-a3f5-2b2b3e9f08c9"
-                      title: "January receipt (updated)"
-                      filename: "receipt.pdf"
-                      sizeBytes: 24576
-                      mimeType: "application/pdf"
-                      thumbState: "READY"
-                      textState: "READY"
-                      tags:
-                        - "receipt"
-                        - "2026"
         "400":
-          description: Bad request
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                badRequest:
-                  value:
-                    statusCode: 400
-                    error: "Bad Request"
-                    message: "Provide a title or tags to update"
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
     delete:
-      summary: Delete media
-      tags:
-        - Media
-      operationId: media_delete
+      summary: Delete one media item
+      description: Removes the row and any derivatives it owns. An in-place source file is never deleted; a managed original is removed from storage.
+      tags: [Media]
+      operationId: deleteMedia
       parameters:
         - $ref: "#/components/parameters/MediaId"
       responses:
         "200":
-          description: Media deleted
+          description: Deleted
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OkResponse"
-              examples:
-                success:
-                  value:
-                    ok: true
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
+
+  /api/media/{id}/star:
+    post:
+      summary: Toggle starred
+      tags: [Media]
+      operationId: toggleMediaStar
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+      responses:
+        "200":
+          description: New starred state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  starred:
+                    type: boolean
+                required:
+                  - ok
+                  - starred
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/media/{id}/reveal:
+    post:
+      summary: Reveal the file in the host's file manager
+      description: Gated on `LOCAL_EXPLORER`. In-place sources are re-validated against the allow-list.
+      tags: [Media]
+      operationId: revealMedia
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+      responses:
+        "200":
+          description: File manager launched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Reveal is disabled, or the path left the allow-list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/media/{id}/download:
     get:
-      summary: Get a presigned download URL
-      tags:
-        - Media
-      operationId: media_getDownloadUrl
+      summary: Get a download URL for the original
+      description: Returns a URL, not bytes. In-place originals resolve to `/api/media/{id}/source`, managed originals to a presigned storage URL.
+      tags: [Media]
+      operationId: getMediaDownloadUrl
       parameters:
         - $ref: "#/components/parameters/MediaId"
       responses:
@@ -934,22 +1238,93 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaDownloadResponse"
-              examples:
-                success:
-                  value:
-                    url: "https://s3.example.com/presigned-get"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
+
+  /api/media/{id}/source:
+    get:
+      summary: Stream an in-place original from disk
+      description: In-place originals only; managed items use the presigned `/download` URL. Supports single-range requests.
+      tags: [Media]
+      operationId: getMediaSource
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+        - in: header
+          name: Range
+          required: false
+          schema:
+            type: string
+          example: bytes=0-1048575
+      responses:
+        "200":
+          description: Full file
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial content
+          headers:
+            Content-Range:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "416":
+          description: Requested range not satisfiable
+          headers:
+            Content-Range:
+              schema:
+                type: string
+
+  /api/media/{id}/thumbnail:
+    get:
+      summary: Stream the thumbnail
+      description: Returns a 1×1 WebP placeholder when the thumbnail is missing or the ID is not a valid UUID. Immutable-cached.
+      tags: [Media]
+      operationId: getMediaThumbnail
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+      responses:
+        "200":
+          description: WebP thumbnail, or the placeholder
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: public, max-age=31536000, immutable
+            ETag:
+              schema:
+                type: string
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+
   /api/media/{id}/text:
     get:
       summary: Get a chunk of extracted text
-      tags:
-        - Media
-      operationId: media_getText
+      tags: [Media]
+      operationId: getMediaText
       parameters:
         - $ref: "#/components/parameters/MediaId"
         - in: query
@@ -972,97 +1347,123 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaTextChunk"
-              examples:
-                success:
-                  value:
-                    text: "Lorem ipsum..."
-                    offset: 0
-                    limit: 4000
-                    totalLength: 12000
-                    hasMore: true
-                    textSource: "OCR"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
     post:
       summary: Re-run text extraction
-      tags:
-        - Media
-      operationId: media_rerunTextExtraction
+      description: "`forceOcr: true` routes to tier-2 OCR (Tesseract); otherwise tier-1 native extraction. Returns once queued."
+      tags: [Media]
+      operationId: extractMediaText
       parameters:
         - $ref: "#/components/parameters/MediaId"
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/TextExtractionRequest"
-            examples:
-              enqueue:
-                value:
-                  language: "eng"
-                  rotation: "0"
-                  forceOcr: false
       responses:
         "200":
-          description: OCR job enqueued
+          description: Queued, or a no-op marking the item `UNSUPPORTED` when the MIME type cannot carry text.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OkResponse"
-              examples:
-                success:
-                  value:
-                    ok: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
+
   /api/media/{id}/text/cancel:
     post:
       summary: Cancel text extraction
-      tags:
-        - Media
-      operationId: media_cancelTextExtraction
+      description: "Removes the job from both text tiers and leaves the item at `textState: ERROR`."
+      tags: [Media]
+      operationId: cancelMediaText
       parameters:
         - $ref: "#/components/parameters/MediaId"
       responses:
         "200":
-          description: OCR job cancellation requested
+          description: Cancelled
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OkResponse"
-              examples:
-                success:
-                  value:
-                    ok: true
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-  /api/media/{id}/unpack:
-    post:
-      summary: Unpack an archive into a bundle
-      description: |
-        Extracts the archive and creates a new bundle containing the extracted items.
-        Returns `400` if the file is not a recognised archive type, or `409` if it is
-        already linked to a bundle.
-      tags:
-        - Media
-      operationId: media_unpack
+
+  /api/media/{id}/text/queue-position:
+    get:
+      summary: Where this item sits in the tier-1 text backlog
+      description: 404 when the item has no position — dispatched, finished, or ineligible. `total` spans all users.
+      tags: [Media]
+      operationId: getTextQueuePosition
       parameters:
         - $ref: "#/components/parameters/MediaId"
       responses:
         "200":
-          description: Archive unpacked, bundle created
+          description: Backlog position
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  position:
+                    type: integer
+                    description: 1-based position in the backlog.
+                  total:
+                    type: integer
+                required:
+                  - position
+                  - total
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/media/{id}/thumbnail/regenerate:
+    post:
+      summary: Force a fresh thumbnail render
+      description: Bypasses sibling-row reuse. `queued` is false when the MIME type cannot be rendered, which marks the item `UNSUPPORTED`.
+      tags: [Media]
+      operationId: regenerateMediaThumbnail
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+      responses:
+        "200":
+          description: Regeneration queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  queued:
+                    type: boolean
+                required:
+                  - ok
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/media/{id}/unpack:
+    post:
+      summary: Extract an archive into a bundle
+      tags: [Media]
+      operationId: unpackMedia
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+      responses:
+        "200":
+          description: Unpack queued, with the bundle it will fill
           content:
             application/json:
               schema:
@@ -1072,12 +1473,8 @@ paths:
                     type: string
                 required:
                   - bundleId
-              examples:
-                success:
-                  value:
-                    bundleId: "c1d2e3f4-0001-0000-0000-000000000001"
         "400":
-          description: File is not a recognised archive type
+          description: Not a recognised archive type
           content:
             application/json:
               schema:
@@ -1095,63 +1492,6 @@ paths:
                 properties:
                   error:
                     type: string
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-  /api/media/{id}/thumbnail:
-    get:
-      summary: Get a thumbnail image
-      description: Returns a WebP image. Missing thumbnails return a 1×1 fallback image.
-      tags:
-        - Media
-      operationId: media_getThumbnail
-      parameters:
-        - $ref: "#/components/parameters/MediaId"
-      responses:
-        "200":
-          description: WebP thumbnail
-          headers:
-            Cache-Control:
-              schema:
-                type: string
-              example: "public, max-age=31536000, immutable"
-            ETag:
-              schema:
-                type: string
-          content:
-            image/webp:
-              schema:
-                type: string
-                format: binary
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-  /api/media/{id}/thumbnail/regenerate:
-    post:
-      summary: Regenerate the thumbnail
-      tags:
-        - Media
-      operationId: media_regenerateThumbnail
-      parameters:
-        - $ref: "#/components/parameters/MediaId"
-      responses:
-        "200":
-          description: Thumbnail regeneration enqueued
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OkResponse"
-              examples:
-                success:
-                  value:
-                    ok: true
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-
   # ---------------------------------------------------------------------------
   # Tags
   # ---------------------------------------------------------------------------
@@ -1681,7 +2021,6 @@ paths:
         - `status=active` (default) returns active reminders sorted by urgency.
         - `status=completed` returns completed reminders, only supports `view=all`.
         - `view=overview` (default) returns a limited set grouped by bucket; `view=all` returns a flat list.
-        - `status=canceled` is not supported.
       tags:
         - Reminders
       operationId: reminders_list
@@ -1701,9 +2040,7 @@ paths:
             enum:
               - overview
               - all
-          description: |
-            `overview` returns a capped list per bucket; `all` returns the full flat list.
-            `completed` status only supports `view=all`.
+          description: "`overview` returns a capped list per bucket; `all` returns the full flat list. `completed` supports `view=all` only."
         - in: query
           name: limit
           schema:
@@ -1840,10 +2177,7 @@ paths:
   /api/reminders/{id}/complete:
     post:
       summary: Mark a reminder complete
-      description: |
-        For one-off reminders, sets status to `COMPLETED`. For recurring reminders
-        (with `rrule`), advances to the next occurrence and stays `ACTIVE`,
-        updating `lastCompletedAt`.
+      description: One-off reminders become `COMPLETED`. Recurring reminders advance to the next occurrence, stay `ACTIVE`, and update `lastCompletedAt`.
       tags:
         - Reminders
       operationId: reminders_complete
@@ -1994,7 +2328,7 @@ paths:
                       libraryViewMode: "grid"
                       libraryGridCols: 5
                       libraryIsCompactList: false
-                      autoTagOnUpload: true
+                      autoTagOnIngest: true
                       extractMetadata: true
                       detectDuplicates: false
                       lowMemoryMode: false
@@ -2041,6 +2375,580 @@ paths:
           $ref: "#/components/responses/InternalServerError"
 
   # ---------------------------------------------------------------------------
+  # Ingest — sending files over HTTP
+  # ---------------------------------------------------------------------------
+  /api/ingest/config:
+    get:
+      summary: Whether sending files is possible, and where they land
+      description: "`reason` and `message` are present only when `enabled` is false."
+      tags: [Ingest]
+      operationId: getIngestConfig
+      responses:
+        "200":
+          description: Ingest configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestConfigResponse"
+              examples:
+                enabled:
+                  value:
+                    enabled: true
+                    folderPath: "D:/Vault/Inbox"
+                    maxBytes: 2147483648
+                notConfigured:
+                  value:
+                    enabled: false
+                    folderPath: null
+                    maxBytes: 2147483648
+                    reason: "not-set"
+                    message: "Choose the folder that sent files should be saved to."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/ingest/file/{path}:
+    put:
+      summary: Send a file to Vault
+      description: |
+        The raw request body is the file; only the basename of the path is used.
+
+        On a name collision the file is saved as e.g. `report (2).pdf` and returned
+        as `savedAs` with `renamed: true`. The size limit is enforced against the
+        bytes received, not the declared `Content-Length`.
+      tags: [Ingest]
+      operationId: ingestFile
+      parameters:
+        - in: path
+          name: path
+          required: true
+          schema:
+            type: string
+          description: Percent-encoded filename. Only the basename is used.
+          example: scan%20001.pdf
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: File written and indexed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResult"
+              examples:
+                renamed:
+                  value:
+                    id: "8d1f0b6e-2c34-4a71-9f0d-5b7a2e9c1d33"
+                    savedAs: "report (2).pdf"
+                    renamed: true
+                    sourcePath: "D:/Vault/Inbox/report (2).pdf"
+                    sizeBytes: 384122
+        "400":
+          description: Missing or malformed filename, unsafe name, or over the size limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Ingest is not configured — see `GET /api/ingest/config`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ---------------------------------------------------------------------------
+  # Tag Rules — the Tag Organizer
+  # ---------------------------------------------------------------------------
+  /api/tag-rules:
+    get:
+      summary: List tag rules
+      tags: [Tag Rules]
+      operationId: listTagRules
+      responses:
+        "200":
+          description: Rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TagRule"
+                required:
+                  - rules
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      summary: Create a tag rule
+      description: "`matcher` must match the schema for its `source`, and `tagTemplate` must yield a valid tag once `{value}` is substituted."
+      tags: [Tag Rules]
+      operationId: createTagRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagRuleCreateRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagRuleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/tag-rules/{id}:
+    patch:
+      summary: Update a tag rule
+      description: "`source` and `matcher` are validated as a merged pair against the stored rule."
+      tags: [Tag Rules]
+      operationId: updateTagRule
+      parameters:
+        - $ref: "#/components/parameters/TagRuleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagRulePatchRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagRuleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Delete a tag rule
+      tags: [Tag Rules]
+      operationId: deleteTagRule
+      parameters:
+        - $ref: "#/components/parameters/TagRuleId"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/tag-rules/run:
+    post:
+      summary: Apply the rules to the whole library
+      description: Applies the rules to every item, ignoring `autoTagOnIngest`. Poll `/api/tag-rules/run/status`.
+      tags: [Tag Rules]
+      operationId: runTagRules
+      parameters:
+        - in: query
+          name: dryRun
+          schema:
+            type: string
+            enum: ["true", "false"]
+          description: "`true` previews the changes without writing them."
+      responses:
+        "200":
+          description: Run enqueued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobIdResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/tag-rules/run/status:
+    get:
+      summary: Poll organize-run progress
+      tags: [Tag Rules]
+      operationId: getTagRuleRunStatus
+      parameters:
+        - in: query
+          name: jobId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Run status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizeStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/tag-rules/run/active:
+    get:
+      summary: The user's in-flight organize run
+      tags: [Tag Rules]
+      operationId: getActiveTagRuleRun
+      responses:
+        "200":
+          description: Active run, or null
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    anyOf:
+                      - $ref: "#/components/schemas/OrganizeStatus"
+                      - type: "null"
+                required:
+                  - status
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---------------------------------------------------------------------------
+  # Jobs — queue depths and the stop controls
+  # ---------------------------------------------------------------------------
+  /api/jobs/queues:
+    get:
+      summary: Depths for every queue
+      description: A queue that could not be read reports `null`. `derivativesPaused` is the runtime pause; `feederEnabled` is the `DERIVATIVE_FEED_ENABLED` deploy switch.
+      tags: [Jobs]
+      operationId: getQueueDepths
+      responses:
+        "200":
+          description: Queue depths
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueDepthsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/jobs/cancel-scan:
+    post:
+      summary: Stop the directory walk and any queued sweeps
+      description: Stops the index and reconcile sweeps and drains their queues; derivatives already found keep processing. Queues are global — on a multi-user install this affects everyone's jobs.
+      tags: [Jobs]
+      operationId: cancelScan
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobControlResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/jobs/cancel-reconcile:
+    post:
+      summary: Stop only the reconcile sweep
+      description: Leaves an index scan, if one is running, alone.
+      tags: [Jobs]
+      operationId: cancelReconcile
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobControlResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/jobs/stop-all:
+    post:
+      summary: Cancel the scan and pause derivative work
+      description: "`cancel-scan`, plus pausing the derivative feeder."
+      tags: [Jobs]
+      operationId: stopAllJobs
+      responses:
+        "200":
+          description: Stopped
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/JobControlResponse"
+                  - type: object
+                    properties:
+                      derivativesPaused:
+                        type: boolean
+                    required:
+                      - derivativesPaused
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/jobs/resume:
+    post:
+      summary: Clear the pause and start feeding again
+      description: Kicks the feeder immediately rather than waiting out its idle interval.
+      tags: [Jobs]
+      operationId: resumeJobs
+      responses:
+        "200":
+          description: Resumed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  derivativesPaused:
+                    type: boolean
+                required:
+                  - ok
+                  - derivativesPaused
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/jobs/failed/clear:
+    post:
+      summary: Drain dead BullMQ records
+      description: Clears failed BullMQ records. Omitting `queue` clears every queue.
+      tags: [Jobs]
+      operationId: clearFailedJobs
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                queue:
+                  type: string
+                  description: Queue name. Omit to clear all.
+                  enum: [index, reconcile, thumb, text, ocr, hash, unpack, organize, delete]
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  cleared:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                required:
+                  - ok
+                  - cleared
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ---------------------------------------------------------------------------
+  # Sidecars — metadata snapshots
+  # ---------------------------------------------------------------------------
+  /api/sidecars:
+    get:
+      summary: Snapshot status
+      description: "Answers with `enabled: false` when `SIDECAR_EXPORT_ENABLED=false`."
+      tags: [Sidecars]
+      operationId: getSidecarStatus
+      responses:
+        "200":
+          description: Snapshot status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SidecarStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/sidecars/export:
+    post:
+      summary: Write a snapshot now
+      description: Skips the change probe rather than waiting for the export interval.
+      tags: [Sidecars]
+      operationId: exportSidecar
+      responses:
+        "200":
+          description: Snapshot written
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SidecarExportResult"
+        "400":
+          description: "Snapshots are turned off for this account (`sidecarMode: off`)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/SidecarDisabled"
+
+  /api/sidecars/restore:
+    post:
+      summary: Reattach the snapshot to the current library
+      description: |
+        Additive: fills gaps only, never overwrites or deletes, so a second restore
+        reports `updated: 0`. Matched on `sourcePath`, falling back to
+        `contentHash`; a hash matching more than one row matches nothing.
+
+        Poll `GET /api/sidecars` for progress and the result.
+      tags: [Sidecars]
+      operationId: restoreSidecar
+      responses:
+        "200":
+          description: Restore started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started:
+                    type: boolean
+                required:
+                  - started
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: There is no snapshot to restore from
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: A restore is already running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/SidecarDisabled"
+
+  # ---------------------------------------------------------------------------
+  # Storage proxy
+  # ---------------------------------------------------------------------------
+  /api/storage/blob/{key}:
+    get:
+      summary: Download a stored object
+      description: Keys are namespaced by owner (`{userId}/{mediaId}/{filename}`); a request may only touch keys under its own `userId/` prefix. Supports single-range requests.
+      tags: [Storage]
+      operationId: getBlob
+      parameters:
+        - $ref: "#/components/parameters/StorageKey"
+        - in: header
+          name: Range
+          required: false
+          schema:
+            type: string
+          example: bytes=0-1048575
+      responses:
+        "200":
+          description: Object bytes
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+              example: private, max-age=3600
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial content
+          headers:
+            Content-Range:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid object key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Key belongs to another user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "416":
+          description: Requested range not satisfiable
+          headers:
+            Content-Range:
+              schema:
+                type: string
+    put:
+      summary: Upload a stored object
+      description: Streams the body straight to storage, unbuffered and with no size limit. The key must sit under the caller's own `userId/` prefix.
+      tags: [Storage]
+      operationId: putBlob
+      parameters:
+        - $ref: "#/components/parameters/StorageKey"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "204":
+          description: Stored
+        "400":
+          description: Invalid object key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Key belongs to another user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ---------------------------------------------------------------------------
   # Server
   # ---------------------------------------------------------------------------
   /api/server/status:
@@ -2064,11 +2972,14 @@ paths:
                     corsOrigin: "http://localhost"
                     uptimeSeconds: 3600
                     memoryMB: 128
-                    minioConsoleUrl: "http://localhost:9001/browser/vault-media"
+                    storageDriver: "fs"
+                    storagePath: "/var/lib/vault/storage"
+                    localExplorer: false
         "401":
           $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalServerError"
+
   /api/server/storage:
     get:
       summary: Get storage usage statistics
@@ -2092,6 +3003,259 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalServerError"
+
+  /api/server/storage/test:
+    post:
+      summary: Round-trip a probe object against the storage backend
+      description: Writes, reads back and deletes a probe object. Surfaces the OS error code (`EACCES`, `ENOSPC`, …) on failure.
+      tags: [Server]
+      operationId: testStorage
+      responses:
+        "200":
+          description: Backend is reachable and writable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  driver:
+                    type: string
+                  durationMs:
+                    type: integer
+                required:
+                  - ok
+                  - driver
+                  - durationMs
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: Storage self-test failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  driver:
+                    type: string
+                  code:
+                    type: [string, "null"]
+                    description: OS error code, when the failure had one.
+                  message:
+                    type: string
+                required:
+                  - ok
+                  - driver
+                  - code
+                  - message
+
+  /api/server/storage-config:
+    get:
+      summary: Current storage configuration
+      description: "`canApply` is false in production."
+      tags: [Server]
+      operationId: getStorageConfig
+      responses:
+        "200":
+          description: Storage config
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  driver:
+                    type: string
+                    enum: [fs]
+                  fsPath:
+                    type: string
+                  canApply:
+                    type: boolean
+                required:
+                  - driver
+                  - fsPath
+                  - canApply
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      summary: Repoint the storage path
+      description: Writes `STORAGE_FS_PATH` to the `.env` the API loaded; takes effect on the next start. Forbidden in production.
+      tags: [Server]
+      operationId: updateStorageConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fsPath:
+                  type: string
+                  description: Absolute path.
+              required:
+                - fsPath
+      responses:
+        "200":
+          description: Written
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  restartRequired:
+                    type: boolean
+                  driver:
+                    type: string
+                  envPath:
+                    type: string
+                required:
+                  - ok
+                  - restartRequired
+                  - driver
+                  - envPath
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Disabled in production, or the env file is not writable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/server/index-config:
+    get:
+      summary: Current in-place indexing configuration
+      description: "`skipInfo` reports what the `skipNonContent` filter matches."
+      tags: [Server]
+      operationId: getIndexConfig
+      responses:
+        "200":
+          description: Index config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      summary: Save the indexing allow-list and filters
+      description: |
+        Takes effect immediately. Roots are canonicalized and deduplicated, and a
+        root overlapping Vault's own storage folder is rejected.
+
+        `blacklist`, `excludeFolders`, `skipNonContent` and `ingestFolderPath` are
+        optional; omitting one keeps its stored value. Dropping the root that
+        contained `ingestFolderPath` clears it and sets `ingestFolderCleared`.
+      tags: [Server]
+      operationId: updateIndexConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IndexConfigPatchRequest"
+      responses:
+        "200":
+          description: Saved. Echoes back only the fields that were changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexConfigPatchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/server/fs/list:
+    get:
+      summary: Browse server-side directories
+      description: Read-only, directories only. Defaults to the server user's home directory and walks up to the nearest readable ancestor; `redirected` is true when that happened.
+      tags: [Server]
+      operationId: listServerDirectories
+      parameters:
+        - in: query
+          name: path
+          schema:
+            type: string
+          description: Directory to list. Defaults to the server user's home directory.
+      responses:
+        "200":
+          description: Directory listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Permission denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/server/fs/mkdir:
+    post:
+      summary: Create a directory
+      description: Non-recursive — `parent` must exist. `name` may not contain path separators or reserved characters.
+      tags: [Server]
+      operationId: createServerDirectory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                parent:
+                  type: string
+                  description: Absolute path of an existing directory.
+                name:
+                  type: string
+              required:
+                - parent
+                - name
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path:
+                    type: string
+                required:
+                  - path
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Permission denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Parent folder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: A folder with that name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /api/server/workers:
     get:
       summary: Get worker queue status
@@ -2108,11 +3272,19 @@ paths:
               examples:
                 success:
                   value:
-                    ocr:
+                    text:
                       active: true
                       count: 1
                       counts:
                         waiting: 0
+                        active: 1
+                        delayed: 0
+                        failed: 0
+                    ocr:
+                      active: true
+                      count: 1
+                      counts:
+                        waiting: 1840
                         active: 1
                         delayed: 0
                         failed: 0
@@ -2129,16 +3301,29 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  /api/server/backlog:
+    get:
+      summary: Derivative backlog progress
+      description: "`ratePerSec` is null until two samples exist; `etaSeconds` is null when the rate is null or nothing is pending."
+      tags: [Server]
+      operationId: getDerivativeBacklog
+      responses:
+        "200":
+          description: Backlog progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DerivativeProgress"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   # ---------------------------------------------------------------------------
   # Init
   # ---------------------------------------------------------------------------
   /api/init:
     get:
       summary: Bootstrap initial app data
-      description: |
-        Returns all data needed to bootstrap the app in a single request:
-        user profile, preferences, tags, bundles, reminder summary counts,
-        and the reminder overview.
+      description: "Bootstraps the app in one request: user, preferences, tags, bundles, reminder summary counts and the reminder overview."
       tags:
         - Init
       operationId: init_get
@@ -2187,7 +3372,7 @@ paths:
   # ---------------------------------------------------------------------------
   # Health
   # ---------------------------------------------------------------------------
-  /healthz:
+  /health/healthz:
     get:
       summary: Liveness check
       tags:
@@ -2205,7 +3390,7 @@ paths:
                 success:
                   value:
                     ok: true
-  /readyz:
+  /health/readyz:
     get:
       summary: Readiness check
       description: Performs a database connectivity check (`SELECT 1`).
@@ -2277,6 +3462,21 @@ components:
         type: string
         format: uuid
       description: Reminder ID (UUID).
+    TagRuleId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+      description: Tag rule ID.
+    StorageKey:
+      in: path
+      name: key
+      required: true
+      schema:
+        type: string
+      description: Object key, `{userId}/{mediaId}/{filename}`. Matched as a wildcard, so it may contain slashes.
+      example: 9f1c8a2e/3f2a.../report.pdf
 
   # ---------------------------------------------------------------------------
   # Reusable responses
@@ -2327,6 +3527,12 @@ components:
           examples:
             serverError:
               $ref: "#/components/examples/ErrorInternalServer"
+    SidecarDisabled:
+      description: Snapshot export is disabled server-wide (`SIDECAR_EXPORT_ENABLED=false`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
 
   # ---------------------------------------------------------------------------
   # Schemas
@@ -2425,20 +3631,24 @@ components:
         - user
     AuthRefreshRequest:
       type: object
-      description: Refresh token payload.
+      description: Fallback for non-browser clients; the `refresh_token` cookie takes precedence.
       properties:
         refresh:
           type: string
-      required:
-        - refresh
     AuthRefreshResponse:
       type: object
-      description: New access token.
+      description: Freshly minted token pair. Also set as httpOnly cookies.
       properties:
+        ok:
+          type: boolean
         access:
           type: string
+        refresh:
+          type: string
       required:
+        - ok
         - access
+        - refresh
     AuthMeResponse:
       type: object
       description: Current user response.
@@ -2518,12 +3728,14 @@ components:
     # --- Media shared ---
     MediaWorkerState:
       type: string
-      description: Background processing state.
+      description: Background processing state. `UNSUPPORTED` means no job is needed for this file type. `NEEDS_OCR` occurs on `textState` only.
       enum:
         - PENDING
         - READY
         - ERROR
         - FAILED
+        - UNSUPPORTED
+        - NEEDS_OCR
     MediaSortOption:
       type: string
       description: Sort options for media listing.
@@ -2535,6 +3747,8 @@ components:
         - size_desc
         - size_asc
         - mimeType_asc
+        - starred_first
+        - fileDate_desc
     TextSource:
       type: string
       description: Source of extracted text.
@@ -2557,108 +3771,104 @@ components:
           items:
             type: string
 
-    # --- Media upload ---
-    MediaInitUploadRequest:
+    # --- Ingest ---
+    IngestConfigResponse:
       type: object
-      description: Request to initialize an upload and receive a presigned PUT URL.
+      description: Whether files can be sent, and where they land.
       properties:
-        filename:
-          type: string
-          minLength: 1
-        mimeType:
-          type: string
-          minLength: 1
-        sizeBytes:
+        enabled:
+          type: boolean
+        folderPath:
+          type: [string, "null"]
+          description: Absolute path files are written to. Null when unset.
+        maxBytes:
           type: integer
-          minimum: 1
-          description: Size limits — 50 MB for photos, 250 MB for documents, 500 MB hard cap.
-        title:
+          description: Hard size ceiling for one sent file.
+        reason:
           type: string
-          minLength: 1
-        tags:
-          $ref: "#/components/schemas/TagInput"
+          description: Present only when `enabled` is false.
+          enum:
+            - no-roots
+            - not-set
+            - outside-roots
+            - missing
+        message:
+          type: string
+          description: Present only when `enabled` is false. What the user has to do to fix it.
       required:
-        - filename
-        - mimeType
-        - sizeBytes
-        - title
-    MediaInitUploadResponse:
+        - enabled
+        - folderPath
+        - maxBytes
+    IngestResult:
       type: object
-      description: Upload initialization response.
+      description: The row a sent file produced.
       properties:
         id:
           type: string
           format: uuid
-        uploadUrl:
+        savedAs:
           type: string
-        storageKey:
+          description: Name on disk. Differs from the sent name when it collided.
+        renamed:
+          type: boolean
+        sourcePath:
           type: string
-      required:
-        - id
-        - uploadUrl
-        - storageKey
-    MediaBatchInitRequestItem:
-      type: object
-      description: Single item for batch upload initialization.
-      properties:
-        filename:
-          type: string
-          minLength: 1
-        mimeType:
-          type: string
-          minLength: 1
         sizeBytes:
           type: integer
-          minimum: 1
-        title:
-          type: string
-          minLength: 1
-        tags:
-          $ref: "#/components/schemas/TagInput"
       required:
-        - filename
-        - mimeType
+        - id
+        - savedAs
+        - renamed
+        - sourcePath
         - sizeBytes
-    MediaBatchInitRequest:
+
+    # --- Media batch + job envelopes ---
+    JobIdResponse:
       type: object
-      description: Batch upload initialization request (1–100 items).
+      description: Identifier for a job to poll.
       properties:
-        items:
+        jobId:
+          type: string
+      required:
+        - jobId
+    MediaIdBatchRequest:
+      type: object
+      description: A batch of media IDs (1–500).
+      properties:
+        ids:
           type: array
           minItems: 1
-          maxItems: 100
+          maxItems: 500
           items:
-            $ref: "#/components/schemas/MediaBatchInitRequestItem"
+            type: string
       required:
-        - items
-    MediaBatchInitResponseItem:
+        - ids
+    BatchQueueResponse:
       type: object
-      description: Batch upload initialization result for one item.
+      description: How a batch re-queue landed.
       properties:
-        id:
-          type: string
-          format: uuid
-        storageKey:
-          type: string
-        putUrl:
-          type: string
+        queued:
+          type: integer
+        missing:
+          type: integer
+          description: IDs that matched no item the caller owns.
       required:
-        - id
-        - storageKey
-        - putUrl
-    MediaBatchInitResponse:
+        - queued
+        - missing
+    PromoteResponse:
       type: object
-      description: Batch upload initialization response.
+      description: "`queued` is backlog rows dispatched; `reordered` is IDs whose existing job was re-prioritized."
       properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/MediaBatchInitResponseItem"
+        queued:
+          type: integer
+        reordered:
+          type: integer
       required:
-        - items
-    MediaBatchFinalizeRequest:
+        - queued
+        - reordered
+    UnpackNewRequest:
       type: object
-      description: Finalize multiple uploads (1–100 IDs).
+      description: Archives to unpack (1–100 IDs).
       properties:
         ids:
           type: array
@@ -2667,19 +3877,11 @@ components:
           items:
             type: string
             format: uuid
+        autoUnpack:
+          type: boolean
+          description: Overrides the `autoUnpackArchives` preference for this call.
       required:
         - ids
-    MediaFinalizeResponse:
-      type: object
-      description: Finalize result.
-      properties:
-        ok:
-          type: boolean
-        count:
-          type: integer
-      required:
-        - ok
-        - count
 
     # --- Media list/detail ---
     MediaSummary:
@@ -2691,6 +3893,8 @@ components:
           format: uuid
         title:
           type: [string, "null"]
+        filename:
+          type: string
         thumbState:
           $ref: "#/components/schemas/MediaWorkerState"
         textState:
@@ -2698,14 +3902,28 @@ components:
         createdAt:
           type: string
           format: date-time
+        fileDate:
+          type: [string, "null"]
+          format: date-time
+          description: The file's own date, when one could be derived. Distinct from when Vault first saw it.
         tags:
           type: array
           items:
             type: string
         mimeType:
           type: string
+        sizeBytes:
+          type: [integer, "null"]
+        starred:
+          type: boolean
+        missingSince:
+          type: [string, "null"]
+          format: date-time
+          description: When the source file was found to have vanished; null while present.
       required:
         - id
+        - title
+        - filename
         - thumbState
         - textState
         - createdAt
@@ -2713,7 +3931,7 @@ components:
         - mimeType
     MediaListResponse:
       type: object
-      description: Paginated media list response.
+      description: "`totalCount` and `hasExtractedItems` are returned on the first page only."
       properties:
         items:
           type: array
@@ -2721,12 +3939,401 @@ components:
             $ref: "#/components/schemas/MediaSummary"
         nextCursor:
           type: [string, "null"]
-        nextPage:
-          type: [integer, "null"]
+          description: Pass as `cursor` for the next page. Null on the last page.
+        totalCount:
+          type: integer
+          description: Total items matching the filters. First page only.
+        hasExtractedItems:
+          type: boolean
+          description: Whether the library contains any archive-extracted items. First page only.
       required:
         - items
         - nextCursor
-        - nextPage
+    MediaStatsResponse:
+      type: object
+      description: Library totals for the overview header.
+      properties:
+        totalDocs:
+          type: integer
+        storageBytes:
+          type: integer
+        typeBreakdown:
+          type: array
+          description: Top 20 MIME types by count.
+          items:
+            type: object
+            properties:
+              mimeType:
+                type: string
+              count:
+                type: integer
+            required:
+              - mimeType
+              - count
+      required:
+        - totalDocs
+        - storageBytes
+        - typeBreakdown
+    MediaStorageItem:
+      type: object
+      description: One treemap tile.
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: [string, "null"]
+        filename:
+          type: string
+        mimeType:
+          type: string
+        sizeBytes:
+          type: integer
+        weightBytes:
+          type: integer
+          description: Drives tile area. Equals `sizeBytes` for exact tiles, inflated for sampled tiles.
+        sampled:
+          type: boolean
+          description: True for representative tail-sample tiles, which are drawn distinctly.
+        representsCount:
+          type: integer
+          description: How many real files a sampled tile stands in for. 1 for exact tiles.
+      required:
+        - id
+        - title
+        - filename
+        - mimeType
+        - sizeBytes
+    MediaStorageResponse:
+      type: object
+      description: Storage treemap payload.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaStorageItem"
+        totalFiles:
+          type: integer
+        totalBytes:
+          type: integer
+      required:
+        - items
+    StorageBucket:
+      type: string
+      description: File-type bucket used by the storage breakdown.
+      enum:
+        - pdf
+        - image
+        - document
+        - spreadsheet
+        - presentation
+        - video
+        - audio
+        - archive
+        - code
+        - other
+    MediaCategorySlice:
+      type: object
+      description: Totals for one file-type bucket.
+      properties:
+        bucket:
+          $ref: "#/components/schemas/StorageBucket"
+        count:
+          type: integer
+        bytes:
+          type: integer
+      required:
+        - bucket
+        - count
+        - bytes
+    MediaCategoryBreakdown:
+      type: object
+      description: Per-bucket storage totals for the overview graph.
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaCategorySlice"
+        totalFiles:
+          type: integer
+        totalBytes:
+          type: integer
+      required:
+        - categories
+        - totalFiles
+        - totalBytes
+    DuplicateItem:
+      type: object
+      description: One member of a duplicate group.
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: [string, "null"]
+        filename:
+          type: string
+        mimeType:
+          type: string
+        sizeBytes:
+          type: [integer, "null"]
+        sourcePath:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+        thumbState:
+          $ref: "#/components/schemas/MediaWorkerState"
+        thumbnailKey:
+          type: [string, "null"]
+      required:
+        - id
+        - filename
+        - mimeType
+        - createdAt
+        - thumbState
+    DuplicateGroup:
+      type: object
+      description: Items sharing one SHA-256 content hash.
+      properties:
+        contentHash:
+          type: string
+        sizeBytes:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DuplicateItem"
+      required:
+        - contentHash
+        - sizeBytes
+        - items
+    DuplicateGroupsResponse:
+      type: object
+      description: Duplicate groups, ordered by reclaimable space (size × extra copies).
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/DuplicateGroup"
+        unhashedCount:
+          type: integer
+          description: READY items still without a hash. Non-zero means the list is incomplete.
+      required:
+        - groups
+        - unhashedCount
+
+    # --- Indexing and background jobs ---
+    StartIndexRequest:
+      type: object
+      description: Folder to scan. Must sit under an allowed indexing root.
+      properties:
+        path:
+          type: string
+          minLength: 1
+        recursive:
+          type: boolean
+          default: true
+      required:
+        - path
+    IndexStatus:
+      type: object
+      description: Progress of one index scan.
+      properties:
+        jobId:
+          type: string
+        state:
+          type: string
+          description: BullMQ job state.
+        done:
+          type: boolean
+        aborted:
+          type: boolean
+        scanned:
+          type: integer
+        indexed:
+          type: integer
+          description: Rows created. Lower than `scanned` when files were already known.
+        skipped:
+          type: integer
+        filtered:
+          type: integer
+          description: Files excluded by the blacklist, hidden-file or non-content filters.
+      required:
+        - jobId
+        - state
+        - done
+        - aborted
+        - scanned
+        - indexed
+        - skipped
+        - filtered
+    ReconcileStatus:
+      type: object
+      description: Progress of one reconcile sweep over a single root.
+      properties:
+        jobId:
+          type: string
+        rootPath:
+          type: string
+        state:
+          type: string
+        done:
+          type: boolean
+        aborted:
+          type: boolean
+        finishedAt:
+          type: [integer, "null"]
+          description: Epoch milliseconds.
+        checked:
+          type: integer
+        scanned:
+          type: integer
+        added:
+          type: integer
+        moved:
+          type: integer
+          description: Files matched to an existing item at a new path.
+        revived:
+          type: integer
+          description: Previously missing items whose source reappeared.
+        missing:
+          type: integer
+          description: Items tombstoned because their source was gone.
+        changed:
+          type: integer
+      required:
+        - jobId
+        - rootPath
+        - state
+        - done
+        - aborted
+        - finishedAt
+        - checked
+        - scanned
+        - added
+        - moved
+        - revived
+        - missing
+        - changed
+    DeleteStatus:
+      type: object
+      description: Progress of one bulk delete.
+      properties:
+        jobId:
+          type: string
+        state:
+          type: string
+        done:
+          type: boolean
+        aborted:
+          type: boolean
+        total:
+          type: integer
+        deleted:
+          type: integer
+        failed:
+          type: integer
+      required:
+        - jobId
+        - state
+        - done
+        - aborted
+        - total
+        - deleted
+        - failed
+    QueueDepth:
+      type: object
+      description: Outstanding work in one queue.
+      properties:
+        waiting:
+          type: integer
+          description: Waiting plus prioritized.
+        active:
+          type: integer
+        delayed:
+          type: integer
+        failed:
+          type: integer
+        pending:
+          type: integer
+          description: waiting + active + delayed.
+      required:
+        - waiting
+        - active
+        - delayed
+        - failed
+        - pending
+    QueueDepthsResponse:
+      type: object
+      description: Depths for every queue, plus the two independent pause switches.
+      properties:
+        queues:
+          type: object
+          description: Keyed by queue name. A value is null when that queue could not be read.
+          additionalProperties:
+            anyOf:
+              - $ref: "#/components/schemas/QueueDepth"
+              - type: "null"
+        derivativesPaused:
+          type: boolean
+          description: Runtime pause, set by `stop-all` and cleared by `resume`.
+        feederEnabled:
+          type: boolean
+          description: Deploy-time `DERIVATIVE_FEED_ENABLED`. `resume` cannot change this.
+      required:
+        - queues
+        - derivativesPaused
+        - feederEnabled
+    JobControlResponse:
+      type: object
+      description: Which queues a stop action drained.
+      properties:
+        ok:
+          type: boolean
+        cleared:
+          type: array
+          items:
+            type: string
+      required:
+        - ok
+        - cleared
+    DerivativeStageProgress:
+      type: object
+      description: Backlog and throughput for one derivative stage.
+      properties:
+        pending:
+          type: integer
+        ready:
+          type: integer
+        ratePerSec:
+          type: [number, "null"]
+          description: Completions per second over a trailing window. Null until two samples exist.
+        etaSeconds:
+          type: [number, "null"]
+          description: pending ÷ ratePerSec. Null when the rate is null or nothing is pending.
+      required:
+        - pending
+        - ready
+        - ratePerSec
+        - etaSeconds
+    DerivativeProgress:
+      type: object
+      description: Derivative backlog for the progress strip.
+      properties:
+        thumb:
+          $ref: "#/components/schemas/DerivativeStageProgress"
+        text:
+          allOf:
+            - $ref: "#/components/schemas/DerivativeStageProgress"
+          description: "`pending` is tier-1 extraction only; the tier-2 backlog is `needsOcr`."
+        needsOcr:
+          type: integer
+          description: Items awaiting Tesseract — the number a user decides whether to pay for.
+      required:
+        - thumb
+        - text
+        - needsOcr
     MediaUpdateRequest:
       type: object
       description: Update request for media metadata. At least one field required.
@@ -2971,12 +4578,30 @@ components:
         - canDelete
         - canDownload
         - canOcr
+    TextSegment:
+      type: object
+      description: One addressable span of extracted text.
+      properties:
+        segmentId:
+          type: integer
+        order:
+          type: integer
+        text:
+          type: string
+      required:
+        - segmentId
+        - order
+        - text
     DocumentDetail:
       type: object
       description: Extracted text detail for a document.
       properties:
         rawText:
           type: string
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/TextSegment"
         textSource:
           anyOf:
             - $ref: "#/components/schemas/TextSource"
@@ -3010,7 +4635,11 @@ components:
         sizeBytes:
           type: [integer, "null"]
         storageKey:
-          type: string
+          type: [string, "null"]
+          description: Key of the Vault-managed original. Exactly one of `storageKey` and `sourcePath` is set.
+        sourcePath:
+          type: [string, "null"]
+          description: Absolute path of an in-place indexed original. Vault never writes to or deletes it.
         createdAt:
           type: string
           format: date-time
@@ -3027,6 +4656,10 @@ components:
           type: [string, "null"]
         textState:
           $ref: "#/components/schemas/MediaWorkerState"
+        textQueuedAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the row was handed to a text queue. Null while `PENDING` means it is still in the backlog.
         thumbnailKey:
           type: [string, "null"]
         hasText:
@@ -3039,12 +4672,49 @@ components:
           type: [integer, "null"]
         textAttemptsTotal:
           type: [integer, "null"]
+        linkedBundleId:
+          type: [string, "null"]
+          description: Set when this item is an archive that was unpacked into a bundle.
+        memberBundles:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+            required:
+              - id
+              - name
+        reminders:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              title:
+                type: string
+              note:
+                type: [string, "null"]
+              remindAt:
+                type: string
+                format: date-time
+              dueAt:
+                type: string
+                format: date-time
+            required:
+              - id
+              - title
+              - remindAt
+              - dueAt
       required:
         - id
         - userId
         - filename
         - mimeType
-        - storageKey
         - createdAt
         - updatedAt
         - tags
@@ -3070,10 +4740,20 @@ components:
           anyOf:
             - $ref: "#/components/schemas/MediaPermissions"
             - type: "null"
+        autoTags:
+          type: array
+          description: Subset of `media.tags` applied by tag rules (origin `AUTO`).
+          items:
+            type: string
+        localPath:
+          type: [string, "null"]
+          description: "`sourcePath` for in-place items, the resolved storage path for managed ones."
       required:
         - media
         - document
         - metadata
+        - autoTags
+        - localPath
 
     # --- Tags ---
     TagCount:
@@ -3087,6 +4767,10 @@ components:
         color:
           type: [string, "null"]
           description: Hex color string (e.g. `#ff5733`) or null.
+        origin:
+          type: string
+          description: "`AUTO` for tags applied by a tag rule, `USER` for tags the user typed."
+          enum: [USER, AUTO]
       required:
         - name
         - count
@@ -3150,6 +4834,347 @@ components:
       required:
         - ok
         - tag
+
+    # --- Tag rules ---
+    TagRuleSource:
+      type: string
+      description: Which deterministic fact about a file the rule reads.
+      enum:
+        - MIME
+        - EXTENSION
+        - FILENAME
+        - PATH_SEGMENT
+        - FILE_DATE
+        - SIZE
+    TagRuleMatcher:
+      type: object
+      description: Configuration for the rule's `source`. Unknown keys are rejected.
+      oneOf:
+        - title: MIME
+          type: object
+          additionalProperties: false
+          properties:
+            mimePrefixes:
+              type: array
+              maxItems: 20
+              items:
+                type: string
+              description: Match MIME types starting with any of these. Absent means all.
+        - title: EXTENSION
+          type: object
+          additionalProperties: false
+          properties:
+            extensions:
+              type: array
+              maxItems: 50
+              items:
+                type: string
+                pattern: "^[a-z0-9]+$"
+              description: Lowercase, no dot. Absent means any extension.
+        - title: FILENAME
+          type: object
+          additionalProperties: false
+          properties:
+            pattern:
+              type: string
+              minLength: 1
+              maxLength: 200
+              description: Case-insensitive regex. The first capture group becomes `{value}`.
+          required:
+            - pattern
+        - title: PATH_SEGMENT
+          type: object
+          additionalProperties: false
+          properties:
+            maxDepth:
+              type: integer
+              minimum: 1
+              maximum: 10
+              description: Directory levels beneath the index root to tag. Absent means every level.
+        - title: FILE_DATE
+          type: object
+          additionalProperties: false
+          properties:
+            granularity:
+              type: string
+              enum: [year, month]
+          required:
+            - granularity
+        - title: SIZE
+          type: object
+          additionalProperties: false
+          description: At least one bound is required.
+          properties:
+            minBytes:
+              type: number
+              minimum: 0
+            maxBytes:
+              type: number
+              exclusiveMinimum: 0
+    TagRule:
+      type: object
+      description: A rule that applies a tag derived from one file fact.
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        source:
+          $ref: "#/components/schemas/TagRuleSource"
+        matcher:
+          $ref: "#/components/schemas/TagRuleMatcher"
+        tagTemplate:
+          type: string
+          description: Tag to apply, with `{value}` replaced by the rule's computed value.
+          example: "type:{value}"
+        priority:
+          type: integer
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - source
+        - matcher
+        - tagTemplate
+        - priority
+        - enabled
+        - createdAt
+        - updatedAt
+    TagRuleCreateRequest:
+      type: object
+      description: New tag rule.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        source:
+          $ref: "#/components/schemas/TagRuleSource"
+        matcher:
+          $ref: "#/components/schemas/TagRuleMatcher"
+        tagTemplate:
+          type: string
+          minLength: 1
+          maxLength: 64
+        priority:
+          type: integer
+          minimum: -1000
+          maximum: 1000
+          default: 0
+        enabled:
+          type: boolean
+          default: true
+      required:
+        - name
+        - source
+        - tagTemplate
+    TagRulePatchRequest:
+      description: Fields to update. At least one is required.
+      allOf:
+        - $ref: "#/components/schemas/TagRuleCreateRequest"
+      required: []
+    TagRuleResponse:
+      type: object
+      description: Single tag rule envelope.
+      properties:
+        rule:
+          $ref: "#/components/schemas/TagRule"
+      required:
+        - rule
+    OrganizePreviewItem:
+      type: object
+      description: One previewed change from a dry run.
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        addTags:
+          type: array
+          items:
+            type: string
+      required:
+        - mediaId
+        - title
+        - addTags
+    OrganizeStatus:
+      type: object
+      description: Progress of a retroactive tag-rule run.
+      properties:
+        jobId:
+          type: string
+        state:
+          type: string
+        done:
+          type: boolean
+        dryRun:
+          type: boolean
+        total:
+          type: integer
+          description: Media rows considered.
+        processed:
+          type: integer
+        updated:
+          type: integer
+          description: Rows that received (or would receive) at least one new tag.
+        tagsAdded:
+          type: integer
+          description: Total tag applications added (or previewed).
+        tagCounts:
+          type: object
+          description: Per-tag application counts, capped server-side.
+          additionalProperties:
+            type: integer
+        sample:
+          type: array
+          description: Dry run only — a small sample of per-item changes.
+          items:
+            $ref: "#/components/schemas/OrganizePreviewItem"
+      required:
+        - jobId
+        - state
+        - done
+        - dryRun
+        - total
+        - processed
+        - updated
+        - tagsAdded
+        - tagCounts
+
+    # --- Sidecars ---
+    SidecarExportResult:
+      type: object
+      description: Counts from one export pass.
+      properties:
+        entries:
+          type: integer
+        bytes:
+          type: integer
+        exportedAt:
+          type: string
+          format: date-time
+      required:
+        - entries
+        - bytes
+        - exportedAt
+    SidecarRestoreResult:
+      type: object
+      description: "`matched` is snapshot entries that found a row; `updated` is rows changed, which is 0 on a re-run."
+      properties:
+        entries:
+          type: integer
+        matched:
+          type: integer
+        updated:
+          type: integer
+        tagsRestored:
+          type: integer
+        bundlesRestored:
+          type: integer
+        remindersRestored:
+          type: integer
+        tagVocabularyRestored:
+          type: integer
+          description: Tag rows whose colour and origin came back from the snapshot.
+      required:
+        - entries
+        - matched
+        - updated
+        - tagsRestored
+        - bundlesRestored
+        - remindersRestored
+        - tagVocabularyRestored
+    SidecarRestoreState:
+      description: "`interrupted` is derived on read from a run recorded as running with no live process behind it."
+      oneOf:
+        - title: running
+          type: object
+          properties:
+            state:
+              type: string
+              enum: [running]
+            startedAt:
+              type: string
+              format: date-time
+            processed:
+              type: integer
+          required: [state, startedAt, processed]
+        - title: done
+          type: object
+          properties:
+            state:
+              type: string
+              enum: [done]
+            finishedAt:
+              type: string
+              format: date-time
+            result:
+              $ref: "#/components/schemas/SidecarRestoreResult"
+          required: [state, finishedAt, result]
+        - title: failed
+          type: object
+          properties:
+            state:
+              type: string
+              enum: [failed]
+            finishedAt:
+              type: string
+              format: date-time
+            message:
+              type: string
+          required: [state, finishedAt, message]
+        - title: interrupted
+          type: object
+          properties:
+            state:
+              type: string
+              enum: [interrupted]
+            startedAt:
+              type: string
+              format: date-time
+            processed:
+              type: integer
+          required: [state, startedAt, processed]
+    SidecarStatus:
+      type: object
+      description: What exists on disk, and any restore in flight.
+      properties:
+        enabled:
+          type: boolean
+          description: False when the server runs with `SIDECAR_EXPORT_ENABLED=false`, whatever `mode` says.
+        mode:
+          type: string
+          enum: [off, snapshot]
+        snapshot:
+          anyOf:
+            - type: object
+              properties:
+                exportedAt:
+                  type: string
+                  format: date-time
+                entries:
+                  type: integer
+                sizeBytes:
+                  type: integer
+              required: [exportedAt, entries, sizeBytes]
+            - type: "null"
+        restore:
+          anyOf:
+            - $ref: "#/components/schemas/SidecarRestoreState"
+            - type: "null"
+      required:
+        - enabled
+        - mode
+        - snapshot
+        - restore
 
     # --- Bundles ---
     BundleSummary:
@@ -3545,15 +5570,16 @@ components:
         - until
 
     # --- Media bulk ops ---
-    BulkDeleteResponse:
+    BulkDeleteRequest:
       type: object
-      description: Result of a bulk delete operation.
+      description: Omitted or empty, the query filters decide the set instead.
       properties:
-        count:
-          type: integer
-          description: Number of media items deleted.
+        ids:
+          type: array
+          items:
+            type: string
       required:
-        - count
+        - ids
     BulkDownloadRequest:
       type: object
       description: List of media IDs to include in the zip (1–50).
@@ -3571,7 +5597,7 @@ components:
     # --- Preferences ---
     Preferences:
       type: object
-      description: User preferences object.
+      description: Stored in `User.preferences` and mirrored into `localStorage`; the server's copy wins at startup.
       properties:
         libraryViewMode:
           type: string
@@ -3581,17 +5607,21 @@ components:
           enum: [4, 5, 6, 7, 8]
         libraryIsCompactList:
           type: boolean
-        autoTagOnUpload:
+        autoTagOnIngest:
           type: boolean
+          description: Run tag rules at every ingest site (send, in-place index, archive unpack). Retroactive runs ignore this.
         extractMetadata:
           type: boolean
         detectDuplicates:
           type: boolean
+          description: Controls duplicate *tagging* only. Hash-based derivative reuse happens regardless.
         lowMemoryMode:
           type: boolean
         autoUnpackArchives:
           type: boolean
         hideUnpackedItems:
+          type: boolean
+        ignoreHiddenFiles:
           type: boolean
         soonWindowDays:
           type: integer
@@ -3608,6 +5638,64 @@ components:
         darkTheme:
           type: string
           enum: [new-moon, matrix, charcoal, solarized]
+        exploreBucketColors:
+          type: object
+          description: Per-bucket colour overrides for the explore view.
+          additionalProperties:
+            type: string
+            pattern: "^#[0-9a-fA-F]{6}$"
+        indexAllowedRoots:
+          type: array
+          description: Absolute directories Vault may index in place; empty disables the feature. Set via `PATCH /api/server/index-config`.
+          items:
+            type: string
+        indexBlacklistExtensions:
+          type: array
+          description: Extensions (lowercase, no dot) skipped during in-place indexing.
+          items:
+            type: string
+        indexExcludeFolders:
+          type: array
+          description: Absolute folders excluded even when they sit under an allowed root — e.g. `@eaDir`, `.immich`.
+          items:
+            type: string
+        indexSkipNonContent:
+          type: boolean
+          description: Skip build and dependency directories and non-content file types.
+        ingestFolderPath:
+          type: [string, "null"]
+          description: Where a sent file is written; must sit inside an allowed index root. Null disables sending.
+        moveDetectionWindowSeconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+          description: How long after a file disappears a matching new file still counts as that item moved.
+        missingFileGraceDays:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: How long a missing item is kept, flagged and intact, before deletion.
+        ocrMode:
+          type: string
+          description: |
+            How scans — files with no text layer — are handled.
+            * `onDemand` — extract when the user opens the document or asks.
+            * `background` — a sweeper works the backlog continuously.
+            * `off` — never; the backlog stays visible and can be run manually.
+          enum: [onDemand, background, off]
+        ocrTimeoutCapMinutes:
+          type: integer
+          minimum: 1
+          maximum: 60
+          description: Ceiling on one tier-2 OCR job's wall time.
+        sidecarMode:
+          type: string
+          description: Whether Vault snapshots item metadata to managed storage. Never writes beside a source file.
+          enum: [off, snapshot]
+        sidecarIntervalMinutes:
+          type: integer
+          description: How often this user's snapshot is taken.
+          enum: [5, 15, 60, 360, 1440]
     PreferencesResponse:
       type: object
       description: Preferences response envelope.
@@ -3618,7 +5706,12 @@ components:
         - preferences
     PreferencesPatchRequest:
       type: object
-      description: Preference fields to update (all optional, at least one expected).
+      additionalProperties: false
+      description: |
+        All fields optional; unknown keys are rejected. The indexing keys
+        (`indexAllowedRoots`, `indexBlacklistExtensions`, `indexExcludeFolders`,
+        `indexSkipNonContent`, `ingestFolderPath`) are settable only through
+        `PATCH /api/server/index-config`.
       properties:
         libraryViewMode:
           type: string
@@ -3628,8 +5721,12 @@ components:
           enum: [4, 5, 6, 7, 8]
         libraryIsCompactList:
           type: boolean
+        autoTagOnIngest:
+          type: boolean
         autoTagOnUpload:
           type: boolean
+          deprecated: true
+          description: Former name of `autoTagOnIngest`, still accepted and rewritten to it on read.
         extractMetadata:
           type: boolean
         detectDuplicates:
@@ -3639,6 +5736,8 @@ components:
         autoUnpackArchives:
           type: boolean
         hideUnpackedItems:
+          type: boolean
+        ignoreHiddenFiles:
           type: boolean
         soonWindowDays:
           type: integer
@@ -3655,7 +5754,32 @@ components:
         darkTheme:
           type: string
           enum: [new-moon, matrix, charcoal, solarized]
-      additionalProperties: false
+        exploreBucketColors:
+          type: object
+          additionalProperties:
+            type: string
+            pattern: "^#[0-9a-fA-F]{6}$"
+        moveDetectionWindowSeconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+        missingFileGraceDays:
+          type: integer
+          minimum: 1
+          maximum: 365
+        ocrMode:
+          type: string
+          enum: [onDemand, background, off]
+        ocrTimeoutCapMinutes:
+          type: integer
+          minimum: 1
+          maximum: 60
+        sidecarMode:
+          type: string
+          enum: [off, snapshot]
+        sidecarIntervalMinutes:
+          type: integer
+          enum: [5, 15, 60, 360, 1440]
 
     # --- Server ---
     ServerStatusResponse:
@@ -3674,25 +5798,34 @@ components:
         memoryMB:
           type: integer
           description: RSS memory usage in megabytes.
-        minioConsoleUrl:
+        storageDriver:
           type: string
+          enum: [fs]
+        storagePath:
+          type: string
+          description: Value of `STORAGE_FS_PATH`.
+        localExplorer:
+          type: boolean
+          description: Whether the server can open a native file manager on the host.
       required:
         - env
         - apiPort
         - corsOrigin
         - uptimeSeconds
         - memoryMB
-        - minioConsoleUrl
+        - storageDriver
+        - storagePath
+        - localExplorer
     ServerStorageResponse:
       type: object
       description: Storage usage statistics.
       properties:
         sizeBytes:
           type: integer
-          description: Total S3 object size in bytes.
+          description: Total size of managed objects in bytes.
         objectCount:
           type: integer
-          description: Total number of S3 objects.
+          description: Number of managed objects.
         dbSizeBytes:
           type: integer
           description: Postgres database size in bytes.
@@ -3735,15 +5868,170 @@ components:
         - counts
     ServerWorkersResponse:
       type: object
-      description: Status of all worker queues.
+      description: Status of the derivative worker queues.
       properties:
+        text:
+          allOf:
+            - $ref: "#/components/schemas/WorkerQueueStatus"
+          description: Tier 1 — native extraction, milliseconds per job, high concurrency.
         ocr:
-          $ref: "#/components/schemas/WorkerQueueStatus"
+          allOf:
+            - $ref: "#/components/schemas/WorkerQueueStatus"
+          description: Tier 2 — Tesseract, roughly a core per slot, concurrency near the core count.
         thumb:
           $ref: "#/components/schemas/WorkerQueueStatus"
       required:
+        - text
         - ocr
         - thumb
+
+    IndexConfigResponse:
+      type: object
+      description: Current in-place indexing configuration.
+      properties:
+        roots:
+          type: array
+          items:
+            type: string
+        blacklist:
+          type: array
+          items:
+            type: string
+        excludeFolders:
+          type: array
+          items:
+            type: string
+        skipNonContent:
+          type: boolean
+        ingestFolderPath:
+          type: [string, "null"]
+        skipInfo:
+          type: object
+          description: What the built-in `skipNonContent` filter actually matches.
+          properties:
+            buildDirNames:
+              type: array
+              items:
+                type: string
+            buildDirSuffixes:
+              type: array
+              items:
+                type: string
+            contentExtensions:
+              type: array
+              items:
+                type: string
+          required:
+            - buildDirNames
+            - buildDirSuffixes
+            - contentExtensions
+      required:
+        - roots
+        - blacklist
+        - excludeFolders
+        - skipNonContent
+        - ingestFolderPath
+        - skipInfo
+    IndexConfigPatchRequest:
+      type: object
+      description: "`roots` is required; omitting any other field keeps its stored value."
+      properties:
+        roots:
+          type: array
+          description: Absolute paths. Canonicalized and deduplicated server-side.
+          items:
+            type: string
+        blacklist:
+          type: array
+          description: Extensions to skip. Normalized to lowercase without a dot.
+          items:
+            type: string
+        excludeFolders:
+          type: array
+          items:
+            type: string
+        skipNonContent:
+          type: boolean
+        ingestFolderPath:
+          type: [string, "null"]
+          description: Must sit inside an allowed root. Null or empty string clears it.
+      required:
+        - roots
+    IndexConfigPatchResponse:
+      type: object
+      description: Echoes back only the fields that were changed.
+      properties:
+        ok:
+          type: boolean
+        roots:
+          type: array
+          items:
+            type: string
+        blacklist:
+          type: array
+          items:
+            type: string
+        excludeFolders:
+          type: array
+          items:
+            type: string
+        skipNonContent:
+          type: boolean
+        ingestFolderPath:
+          type: [string, "null"]
+        ingestFolderCleared:
+          type: boolean
+          description: Present when dropping a root left the ingest folder outside the allow-list and it was cleared.
+      required:
+        - ok
+        - roots
+    FsListResponse:
+      type: object
+      description: One level of the server's filesystem.
+      properties:
+        path:
+          type: string
+          description: The directory actually listed, which may differ from the one requested.
+        parent:
+          type: [string, "null"]
+          description: Null at a filesystem root.
+        dirs:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              path:
+                type: string
+            required:
+              - name
+              - path
+        roots:
+          type: array
+          description: Filesystem roots — drive letters on Windows, `/` elsewhere.
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              freeBytes:
+                type: [integer, "null"]
+              totalBytes:
+                type: [integer, "null"]
+            required:
+              - path
+              - freeBytes
+              - totalBytes
+        redirected:
+          type: boolean
+          description: True when the requested path was unreadable and an ancestor was listed instead.
+      required:
+        - path
+        - parent
+        - dirs
+        - roots
+        - redirected
 
     # --- Init ---
     InitResponse:

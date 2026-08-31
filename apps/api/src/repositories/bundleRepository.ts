@@ -1,8 +1,29 @@
+/**
+ * Reads and writes bundles, the named collections a user groups media items
+ * into. Unpacking an archive also produces one.
+ */
 import { type PrismaClient } from "@prisma/client";
 
+/**
+ * Stores one user's bundles and the items in them.
+ *
+ * Every method is filtered by the owning user, and the ones that change
+ * something return false or null instead of raising when the user owns no such
+ * bundle.
+ *
+ * A bundle with no cover picked out is presented using its first item.
+ */
 export class BundleRepository {
   constructor (private readonly prisma: PrismaClient) {}
 
+  /**
+   * Returns the user's bundles, starred ones first and then most recently
+   * changed.
+   *
+   * `q` matches a bundle's own name and description, and also the titles and
+   * extracted text of the items inside it, so a bundle is found by what it
+   * holds.
+   */
   async listBundles (userId: string, q?: string) {
     const where = q
       ? {
@@ -51,6 +72,7 @@ export class BundleRepository {
     }));
   }
 
+  /** Returns one bundle with every item in it, in the order the user arranged them, or null if the user does not own it. */
   async getBundleById (id: string, userId: string) {
     const bundle = await this.prisma.bundle.findFirst({
       where: { id, userId },
@@ -115,6 +137,7 @@ export class BundleRepository {
     };
   }
 
+  /** Records which archive a bundle was unpacked from, and marks it as one. The caller must have checked ownership. */
   async setSourceMedia (bundleId: string, mediaId: string) {
     await this.prisma.bundle.update({
       where: { id: bundleId },
@@ -122,6 +145,7 @@ export class BundleRepository {
     });
   }
 
+  /** Returns what a download of the bundle needs: its name, and each item's file in bundle order. */
   async getBundleItemsForExport (bundleId: string, userId: string) {
     const bundle = await this.prisma.bundle.findFirst({
       where: { id: bundleId, userId },
@@ -152,6 +176,7 @@ export class BundleRepository {
     };
   }
 
+  /** Creates an empty bundle and returns it. */
   async createBundle (userId: string, name: string, description?: string, coverMediaId?: string) {
     return this.prisma.bundle.create({
       data: { userId, name, description, coverMediaId },
@@ -159,6 +184,7 @@ export class BundleRepository {
     });
   }
 
+  /** True if the bundle was changed. False means the user owns no bundle with that id. */
   async updateBundle (id: string, userId: string, data: { name?: string; description?: string | null; starred?: boolean; coverMediaId?: string | null }) {
     const result = await this.prisma.bundle.updateMany({
       where: { id, userId },
@@ -171,6 +197,13 @@ export class BundleRepository {
     await this.prisma.bundle.deleteMany({ where: { id, userId } });
   }
 
+  /**
+   * Deletes a bundle and reports which of its items should go with it.
+   *
+   * A bundle unpacked from an archive owns its items, so their ids come back
+   * for the caller to delete as well. Items in an ordinary bundle exist on
+   * their own and are never returned.
+   */
   async deleteBundleWithCascade (id: string, userId: string): Promise<{ found: boolean; extractedMediaIds: string[] }> {
     const bundle = await this.prisma.bundle.findFirst({
       where: { id, userId },
@@ -199,21 +232,24 @@ export class BundleRepository {
     return { found: true, extractedMediaIds };
   }
 
+  /**
+   * Adds items to the end of a bundle, keeping the order they arrive in.
+   *
+   * Returns false unless the user owns the bundle and every item named. An item
+   * already in the bundle is passed over rather than added twice.
+   */
   async addItems (bundleId: string, userId: string, mediaIds: string[]) {
-    // Verify bundle belongs to user
     const bundle = await this.prisma.bundle.findFirst({
       where: { id: bundleId, userId },
       select: { id: true },
     });
     if (!bundle) return false;
 
-    // Verify all media belongs to user
     const mediaCount = await this.prisma.media.count({
       where: { id: { in: mediaIds }, userId },
     });
     if (mediaCount !== mediaIds.length) return false;
 
-    // Get current max order
     const maxItem = await this.prisma.bundleItem.findFirst({
       where: { bundleId },
       orderBy: { order: "desc" },
@@ -230,7 +266,6 @@ export class BundleRepository {
       skipDuplicates: true,
     });
 
-    // Touch updatedAt on bundle
     await this.prisma.bundle.update({
       where: { id: bundleId },
       data: { updatedAt: new Date() },
@@ -240,10 +275,10 @@ export class BundleRepository {
   }
 
   /**
-   * Reset coverMediaId to null on bundles where it matches `mediaId`.
-   * Pass `bundleId` to scope the reset to a single bundle (e.g. when removing
-   * an item from a bundle). Omit it to clear across all bundles (e.g. when the
-   * media item itself is deleted).
+   * Clears the chosen cover from bundles that were using `mediaId` for it.
+   *
+   * Pass `bundleId` when the item is only leaving that one bundle. Omit it when
+   * the item is being deleted, so no bundle is left pointing at it.
    */
   async clearCoverMedia (mediaId: string, bundleId?: string) {
     await this.prisma.bundle.updateMany({
@@ -252,8 +287,7 @@ export class BundleRepository {
     });
   }
 
-  /** Bulk variant of clearCoverMedia: null out coverMediaId on any of this user's
-   *  bundles whose cover is among `mediaIds`. Used by the delete worker per chunk. */
+  /** Clears the chosen cover from any of the user's bundles using one of `mediaIds`. */
   async clearCoverMediaForIds (userId: string, mediaIds: string[]) {
     if (mediaIds.length === 0) return;
     await this.prisma.bundle.updateMany({
@@ -262,6 +296,7 @@ export class BundleRepository {
     });
   }
 
+  /** Takes an item out of a bundle, clearing the cover if that item was it. False means the user owns no such bundle. */
   async removeItem (bundleId: string, userId: string, mediaId: string) {
     const bundle = await this.prisma.bundle.findFirst({
       where: { id: bundleId, userId },
@@ -276,6 +311,12 @@ export class BundleRepository {
     return true;
   }
 
+  /**
+   * Rearranges a bundle's items to match the order of `orderedMediaIds`.
+   *
+   * Pass every item in the bundle. An item left out keeps its old position and
+   * can then share a position with another item.
+   */
   async reorderItems (bundleId: string, userId: string, orderedMediaIds: string[]) {
     const bundle = await this.prisma.bundle.findFirst({
       where: { id: bundleId, userId },
@@ -295,6 +336,7 @@ export class BundleRepository {
     return true;
   }
 
+  /** Stars an unstarred bundle or unstars a starred one, returning the new state. Null means the user owns no such bundle. */
   async toggleStar (id: string, userId: string): Promise<boolean | null> {
     const bundle = await this.prisma.bundle.findFirst({
       where: { id, userId },

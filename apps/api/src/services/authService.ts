@@ -1,3 +1,6 @@
+/**
+ * Signing up, signing in, and renewing a session.
+ */
 import { createJwtAdapter, type JwtAdapter } from "../adapters/jwtAdapter.js";
 import { createPasswordHasher, type PasswordHasher } from "../adapters/passwordHasher.js";
 import { type UserRepository } from "../repositories/userRepository.js";
@@ -5,6 +8,7 @@ import { type UserRepository } from "../repositories/userRepository.js";
 export type AuthTokens = { access: string; refresh: string };
 export type AuthUser = { id: string; email: string; name?: string | null; username?: string | null };
 
+/** Signals that a sign-up, sign-in or token check was refused, and why. */
 export class AuthError extends Error {
   constructor(public code: "USER_EXISTS" | "INVALID_CREDENTIALS" | "INVALID_TOKEN") {
     super(code);
@@ -15,11 +19,22 @@ export type AuthServiceDeps = {
   userRepository: UserRepository;
   passwordHasher?: PasswordHasher;
   jwt?: JwtAdapter;
-  /** Seeds per-user defaults (e.g. the built-in tag rules) after registration.
-   *  Failures are swallowed — a missing default set must not fail signup. */
+  /**
+   * Sets up whatever a new account starts with, such as its tagging rules.
+   *
+   * A failure here is ignored: an account missing its starting rules is a far
+   * smaller problem than a sign-up that does not complete.
+   */
   seedUserDefaults?: (userId: string) => Promise<void>;
 };
 
+/**
+ * Builds the authentication service.
+ *
+ * Password hashing and token signing may be replaced through `deps`. The stand-
+ * in used when they are not supplied raises on every call, so a caller that
+ * forgets one finds out immediately rather than issuing unsigned tokens.
+ */
 export function createAuthService (deps: AuthServiceDeps) {
   const passwordHasher = deps.passwordHasher ?? createPasswordHasher();
   const jwt = deps.jwt ?? createJwtAdapter({
@@ -37,6 +52,8 @@ export function createAuthService (deps: AuthServiceDeps) {
     },
   });
 
+  // Creates an account and signs its first pair of tokens.
+  // Raises USER_EXISTS if the email address is already taken.
   const register = async (email: string, password: string) => {
     const existing = await deps.userRepository.findByEmail(email);
     if (existing) throw new AuthError("USER_EXISTS");
@@ -46,7 +63,7 @@ export function createAuthService (deps: AuthServiceDeps) {
 
     await deps.seedUserDefaults?.(user.id).catch(() => {});
 
-    // New account: tokenVersion starts at 0 (the column default).
+    // A new account has token version 0, matching the column default.
     const tokens: AuthTokens = {
       access: jwt.signAccess({ sub: user.id, tv: 0 }),
       refresh: jwt.signRefresh({ sub: user.id, tv: 0 }),
@@ -55,6 +72,9 @@ export function createAuthService (deps: AuthServiceDeps) {
     return { user, tokens };
   };
 
+  // Checks a password and signs a pair of tokens for the account.
+  // Raises INVALID_CREDENTIALS whether the email or the password was wrong, so
+  // the response cannot be used to discover which addresses have accounts.
   const login = async (email: string, password: string) => {
     const user = await deps.userRepository.findByEmail(email);
     if (!user) throw new AuthError("INVALID_CREDENTIALS");
@@ -71,6 +91,8 @@ export function createAuthService (deps: AuthServiceDeps) {
     return { user: { id: user.id, email: user.email }, tokens };
   };
 
+  // Exchanges a refresh token for a new pair. Raises INVALID_TOKEN when the
+  // token is unreadable, its account is gone, or it has been revoked.
   const refreshTokens = async (refresh: string) => {
     let payload: { sub: string; tv?: number };
     try {
@@ -79,21 +101,22 @@ export function createAuthService (deps: AuthServiceDeps) {
       throw new AuthError("INVALID_TOKEN");
     }
 
-    // Eviction point: a refresh token only mints a new access token if its
-    // tokenVersion still matches the user's current one. A password reset bumps
-    // tokenVersion, so tokens issued before the reset stop refreshing.
+    // Where revocation takes effect. A refresh token works only while its token
+    // version still matches the account's. Resetting a password raises the
+    // account's version, and every token signed before then stops working.
     const current = await deps.userRepository.getTokenVersion(payload.sub);
     if (current === null) throw new AuthError("INVALID_TOKEN");
     if ((payload.tv ?? 0) !== current) throw new AuthError("INVALID_TOKEN");
 
-    // Sliding session: re-issue both tokens so an actively-used session never
-    // expires. The new refresh carries a fresh TTL; eviction still rides on
-    // tokenVersion (a reset bumps it, so every prior refresh stops minting).
+    // Both tokens are replaced, so a session in continuous use never expires.
+    // Revocation still runs through the token version rather than any record of
+    // which tokens were issued.
     const access = jwt.signAccess({ sub: payload.sub, tv: current });
     const newRefresh = jwt.signRefresh({ sub: payload.sub, tv: current });
     return { access, refresh: newRefresh };
   };
 
+  // Returns the account a valid access token belongs to.
   const getMe = async (token: string) => {
     try {
       const payload = jwt.verifyAccess(token);

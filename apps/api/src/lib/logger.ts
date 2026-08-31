@@ -1,14 +1,18 @@
 import pino, { type Logger, type LoggerOptions } from "pino";
 import { CURRENT_PTR } from "./logFileManager.js";
 
+/**
+ * Builds the application's logger. Development writes a readable line to the
+ * console and a copy to a file; test and production write JSON to stdout.
+ */
+
 export const PRETTY_OPTS = {
   translateTime: "SYS:HH:MM:ss",
   singleLine: true,
   ignore: "pid,hostname,level",
 };
 
-// Absolute file:// URL so pino's worker thread can import this without tsx.
-// Only used in dev — in production the process logs to stdout.
+// An absolute file:// URL, so pino's worker thread can import this without tsx.
 const FILE_TRANSPORT_URL = new URL("./fileTransport.mjs", import.meta.url).href;
 
 /** Returns the pino transport targets for dev. Empty in production — callers
@@ -21,13 +25,12 @@ export function buildTransportTargets (level = "info") {
   ];
 }
 
-// Fields stripped before any transport sees the log line.
-// Keeps output readable without hiding genuinely useful context.
+// Stripped before any transport sees the line.
 const STRIP_FIELDS = new Set([
   "queue",       // redundant — jobName already identifies the worker type
   "userId",      // long UUID, PII
   "jobId",       // long opaque string
-  "key",         // S3 object key — verbose path
+  "key",         // storage object key — a long path
   "mimeType",
   "attempt",
   "timeoutMs",
@@ -40,7 +43,7 @@ export const LOG_FORMATTERS: LoggerOptions["formatters"] = {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(obj)) {
       if (STRIP_FIELDS.has(k)) continue;
-      // Truncate UUID-like IDs to the first segment for readability
+      // The first segment of a UUID is enough to follow one item through a log.
       if (k === "mediaId" && typeof v === "string") {
         out[k] = v.split("-")[0];
       } else {

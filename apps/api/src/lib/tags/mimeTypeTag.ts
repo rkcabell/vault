@@ -1,5 +1,11 @@
+/**
+ * Works out the short format name shown as an item's `type:` tag, such as
+ * "pdf" or "jpg".
+ */
 import { extOf } from "../media/extensions.js";
 
+// The tag label for each recorded type. Types absent here fall back to the
+// filename extension.
 const MIME_LABELS: Record<string, string> = {
   // Images
   "image/jpeg": "jpg",
@@ -48,6 +54,9 @@ const MIME_LABELS: Record<string, string> = {
   "application/x-rar-compressed": "rar",
 };
 
+// The tag label for each filename extension, used when the recorded type is
+// missing or too vague. Several extensions share one label, so .jpeg and .tif
+// do not create tags separate from .jpg and .tiff.
 const EXT_LABELS: Record<string, string> = {
   heic: "heic",
   heif: "heif",
@@ -88,14 +97,15 @@ const EXT_LABELS: Record<string, string> = {
   rar: "rar",
 };
 
+// Types a browser reports as generic that the extension can identify exactly.
 const EXT_MIME_OVERRIDES: Record<string, string> = {
   heic: "image/heic",
   heif: "image/heif",
 };
 
 /**
- * Corrects a browser-reported MIME type using the file extension when the
- * browser supplies a generic type (e.g. application/octet-stream for HEIC).
+ * Returns the type to record for a file, correcting a browser that reported a
+ * generic one where the extension identifies the format.
  */
 export function normalizeMimeType(mimeType: string | undefined | null, filename?: string): string {
   const lower = mimeType?.trim().toLowerCase() ?? "";
@@ -106,22 +116,27 @@ export function normalizeMimeType(mimeType: string | undefined | null, filename?
   return mimeType?.trim() ?? "application/octet-stream";
 }
 
+/**
+ * Returns the format label for an item's `type:` tag.
+ *
+ * The recorded type is preferred, then the filename extension. An unrecognized
+ * extension becomes the tag itself with characters that tags disallow removed,
+ * and a file with neither is tagged "unknown".
+ */
 export function buildMimeTypeTag(mimeType: string | undefined | null, filename?: string): string {
-  // extOf returns "" for no-extension names like "(adobe)", so they fall
-  // through to "unknown" rather than producing a tag with invalid characters.
+  // A name with no extension, such as "(adobe)", yields "" here and ends up
+  // tagged "unknown".
   const ext = filename ? extOf(filename) : "";
 
-  // Look up by MIME type first
   const lower = mimeType?.trim().toLowerCase() ?? "";
   if (lower && lower !== "application/octet-stream" && MIME_LABELS[lower]) {
     return MIME_LABELS[lower];
   }
 
-  // Fall back to file extension (known label, or sanitized extension if unrecognized)
   if (ext) {
     if (EXT_LABELS[ext]) return EXT_LABELS[ext];
-    // Strip chars invalid in tags so a weird extension like ".(adobe)" never
-    // throws TagValidationError downstream.
+    // Characters outside the tag alphabet are dropped rather than rejected, so
+    // an extension like ".(adobe)" cannot fail tag validation later.
     const sanitized = ext.replace(/[^a-z0-9-]/g, "");
     return sanitized || "unknown";
   }

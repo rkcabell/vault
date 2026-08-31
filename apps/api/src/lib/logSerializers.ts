@@ -1,13 +1,20 @@
-// Strips noisy fields from Fastify's auto-generated request/response logs.
-// Applied to the Fastify logger in index.ts and reused in createLogger().
-// Parameter types are structural supertypes of FastifyRequest / ResSerializerReply
-// so these functions satisfy all four Fastify() overloads without `any`.
+/**
+ * Cuts Fastify's automatic request and response log entries down to the few
+ * fields worth keeping.
+ */
 
+/**
+ * Reduces a logged request to its method and URL.
+ *
+ * The parameter type is deliberately looser than FastifyRequest so this
+ * function satisfies every Fastify logger overload without `any`.
+ */
 export const reqSerializer = (req: { method?: string; url?: string }) => ({
   method: req.method,
   url: req.url,
 });
 
+/** Reduces a logged response to its status code. See {@link reqSerializer} on the parameter type. */
 export const resSerializer = (res: { statusCode: number }) => ({
   statusCode: res.statusCode,
 });

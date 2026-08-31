@@ -1,4 +1,3 @@
-// File: apps/web/app/(protected)/library/LibraryPageInner.tsx
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,15 +18,17 @@ import { BulkBundleDialog } from "@/components/media/BulkBundleDialog";
 import { TagFilterChip, type TagFilterState } from "@/components/media/TagFilterChip";
 import { Button } from "@/components/ui/Button";
 import { ConfirmPopover } from "@/components/ui/ConfirmPopover";
-import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown, Search, X, Tag } from "lucide-react";
+import { Plus, LayoutGrid, LayoutList, Upload, ChevronDown, Copy, Search, X, Tag } from "lucide-react";
 import { useUpload } from "@/components/contexts/UploadContext";
 import { useDeleteProgress } from "@/components/contexts/DeleteProgressContext";
-import { regenerateThumbnailsBatch, extractTextBatch } from "@/lib/media/batch";
+import { regenerateThumbnailsBatch, extractTextBatch, extractAllScannedText, fetchScannedBacklogCount } from "@/lib/media/batch";
 import { emitTagsUpdated, TAGS_UPDATED_EVENT, partitionTagsByOrigin } from "@/lib/tags";
 import type { TagOrigin } from "@vault/types";
 import { BUNDLES_UPDATED_EVENT, emitBundlesUpdated } from "@/lib/bundles";
 import { MEDIA_LIST_UPDATED_EVENT, type MediaListUpdatedDetail } from "@/lib/media/events";
+import { isFileDrag, readDroppedFiles } from "@/lib/media/dropEntries";
 import { useMediaEvents } from "@/hooks/useMediaEvents";
+import { useThumbnailPriority } from "@/hooks/useThumbnailPriority";
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import {
   DropdownMenu,
@@ -59,6 +60,11 @@ const SORT_OPTIONS = [
   { value: "fileDate_desc", label: "Year" },
 ] as const;
 
+// Applied by the hash/thumb workers when two rows share a contentHash
+// (services/media/duplicateTag.ts). Kept in sync by name only — it is a tag
+// value, not a shared constant.
+const DUPLICATE_TAG = "duplicate";
+
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -76,6 +82,10 @@ const STATUS_OPTIONS = [
   { value: "thumb_error", label: "Thumbnail error", thumbState: "FAILED", textState: "", missing: "" },
   { value: "text_pending", label: "Pending text", thumbState: "", textState: "PENDING", missing: "" },
   { value: "text_error", label: "Text error", thumbState: "", textState: "ERROR", missing: "" },
+  // Scans with no embedded text layer. Native extraction already ran and found
+  // nothing, so these need OCR — the expensive path, deferred by default. This
+  // filter is how that backlog stays visible instead of silently never running.
+  { value: "text_needs_ocr", label: "Scanned — text not extracted", thumbState: "", textState: "NEEDS_OCR", missing: "" },
   // Indexed items whose file is no longer on disk. Their rows are kept so a
   // move can reclaim them, which also means the user needs a way to see them.
   { value: "missing", label: "Missing files", thumbState: "", textState: "", missing: "only" },
@@ -145,10 +155,8 @@ function applyFilterParams(
 export default function LibraryPageInner() {
   const router = useRouter();
 
-  // Upload context.
   const { addFiles } = useUpload();
 
-  // List fetch state.
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
@@ -156,13 +164,11 @@ export default function LibraryPageInner() {
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Tag filter panel.
   const [showTagFilter, setShowTagFilter] = useState(false);
   const [tagOptions, setTagOptions] = useState<{ name: string; count: number; color: string | null; origin?: TagOrigin }[]>([]);
   const [tagSearch, setTagSearch] = useState('');
   const [hasUnpackedArchiveBundles, setHasUnpackedArchiveBundles] = useState(false);
 
-  // Delete coordination.
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const deletedIdsRef = useRef<Set<string>>(new Set());
   const fetchIdRef = useRef(0);
@@ -170,7 +176,6 @@ export default function LibraryPageInner() {
   const { start: startBulkDeleteJob, status: bulkDeleteStatus } = useDeleteProgress();
   const reconciledDeleteJobRef = useRef<string | null>(null);
 
-  // Select mode.
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelectAllLibrary, setIsSelectAllLibrary] = useState(false);
@@ -180,14 +185,11 @@ export default function LibraryPageInner() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRequeueing, setIsRequeueing] = useState(false);
 
-  // Delete confirmation popover.
   const [confirmState, setConfirmState] = useState<{ x: number; y: number; anchorWidth?: number; bottomOffset?: number; topOffset?: number; message: string; action: () => void } | null>(null);
 
-  // Refresh control.
   const [refreshToken, setRefreshToken] = useState(0);
   const [hasHandledRefreshParam, setHasHandledRefreshParam] = useState(false);
 
-  // View + density controls.
   const { prefs, updatePreferences } = usePreferences();
   const viewMode = prefs.libraryViewMode;
   const gridCols = prefs.libraryGridCols;
@@ -200,7 +202,6 @@ export default function LibraryPageInner() {
   const [isDragging, setIsDragging] = useState(false);
   const dragDepthRef = useRef(0);
 
-  // Search and filter params.
   const searchParams = useSearchParams();
   const q = searchParams.get("q")?.trim() ?? "";
 
@@ -209,10 +210,16 @@ export default function LibraryPageInner() {
   useEffect(() => { setSearchInput(q); }, [q]);
   useEffect(() => {
     const timer = setTimeout(() => {
-      const params = new URLSearchParams(searchParams.toString());
+      // Read the live URL, not the `searchParams` captured when the input
+      // changed: anything that rewrote the URL inside the debounce window —
+      // clearAllFilters, a tag chip — would otherwise be undone here, since
+      // this push carries the whole query string, not just `q`.
+      const current = window.location.search.replace(/^\?/, "");
+      const params = new URLSearchParams(current);
       if (searchInput.trim()) params.set("q", searchInput.trim());
       else params.delete("q");
       const nextQuery = params.toString();
+      if (nextQuery === current) return;
       router.push(nextQuery ? `${LIBRARY_PATH}?${nextQuery}` : LIBRARY_PATH);
     }, 300);
     return () => clearTimeout(timer);
@@ -232,6 +239,11 @@ export default function LibraryPageInner() {
 
   // For backwards-compat with code that used a single `tag` string.
   const tag = includedTagsList[0] ?? "";
+
+  // Filtering on the worker-applied "duplicate" tag shows both copies of every
+  // pair mixed in with everything else, which is not what anyone came here to
+  // do — /duplicates groups them and offers "keep this one".
+  const isDuplicateFilter = includedTagsList.includes(DUPLICATE_TAG);
 
   const excludedTagsList = useMemo(
     () => excludeTagsParam.split(",").map(t => t.trim()).filter(Boolean),
@@ -254,7 +266,6 @@ export default function LibraryPageInner() {
   const sortLabel =
     SORT_OPTIONS.find((option) => option.value === sort)?.label ?? "Newest";
 
-  // Layout class helpers.
   const gridClassByCols: Record<4 | 5 | 6 | 7 | 8, string> = {
     4: "grid-cols-2 sm:grid-cols-3 md:grid-cols-4",
     5: "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5",
@@ -355,6 +366,20 @@ export default function LibraryPageInner() {
     )?.value ?? "all";
   const statusLabel = STATUS_OPTIONS.find((o) => o.value === statusValue)?.label ?? "All statuses";
 
+  // Size of the deferred-OCR backlog. Shown on the filter itself rather than only
+  // once the filter is selected: with ocrMode "onDemand" (the default) a user has
+  // no other way to discover that a pile of scans is sitting un-extracted.
+  const [scannedBacklog, setScannedBacklog] = useState<number | null>(null);
+  const [isExtractingAll, setIsExtractingAll] = useState(false);
+
+  const refreshScannedBacklog = useCallback(() => {
+    void fetchScannedBacklogCount()
+      .then(setScannedBacklog)
+      .catch(() => setScannedBacklog(null));
+  }, []);
+
+  useEffect(() => { refreshScannedBacklog(); }, [refreshScannedBacklog]);
+
   const handleStatusChange = useCallback(
     (value: StatusValue) => {
       const opt = STATUS_OPTIONS.find((o) => o.value === value);
@@ -378,6 +403,9 @@ export default function LibraryPageInner() {
     params.delete("tags");
     params.delete("tag");
     params.delete("excludeTags");
+    params.delete("thumbState");
+    params.delete("textState");
+    params.delete("missing");
     const qs = params.toString();
     router.replace(qs ? `${LIBRARY_PATH}?${qs}` : LIBRARY_PATH);
   }, [router, searchParams]);
@@ -526,6 +554,24 @@ export default function LibraryPageInner() {
   const fetchMediaRef = useRef(fetchMedia);
   useEffect(() => { fetchMediaRef.current = fetchMedia; }, [fetchMedia]);
 
+  // Queue OCR for every parked scan. The server caps one press and reports what
+  // is left, so a huge backlog is drained by pressing again — deliberately not by
+  // one request that hangs while it enqueues six figures of jobs. Declared after
+  // fetchMedia because it refreshes the list once the rows have flipped to PENDING.
+  const handleExtractAllScanned = useCallback(async () => {
+    if (isExtractingAll) return;
+    setIsExtractingAll(true);
+    try {
+      const { remaining } = await extractAllScannedText();
+      setScannedBacklog(remaining);
+      void fetchMedia();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start text extraction.");
+    } finally {
+      setIsExtractingAll(false);
+    }
+  }, [isExtractingAll, fetchMedia]);
+
   // Handle /library?refresh=1 or ?uploaded=1.
   useEffect(() => {
     const refresh = searchParams.get("refresh") ?? searchParams.get("uploaded");
@@ -594,6 +640,11 @@ export default function LibraryPageInner() {
     window.addEventListener(TAGS_UPDATED_EVENT, handler);
     return () => window.removeEventListener(TAGS_UPDATED_EVENT, handler);
   }, [router]);
+
+  // Viewport-first thumbnails: report the pending cards on screen so
+  // the derivative feeder generates those before the rest of the backlog.
+  const gridContainerRef = useRef<HTMLDivElement | null>(null);
+  useThumbnailPriority(gridContainerRef, mediaItems);
 
   // Debounced silent refetch for list-membership events — bulk deletes and
   // index walks publish one event per chunk/batch, so coalesce bursts into a
@@ -763,7 +814,6 @@ export default function LibraryPageInner() {
     [deletingIds]
   );
 
-  // Select mode handlers.
   const toggleSelectMode = useCallback(() => {
     setIsSelectMode(prev => !prev);
     setSelectedIds(new Set());
@@ -949,14 +999,53 @@ export default function LibraryPageInner() {
       dragDepthRef.current = 0;
       setIsDragging(false);
 
-      const dt = e.dataTransfer;
-      if (!dt?.files || dt.files.length === 0) return;
-
-      const files = Array.from(dt.files);
-      addFiles(files);
-      router.push("/upload");
+      if (!isFileDrag(e.dataTransfer)) return;
+      void readDroppedFiles(e.dataTransfer).then(({ files }) => {
+        if (files.length === 0) return;
+        addFiles(files);
+        router.push("/upload");
+      });
     },
     [addFiles, router]
+  );
+
+  // What to show when library displays no items.
+  const renderEmptyState = () => (
+    <div className="flex flex-col items-center justify-center py-12 text-center">
+      {nextCursor ? (
+        <>
+          <p className="mb-4 text-lg text-muted-foreground">No media items found</p>
+          <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}>
+            {isLoadingMore ? "Loading more..." : "Load more"}
+          </Button>
+        </>
+      ) : hasAnyFilter ? (
+        <>
+          <p className="mb-1 text-lg text-muted-foreground">No media items found</p>
+          <p className="mb-4 max-w-md text-sm text-muted-foreground">
+            Nothing in your library matches the current <strong className="font-semibold text-foreground">filters</strong>.
+          </p>
+          <div className="flex items-center gap-2">
+            <Button onClick={clearAllFilters}>
+              <X className="mr-2 h-4 w-4" />
+              Clear filters
+            </Button>
+            <Button variant="outline" onClick={handleUploadClick}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add files
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="mb-4 text-lg text-muted-foreground">Your library is empty</p>
+          <Button onClick={handleUploadClick}>
+            <Plus className="mr-2 h-4 w-4" />
+            Index a folder
+          </Button>
+        </>
+      )}
+    </div>
   );
 
   // Shared card renderer so the flat and year-grouped layouts stay identical.
@@ -1051,7 +1140,7 @@ export default function LibraryPageInner() {
             {!isSelectMode && (
               <Button size="sm" onClick={handleUploadClick}>
                 <Plus className="mr-2 h-4 w-4" />
-                Upload Media
+                Add files
               </Button>
             )}
           </>
@@ -1134,6 +1223,17 @@ export default function LibraryPageInner() {
 
             {/* Right zone: status filter + view controls */}
             <div className="flex items-center gap-2">
+              {isDuplicateFilter && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => router.push("/duplicates")}
+                  title="Group these by content and choose which copy to keep"
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  Review duplicates
+                </Button>
+              )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -1152,11 +1252,27 @@ export default function LibraryPageInner() {
                       onClick={() => handleStatusChange(option.value)}
                       className={option.value === statusValue ? "font-semibold" : "text-muted-foreground"}
                     >
-                      {option.label}
+                      <span className="flex w-full items-center justify-between gap-3">
+                        <span>{option.label}</span>
+                        {option.value === "text_needs_ocr" && scannedBacklog !== null && scannedBacklog > 0 && (
+                          <span className="text-xs tabular-nums opacity-70">{scannedBacklog}</span>
+                        )}
+                      </span>
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+              {statusValue === "text_needs_ocr" && scannedBacklog !== null && scannedBacklog > 0 && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => void handleExtractAllScanned()}
+                  disabled={isExtractingAll}
+                  title="Run OCR on every scan that has no text layer yet"
+                >
+                  {isExtractingAll ? "Queueing…" : `Extract all (${scannedBacklog})`}
+                </Button>
+              )}
               {viewMode === "grid" && mediaItems.length > 0 && (
                 <div className="w-72">
                   <input
@@ -1300,6 +1416,7 @@ export default function LibraryPageInner() {
 
       {/* Unified drag-drop wrapper + overlay (single overlay, no custom globals needed) */}
       <div
+        ref={gridContainerRef}
         className="relative"
         onDragEnter={onDragEnter}
         onDragOver={onDragOver}
@@ -1332,19 +1449,7 @@ export default function LibraryPageInner() {
                 </div>
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <p className="mb-4 text-lg text-muted-foreground">No media items found</p>
-                {nextCursor ? (
-                  <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}>
-                    {isLoadingMore ? "Loading more..." : "Load more"}
-                  </Button>
-                ) : (
-                  <Button onClick={handleUploadClick}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    {hasAnyFilter ? "Upload" : "Upload Your First Item"}
-                  </Button>
-                )}
-              </div>
+              renderEmptyState()
             )}
           </>
         ) : (
@@ -1362,19 +1467,7 @@ export default function LibraryPageInner() {
                   : mediaItems.map((media, index) => renderMediaCard(media, index))}
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <p className="mb-4 text-lg text-muted-foreground">No media items found</p>
-                {nextCursor ? (
-                  <Button variant="outline" onClick={handleLoadMore} disabled={isLoadingMore}>
-                    {isLoadingMore ? "Loading more..." : "Load more"}
-                  </Button>
-                ) : (
-                  <Button onClick={handleUploadClick}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    {hasAnyFilter ? "Upload" : "Upload Your First Item"}
-                  </Button>
-                )}
-              </div>
+              renderEmptyState()
             )}
           </>
         )}

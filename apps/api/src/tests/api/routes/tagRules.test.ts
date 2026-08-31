@@ -99,6 +99,10 @@ async function buildApp (rows: RuleRow[] = [], organizeStatus: unknown = null) {
   const prisma = makePrisma(rows);
   (app as any).decorate("prisma", prisma);
 
+  // POST /run attaches a limiter at registration time, so this has to exist
+  // before the route plugin loads. No-op — the bucket is not what is under test.
+  (app as any).decorate("userRateLimit", () => async () => {});
+
   const calls: OrganizeCalls = { runs: [] };
   (app as any).decorate("mediaServices", { organizeService: makeOrganizeService(calls, organizeStatus) });
 

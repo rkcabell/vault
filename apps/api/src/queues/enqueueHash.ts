@@ -1,23 +1,26 @@
 import type { Queue } from "bullmq";
 
+/**
+ * Job that hashes one item's contents into `Media.contentHash`.
+ */
+
 export const HASH_QUEUE = process.env.HASH_QUEUE ?? "hash_queue";
 
-/** Stream-hash one item's source into Media.contentHash (see worker/hashWorker). */
 export type HashJobData = {
   type: "hash";
   mediaId: string;
   userId: string;
-  storageKey: string;
-  /** Set for in-place indexed items; source read read-only from disk. */
+  storageKey: string | null;
+  /** Set for an item indexed in place. Its file is read from disk, read-only. */
   sourcePath?: string;
-  /** Snapshotted from user preferences at enqueue time. */
+  /** Snapshot of the user's allowed roots, taken when the job was queued. */
   allowedRoots?: string[];
 };
 
 export type EnqueueHashItem = {
   mediaId: string;
   userId: string;
-  storageKey: string;
+  storageKey: string | null;
   sourcePath?: string;
   allowedRoots?: string[];
 };
@@ -35,7 +38,7 @@ export async function enqueueHashBulk (queue: Queue<HashJobData>, items: Enqueue
       ...(item.sourcePath ? { sourcePath: item.sourcePath } : {}),
       ...(item.allowedRoots?.length ? { allowedRoots: item.allowedRoots } : {}),
     },
-    // jobId = mediaId dedupes re-enqueues of the same item within this queue.
+    // The media id as jobId dedupes a re-enqueue of the same item.
     opts: { jobId: item.mediaId, attempts: 3, backoff: { type: "exponential", delay: 2000 }, removeOnFail: true, removeOnComplete: true },
   }));
 

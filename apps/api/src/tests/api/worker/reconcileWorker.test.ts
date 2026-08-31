@@ -26,6 +26,11 @@ type Row = {
   missingSince: Date | null;
   thumbState: string;
   textState: string;
+  hashState: string;
+  /** NULL = waiting in the DB backlog for the feeder; set = already dispatched. */
+  thumbQueuedAt: Date | null;
+  textQueuedAt: Date | null;
+  hashQueuedAt: Date | null;
 };
 
 function makeRow (over: Partial<Row> & Pick<Row, "id" | "sourcePath">): Row {
@@ -43,6 +48,13 @@ function makeRow (over: Partial<Row> & Pick<Row, "id" | "sourcePath">): Row {
     missingSince: null,
     thumbState: "READY",
     textState: "READY",
+    // Default mimeType (image/jpeg) is renderable, so a settled row's hash
+    // arrived inline from the thumb worker — UNSUPPORTED means "no job
+    // needed", not "unhashed" (see hashState in schema.prisma).
+    hashState: "UNSUPPORTED",
+    thumbQueuedAt: null,
+    textQueuedAt: null,
+    hashQueuedAt: null,
     ...over,
   };
 }
@@ -66,7 +78,7 @@ type Options = {
 /**
  * In-memory stand-in for MediaRepository plus the queues. Reconcile is a
  * conversation between what the DB holds and what the disk reports, so a fake
- * that actually stores rows is the only kind that makes these tests mean
+ * that stores rows is the only kind that makes these tests mean
  * anything.
  */
 function makeDeps (opts: Options = {}) {
@@ -77,9 +89,7 @@ function makeDeps (opts: Options = {}) {
 
   const created: Prisma.MediaCreateManyInput[] = [];
   const events: Array<{ mediaId: string; field: string; value: string }> = [];
-  const thumbEnqueued: string[] = [];
-  const ocrEnqueued: string[] = [];
-  const hashEnqueued: string[] = [];
+
   /** Every path the sweep chose to stream-hash — the cost the size bucketing
    *  exists to avoid, so it is asserted on directly. */
   const hashedPaths: string[] = [];
@@ -140,7 +150,7 @@ function makeDeps (opts: Options = {}) {
     applySourceChanged: async (
       _u: string,
       id: string,
-      data: { sizeBytes: number; mtimeMs: number | null; resetThumb: boolean; resetText: boolean; fileDate?: Date },
+      data: { sizeBytes: number; mtimeMs: number | null; resetThumb: boolean; resetText: boolean; resetHash: boolean; fileDate?: Date },
     ) => {
       const row = store.get(id);
       if (!row) return;
@@ -149,8 +159,12 @@ function makeDeps (opts: Options = {}) {
       if (data.fileDate !== undefined) row.fileDate = data.fileDate;
       row.missingSince = null;
       row.contentHash = null;
-      if (data.resetThumb) row.thumbState = "PENDING";
-      if (data.resetText) row.textState = "PENDING";
+      // Mirrors the repository: the state goes back to PENDING *and* the
+      // dispatch stamp is cleared, which together are what put the row back in
+      // the feeder's claim set.
+      if (data.resetThumb) { row.thumbState = "PENDING"; row.thumbQueuedAt = null; }
+      if (data.resetText) { row.textState = "PENDING"; row.textQueuedAt = null; }
+      if (data.resetHash) { row.hashState = "PENDING"; row.hashQueuedAt = null; }
     },
     healSourceMetadata: async (
       _u: string,
@@ -187,9 +201,6 @@ function makeDeps (opts: Options = {}) {
 
   const deps = {
     mediaRepository: mediaRepository as never,
-    thumbQueue: { addBulk: async (jobs: { data: { mediaId: string } }[]) => { thumbEnqueued.push(...jobs.map(j => j.data.mediaId)); } } as never,
-    ocrQueue: { addBulk: async (jobs: { data: { mediaId: string } }[]) => { ocrEnqueued.push(...jobs.map(j => j.data.mediaId)); } } as never,
-    hashQueue: { addBulk: async (jobs: { data: { mediaId: string } }[]) => { hashEnqueued.push(...jobs.map(j => j.data.mediaId)); } } as never,
     listTagRules: async () => [],
     publishJobUpdate: (u: { mediaId: string; field: string; value: string }) => { events.push(u); },
     logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -207,7 +218,7 @@ function makeDeps (opts: Options = {}) {
     },
   };
 
-  return { deps, store, created, events, thumbEnqueued, ocrEnqueued, hashEnqueued, hashedPaths };
+  return { deps, store, created, events, hashedPaths };
 }
 
 /** Minimal BullMQ Job stand-in — reconcile only uses `data` + `updateProgress`. */
@@ -333,8 +344,35 @@ test("re-queues derived work when a file's bytes changed under us", async () => 
   assert.equal(row.mtimeMs, 2000);
   // A stale hash would make dedup claim two different files are the same.
   assert.equal(row.contentHash, null);
+  // Back to PENDING with the dispatch stamp cleared: reconcile enqueues nothing
+  // itself, so this is the whole handoff to the feeder. Leaving the stamp set
+  // would strand the row — never re-fed, then marked FAILED by stall detection.
   assert.equal(row.thumbState, "PENDING");
-  assert.deepEqual(ctx.thumbEnqueued, ["m1"]);
+  assert.equal(row.thumbQueuedAt, null);
+  assert.equal(row.textState, "PENDING");
+  assert.equal(row.textQueuedAt, null);
+  // Renderable (image/jpeg, the row's default mimeType): the re-queued thumb
+  // job will rehash it inline, so this must stay UNSUPPORTED rather than
+  // getting its own redundant hash job.
+  assert.equal(row.hashState, "UNSUPPORTED");
+  assert.equal(row.hashQueuedAt, null);
+});
+
+test("re-queues a hash job (state, not a push) when a changed non-renderable file's bytes changed", async () => {
+  const ctx = await run({
+    rows: [makeRow({
+      id: "m1", sourcePath: p("edited.bin"), sizeBytes: 100, mtimeMs: 1000,
+      mimeType: "application/octet-stream", contentHash: "old",
+    })],
+    onDisk: [makeFile(p("edited.bin"), 250, 2000)],
+  });
+
+  const row = ctx.store.get("m1")!;
+  assert.equal(ctx.progress.changed, 1);
+  // Not renderable: the thumb worker never touches this row, so it needs its
+  // own hash job — back to PENDING with the stamp cleared, same as thumb/text.
+  assert.equal(row.hashState, "PENDING");
+  assert.equal(row.hashQueuedAt, null);
 });
 
 test("leaves an unchanged file completely alone", async () => {
@@ -348,7 +386,6 @@ test("leaves an unchanged file completely alone", async () => {
     { changed: 0, missing: 0, moved: 0, added: 0 },
   );
   assert.equal(ctx.store.get("m1")!.thumbState, "READY");
-  assert.deepEqual(ctx.thumbEnqueued, []);
 });
 
 test("indexes a file that is genuinely new", async () => {
@@ -387,7 +424,7 @@ test("a bumped abort epoch stops the sweep before it indexes anything", async ()
   const ctx = makeDeps({ rows: [], onDisk: [makeFile(p("a.jpg")), makeFile(p("b.jpg"))] });
   // The epoch is captured once at start and compared against later reads, so a
   // constant value never aborts — the bump has to land *after* the sweep began,
-  // which is exactly what pressing stop mid-run does.
+  // which is what pressing stop mid-run does.
   let started = false;
   const processor = createReconcileProcessor({
     ...ctx.deps,
@@ -417,9 +454,11 @@ test("heals a legacy row's missing mtime and fileDate without touching its hash"
   // The whole point: nothing about the bytes changed, so the hash is still
   // valid — and nothing was queued that would recompute it if we dropped it.
   assert.equal(row.contentHash, "abc123", "contentHash must survive a metadata heal");
-  assert.deepEqual(ctx.thumbEnqueued, []);
-  assert.deepEqual(ctx.hashEnqueued, []);
-  // A heal is not a change.
+
+  // A heal is not a change — hashState/hashQueuedAt untouched, still their
+  // just-indexed defaults.
+  assert.equal(row.hashState, "UNSUPPORTED");
+  assert.equal(row.hashQueuedAt, null);
   assert.equal(ctx.progress.changed, 0);
 });
 
@@ -506,7 +545,7 @@ test("treats a path replaced by a symlink as vanished", async () => {
   // link, and openSourceStream only allow-list-checks the stored path.
   assert.equal(ctx.progress.changed, 0);
   assert.equal(ctx.progress.missing, 1);
-  assert.deepEqual(ctx.thumbEnqueued, []);
+
   assert.notEqual(ctx.store.get("m1")!.missingSince, null);
 });
 

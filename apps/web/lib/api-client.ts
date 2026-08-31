@@ -4,41 +4,6 @@ import { apiFetch } from './apiFetch'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? ''
 
-type InitUploadResp = { id: string; putUrl: string }
-
-export async function initUpload (
-  filename: string,
-  mimeType: string,
-  sizeBytes?: number,
-  title?: string,
-  autoTagOnUpload?: boolean,
-): Promise<InitUploadResp> {
-  const res = await apiFetch(`${API_BASE}/api/media`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      filename,
-      mimeType,
-      sizeBytes: sizeBytes ?? 0,
-      title: title ?? filename,
-      tags: [],
-      ...(autoTagOnUpload !== undefined ? { autoTagOnUpload } : {}),
-    })
-  })
-
-  if (!res.ok) {
-    throw new Error(`initUpload failed (${res.status})`)
-  }
-
-  const data = await res.json()
-  const putUrl = data?.putUrl ?? data?.uploadUrl
-  if (!data?.id || !putUrl) {
-    throw new Error('initUpload response missing putUrl')
-  }
-  return { id: data.id, putUrl }
-}
-
 export async function getMedia (id: string) {
   const res = await apiFetch(`${API_BASE}/api/media/${id}`, {
     method: 'GET',
@@ -46,14 +11,6 @@ export async function getMedia (id: string) {
   })
   if (!res.ok) throw new Error(`getMedia failed (${res.status})`)
   return res.json()
-}
-
-export async function finalizeUpload (id: string) {
-  const res = await apiFetch(`${API_BASE}/api/media/${id}/finalize`, {
-    method: 'POST',
-    credentials: 'include'
-  })
-  if (!res.ok) throw new Error(`finalizeUpload failed (${res.status})`)
 }
 
 export async function unpackMedia (id: string): Promise<{ bundleId: string }> {

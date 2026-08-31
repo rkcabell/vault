@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "worker:dev": "tsx watch src/worker/index.ts",
+    "worker:text:dev": "tsx watch src/worker/text.ts",
     "worker:ocr:dev": "tsx watch src/worker/ocr.ts",
     "worker:thumb:dev": "tsx watch src/worker/thumb.ts",
     "worker": "tsx src/worker/index.ts",
+    "worker:text": "tsx src/worker/text.ts",
     "worker:ocr": "tsx src/worker/ocr.ts",
     "worker:thumb": "tsx src/worker/thumb.ts",
     "start": "tsx src/index.ts",

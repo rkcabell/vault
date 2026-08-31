@@ -3,42 +3,51 @@ import type { UnpackJob } from "../queues/enqueueUnpack.js";
 import type { MediaRepository } from "../repositories/mediaRepository.js";
 import type { BundleRepository } from "../repositories/bundleRepository.js";
 import type { StorageAdapter } from "../adapters/storage/types.js";
-import type { Queue } from "bullmq";
-import type { OcrJobData } from "../services/ocrProcessingService.js";
-import type { ThumbJob } from "../queues/enqueueThumbnail.js";
 import type { TagRuleInput } from "../lib/tags/rules/evaluateRules.js";
-import { createMediaActionsService } from "../services/media/mediaActionsService.js";
+import { createArchiveService } from "../services/media/archiveService.js";
+
+/**
+ * Unpacks one archive in the background, so a large archive does not hold an
+ * HTTP request open.
+ */
 
 type UnpackWorkerDeps = {
   mediaRepository: MediaRepository;
   bundleRepository: BundleRepository;
   storage: StorageAdapter;
   bucket: string;
-  ocrQueue: Queue<OcrJobData>;
-  thumbQueue: Queue<ThumbJob>;
   /** The user's enabled Tag Organizer rules, applied to unpacked entries. */
   listTagRules?: (userId: string) => Promise<TagRuleInput[]>;
-  logger: { info: (obj: object, msg: string) => void; error: (obj: object, msg: string) => void };
+  /** The user's `autoTagOnIngest` preference. Off, an unpacked entry carries
+   *  only its bundle name. Absent, tagging is enabled. */
+  getAutoTagOnIngest?: (userId: string) => Promise<boolean>;
+  logger: {
+    info: (obj: object, msg: string) => void;
+    warn: (obj: unknown, msg: string) => void;
+    error: (obj: object, msg: string) => void;
+  };
   publishJobUpdate?: (update: { userId: string; mediaId: string; field: string; value: string }) => void;
 };
 
 export function createUnpackProcessor (deps: UnpackWorkerDeps): Processor<UnpackJob> {
-  const actionsService = createMediaActionsService({
+  // No queue handles: entries are created at PENDING for the feeder, and this
+  // process reads unpack_queue rather than adding to it.
+  const archiveService = createArchiveService({
     repository: deps.mediaRepository,
     bundleRepository: deps.bundleRepository,
     storage: deps.storage,
     bucket: deps.bucket,
-    ocrQueue: deps.ocrQueue,
-    thumbQueue: deps.thumbQueue,
+    logger: deps.logger,
     listTagRules: deps.listTagRules,
+    getAutoTagOnIngest: deps.getAutoTagOnIngest,
     publishJobUpdate: deps.publishJobUpdate,
   });
 
   return async job => {
-    const { mediaId, userId } = job.data;
+    const { mediaId, userId, allowedRoots } = job.data;
     deps.logger.info({ mediaId, userId }, "unpack job started");
 
-    const result = await actionsService.unpackArchive(userId, mediaId);
+    const result = await archiveService.unpackArchive(userId, mediaId, allowedRoots ?? []);
 
     if (!result) {
       deps.logger.info({ mediaId, userId }, "unpack: no entries extracted or media not found");

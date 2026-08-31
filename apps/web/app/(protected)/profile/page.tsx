@@ -36,7 +36,7 @@ const emptyForm: ProfileFormData = {
   avatarUrl: '',
 };
 
-function formatDate(dateString: string) {
+function formatMonthYear(dateString: string) {
   return new Date(dateString).toLocaleDateString('en-US', {
     month: 'long',
     year: 'numeric',
@@ -402,7 +402,7 @@ export default function ProfilePage() {
 
                     <div className="flex items-center gap-3 text-muted-foreground">
                       <Calendar className="w-5 h-5 text-primary" />
-                      <span>Joined {formatDate(profile.createdAt)}</span>
+                      <span>Joined {formatMonthYear(profile.createdAt)}</span>
                     </div>
                   </div>
                 </div>

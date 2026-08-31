@@ -6,13 +6,17 @@ import type { StorageAdapter } from "../../adapters/storage/types.js";
 import { looksLikeHeic } from "../../lib/fileSignatures.js";
 import { isPlainTextMime, MAX_TEXT_CHARS } from "../media/processingSupport.js";
 
+/**
+ * Gets a file's text out of it, by whichever route its type calls for: a direct
+ * read, pdf.js, or ocrmypdf.
+ */
+
 export type TextSource = "NATIVE" | "OCR";
 export type TextJobErrorCode = "SOURCE_NOT_READY" | "TIMEOUT";
 
 /**
- * Typed error thrown by processTextJob for known failure conditions.
- * `code` is machine-readable so callers can branch on it without string-matching
- * against error messages (see isTransientError in ocrProcessingService).
+ * Signals a failure this module recognises. `code` is machine-readable, so a
+ * caller can branch on it rather than matching against the message text.
  */
 export class TextJobError extends Error {
   code: TextJobErrorCode;
@@ -39,39 +43,30 @@ export type ProcessTextJobDeps = {
 };
 
 /**
- * Read a file (from managed storage or an in-place source on disk) and extract
- * its text content.
+ * Reads a file, from managed storage or from the user's own drive, and returns
+ * the text in it.
  *
- * Three paths, checked in order:
- * - **Plain text** (`text/*` mime): decode the bytes directly, capped at
- *   MAX_TEXT_CHARS. Wins even when forceOcr is set.
- * - **Native** (`isPdf && !forceOcr`): uses pdf.js to extract embedded text.
- *   Returns `needsOcr: true` when the PDF appears to be a scanned image with
- *   no embedded text layer.
- * - **OCR** (all other cases, or when forceOcr = true): runs ocrmypdf to
- *   produce a text-layer PDF, then extracts text from that with pdf.js.
- *   Non-PDF images are first checked for blankness — near-uniform white
- *   images skip OCR entirely and return empty text.
+ * Plain text is decoded directly, and takes that route even when `forceOcr` is
+ * set. A PDF with no text layer comes back with `needsOcr: true`. Everything
+ * else goes to ocrmypdf, except an image, which is checked for blankness first
+ * so a near-white scan skips OCR.
  *
- * `abortSignal` is forwarded to ocrmypdf's subprocess so the process is
- * killed promptly when the job times out. An AbortError is re-thrown as
- * `TextJobError("TIMEOUT")` for structured handling upstream.
- *
- * `deps` can be overridden in tests to stub the source read, ocrmypdf, and
- * blank detection.
+ * `abortSignal` reaches ocrmypdf's subprocess, so a timeout kills it promptly.
+ * The resulting AbortError is re-thrown as `TextJobError("TIMEOUT")`.
  */
 export async function processTextJob (
   args: {
     storage: StorageAdapter;
     bucket: string;
-    key: string;
+    /** Null for in-place indexed items — see the media_source_xor constraint. */
+    key: string | null;
     mimeType?: string | null;
     forceOcr?: boolean;
     language?: string | null;
     rotation?: string | null;
     onProgress?: (progress: { current: number; total?: number | null }) => void;
     abortSignal?: AbortSignal;
-    /** Absolute external path for in-place indexed items; null/undefined = managed. */
+    /** Absolute path on the user's own drive when the item is indexed in place. */
     sourcePath?: string | null;
     /** Configured allow-list, required to read an in-place source. */
     allowedRoots?: string[];
@@ -85,19 +80,21 @@ export async function processTextJob (
   const checkBlankImage = deps.isBlankImage ?? isBlankImage;
   const log = deps.logger;
 
-  // Read the original from its real location: in-place items read read-only
-  // from disk; managed items go through the (test-overridable) storage adapter.
-  const loadSource = (): Promise<Buffer | null> =>
-    sourcePath
-      ? readSourceBuffer({ storage, bucket, storageKey: key, sourcePath, allowedRoots })
-      : getBuffer(storage, bucket, key);
+  // An item indexed in place is read from disk, read-only. A managed one goes
+  // through the storage adapter, which a test can replace.
+  const loadSource = (): Promise<Buffer | null> => {
+    if (sourcePath) return readSourceBuffer({ storage, bucket, storageKey: key, sourcePath, allowedRoots });
+    // media_source_xor guarantees key is set whenever sourcePath isn't.
+    if (!key) throw new TextJobError("SOURCE_NOT_READY", "Media row has neither sourcePath nor storageKey");
+    return getBuffer(storage, bucket, key);
+  };
 
   const isPdf = mimeType ? mimeType.toLowerCase().includes("pdf") : false;
   const ctx = { key, mimeType, forceOcr: forceOcr ?? false };
 
-  // Plain-text path: text/* files are already text — read and decode directly,
-  // no OCR or pdf.js. Checked first so it wins even when forceOcr is set. Stored
-  // text is capped (tsvector safety); the caller skips files over MAX_TEXT_BYTES.
+  // A text/* file is already text, so it is read and decoded directly. Checked
+  // first, so it takes this route even when forceOcr is set. What is stored is
+  // capped; the caller has already skipped anything over MAX_TEXT_BYTES.
   if (isPlainTextMime(mimeType ?? "")) {
     log?.info(ctx, "[text] plain-text read start");
     const buf = await loadSource();
@@ -107,7 +104,6 @@ export async function processTextJob (
     return { textSource: "NATIVE", rawText, pages: null, needsOcr: false };
   }
 
-  // Native extraction path
   if (isPdf && !forceOcr) {
     log?.info(ctx, "[text] source read start");
     const t0 = Date.now();
@@ -134,8 +130,8 @@ export async function processTextJob (
   log?.info({ ...ctx, bytes: sourceBuffer?.length ?? 0, ms: Date.now() - t2 }, "[text] source read done (ocr path)");
   if (!sourceBuffer) throw new TextJobError("SOURCE_NOT_READY", "Source object not ready");
 
-  // Blank image shortcut: for non-PDF images, check pixel statistics before
-  // spawning tesseract. Near-uniform white images will never produce text.
+  // An image's pixel statistics are cheap next to spawning Tesseract, and a
+  // near-uniformly white one will never produce text.
   if (!isPdf) {
     const blank = await checkBlankImage(sourceBuffer);
     if (blank) {
@@ -171,8 +167,9 @@ export async function processTextJob (
   try {
     extracted = await extractPdfText(ocrPdf);
   } catch {
-    // Single blind retry — only buys us a transient pdf.js worker-init race; a
-    // deterministic failure throws again. TODO: gate on a transient signal.
+    // One retry, which covers a transient pdf.js worker-init race. A failure
+    // that is not transient throws again.
+    // TODO: gate this on a signal that the failure was transient.
     extracted = await extractPdfText(ocrPdf);
   }
   log?.info({ ...ctx, chars: extracted.fullText.length, ms: Date.now() - t4 }, "[text] pdf.js extract done (post-ocr)");
@@ -185,22 +182,22 @@ export async function processTextJob (
   };
 }
 
-/** Decode a buffer as UTF-8, stripping a leading byte-order mark if present. */
+// Decodes a buffer as UTF-8, dropping a leading byte-order mark.
 function decodeUtf8 (buf: Buffer): string {
   const text = buf.toString("utf8");
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
-/** Detect both the Web AbortError name and the Node.js ABORT_ERR errno code. */
+// An abort surfaces as the Web AbortError name or the Node ABORT_ERR code.
 function isAbortError (err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return err.name === "AbortError" || (err as NodeJS.ErrnoException).code === "ABORT_ERR";
 }
 
 /**
- * Returns true if the image buffer is near-uniformly white (blank paper/scan).
- * Uses conservative thresholds so documents with even faint text pass through to OCR.
- * Pre-converts HEIC to PNG since sharp lacks libheif support.
+ * True when the image is near-uniformly white, as blank paper scans. The
+ * thresholds are cautious, so a document with even faint text still reaches OCR.
+ * HEIC is converted to PNG first, because sharp cannot read it.
  */
 async function isBlankImage (buffer: Buffer): Promise<boolean> {
   try {

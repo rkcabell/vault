@@ -1,8 +1,12 @@
-import type { Queue } from "bullmq";
 import type { FastifyBaseLogger } from "fastify";
-import { enqueueHashBulk, type HashJobData } from "../../queues/enqueueHash.js";
 
-/** One member of a duplicate group, as returned to the review UI. */
+/**
+ * Groups items that share a SHA-256 content hash, and backfills hashes for items
+ * that were never hashed. Matching is byte-identical: two files that look alike
+ * to a person but differ by one byte are not duplicates.
+ */
+
+/** One item in a group of byte-identical copies. */
 type DuplicateMember = {
   id: string;
   title: string;
@@ -19,31 +23,16 @@ type DuplicateMember = {
 type DedupRepository = {
   listDuplicateMembers: (userId: string) => Promise<DuplicateMember[]>;
   countUnhashed: (userId: string) => Promise<number>;
-  listUnhashedPage: (
-    userId: string,
-    afterId: string | null,
-    limit: number,
-  ) => Promise<Array<{ id: string; storageKey: string; sourcePath: string | null }>>;
+  resetUnhashedForScan: (userId: string) => Promise<number>;
 };
 
 type DedupDeps = {
   repository: DedupRepository;
-  hashQueue: Queue<HashJobData>;
-  /** Current allowed indexing roots — snapshotted into hash jobs for in-place reads. */
-  getAllowedRoots: (userId: string) => Promise<string[]>;
   logger: FastifyBaseLogger;
 };
 
-const SCAN_CHUNK = 500;
-
-/**
- * Exact-copy deduplication: groups items sharing a SHA-256 contentHash for the
- * review page, and backfills hashes (via hash_queue jobs) for items the
- * thumbnail worker never hashed. Detection is byte-identical only — no
- * perceptual/near-duplicate matching.
- */
 export function createDedupService (deps: DedupDeps) {
-  /** Byte-identical groups, plus how many READY items still lack a hash. */
+  /** Returns the duplicate groups, and how many READY items still lack a hash. */
   const listDuplicateGroups = async (userId: string) => {
     const [members, unhashedCount] = await Promise.all([
       deps.repository.listDuplicateMembers(userId),
@@ -73,35 +62,18 @@ export function createDedupService (deps: DedupDeps) {
         thumbnailKey: item.thumbnailKey,
       })),
     }));
-    // Biggest reclaimable space first (size × extra copies).
+    // Biggest reclaimable space first: size × the number of extra copies.
     groups.sort(
       (a, b) => b.sizeBytes * (b.items.length - 1) - a.sizeBytes * (a.items.length - 1),
     );
     return { groups, unhashedCount };
   };
 
-  /** Enqueue hash jobs for every READY item without a contentHash. */
+  /** Resets every READY item without a content hash so the derivative feeder
+   *  claims it. Pushes no hash_queue jobs itself. */
   const startScan = async (userId: string) => {
-    const allowedRoots = await deps.getAllowedRoots(userId);
-    let afterId: string | null = null;
-    let queued = 0;
-    for (;;) {
-      const rows = await deps.repository.listUnhashedPage(userId, afterId, SCAN_CHUNK);
-      if (rows.length === 0) break;
-      afterId = rows[rows.length - 1].id;
-      await enqueueHashBulk(
-        deps.hashQueue,
-        rows.map(row => ({
-          mediaId: row.id,
-          userId,
-          storageKey: row.storageKey,
-          sourcePath: row.sourcePath ?? undefined,
-          allowedRoots,
-        })),
-      );
-      queued += rows.length;
-    }
-    deps.logger.info({ userId, queued }, "dedup scan enqueued");
+    const queued = await deps.repository.resetUnhashedForScan(userId);
+    deps.logger.info({ userId, queued }, "dedup scan: reset unhashed rows for the feeder");
     return { ok: true, queued };
   };
 

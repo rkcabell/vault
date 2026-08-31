@@ -6,6 +6,11 @@ import { evaluateRules, type TagRuleInput } from "../lib/tags/rules/evaluateRule
 import { resolveFileDate } from "../lib/tags/rules/fileDate.js";
 import type { MediaMetadata } from "../services/media/metadata/types.js";
 
+/**
+ * Re-runs every enabled tag rule over a user's whole library, and backfills the
+ * date a file carries. A dry run reports what it would change and writes nothing.
+ */
+
 type OrganizeLogger = {
   info: (obj: object, msg: string) => void;
   warn: (obj: object, msg: string) => void;
@@ -23,12 +28,10 @@ export type OrganizeMediaRow = {
   tags: string[];
   /** Stored fileDate column value — compared against the freshly resolved date. */
   fileDate: Date | null;
-  /** MediaExtractedMetadata.data when present (EXIF/PDF dates live here). */
+  /** MediaExtractedMetadata.data when present. EXIF and PDF dates come from it. */
   metadata: unknown | null;
 };
 
-/** Structural deps so the worker is unit-testable with simple fakes (mirrors
- *  the deleteWorker convention). */
 type OrganizeWorkerDeps = {
   mediaRepository: {
     countMediaForOrganize: (userId: string) => Promise<number>;
@@ -44,11 +47,10 @@ type OrganizeWorkerDeps = {
   /** The user's in-place index roots (for `folder:` segments + ingest source). */
   getIndexRoots: (userId: string) => Promise<string[]>;
   logger: OrganizeLogger;
-  /** Publishes a media event so open views refresh tags. Optional in tests. */
+  /** Publishes a media event, so open views pick up the new tags. */
   publishJobUpdate?: (update: { userId: string; mediaId: string; field: string; value: string }) => void;
-  /** Stat used for the mtime date fallback on indexed items. Test seam. */
+  /** Reads the modified time, for a file that carries no date of its own. */
   statFile?: (absPath: string) => Promise<{ mtimeMs: number }>;
-  /** Rows per page (tests use a small value). */
   chunkSize?: number;
 };
 
@@ -81,8 +83,8 @@ export function createOrganizeProcessor (deps: OrganizeWorkerDeps): Processor<Or
     await job.updateProgress(progress);
     deps.logger.info({ userId, total, dryRun, rules: rules.length }, "organize run started");
 
-    // Distinct tags actually written — their Tag rows are ensured before the
-    // final reconcile (reconcileTagCounts only fixes tags that HAVE a row).
+    // The distinct tags written. Their Tag rows are created before the final
+    // reconcile, which only corrects counts for tags that already have a row.
     const appliedTags = new Set<string>();
     let wrote = false;
     let afterId: string | null = null;
@@ -99,19 +101,18 @@ export function createOrganizeProcessor (deps: OrganizeWorkerDeps): Processor<Or
           const ingest = row.sourcePath ? "index" : row.isExtractedFromArchive ? "unpacked" : "upload";
           let fileDate = resolveFileDate(row.metadata as MediaMetadata | null);
           if (!fileDate && (needsFileDate || row.fileDate === null) && row.sourcePath) {
-            // mtime fallback for indexed items with no embedded date. Missing /
-            // unreadable source → no date tag, never a failed run. Also taken
-            // when the fileDate column is unset so a plain Organize run
-            // backfills it even without a FILE_DATE rule.
+            // Falls back to the file's modified time. A missing or unreadable
+            // file yields no date rather than failing the run. This is also
+            // taken when the fileDate column is unset, so a plain run backfills
+            // it without a FILE_DATE rule.
             fileDate = await statFile(row.sourcePath)
               .then(st => (st.mtimeMs > 0 ? new Date(st.mtimeMs) : null))
               .catch(() => null);
           }
 
-          // Keep the fileDate column in sync with the freshly resolved date —
-          // this is how pre-existing rows acquire fileDate for the "Year" sort
-          // (run Organize once after upgrading). Derived data, but still a
-          // write, so skipped on dry runs.
+          // Keeps the fileDate column in step with the resolved date, which is
+          // how an older row acquires one for the Year sort. Derived data, but
+          // still a write, so a dry run skips it.
           if (!dryRun && fileDate && fileDate.getTime() !== row.fileDate?.getTime()) {
             await deps.mediaRepository.setFileDate(row.id, fileDate);
           }
@@ -151,9 +152,9 @@ export function createOrganizeProcessor (deps: OrganizeWorkerDeps): Processor<Or
         await job.updateProgress(progress);
       }
     } finally {
-      // One authoritative pass fixes every Tag.count against committed data —
-      // in a finally so an unexpected throw mid-run can't leave counts drifted
-      // from the chunks that already committed (mirrors deleteWorker).
+      // One pass corrects every Tag.count against committed data. It sits in a
+      // finally, so a throw mid-run cannot leave the counts disagreeing with
+      // the chunks that already committed.
       if (wrote) {
         await deps.mediaRepository.ensureAutoTagRows(userId, [...appliedTags]).catch(err =>
           deps.logger.warn({ userId, err }, "organize: ensuring tag rows failed"),

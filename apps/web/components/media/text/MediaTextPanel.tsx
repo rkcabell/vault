@@ -6,6 +6,7 @@ import { useMediaText } from '@/hooks/media/useMediaText'
 import type { MediaDocument, MediaWorkerState } from '@/lib/media/types'
 import { TextPanelHeader } from './TextPanelHeader'
 import { TextRunningBanner } from './TextRunningBanner'
+import { TextQueuedBanner } from './TextQueuedBanner'
 import { TextErrorPanel } from './TextErrorPanel'
 import { TextEmptyState } from './TextEmptyState'
 import { MediaTextContent } from './MediaTextContent'
@@ -44,6 +45,8 @@ function formatElapsed (ms: number): string {
 export function MediaTextPanel (props: {
   id: string
   textState: MediaWorkerState | null | undefined
+  /** Null while PENDING means the row is still in the backlog, not extracting. */
+  textQueuedAt?: string | null
   textError?: string | null
   document: MediaDocument | null | undefined
   highlightTerms: string[]
@@ -55,6 +58,7 @@ export function MediaTextPanel (props: {
   const {
     id,
     textState: mediaTextState,
+    textQueuedAt,
     textError,
     document,
     highlightTerms,
@@ -94,8 +98,14 @@ export function MediaTextPanel (props: {
   })
 
   const isTextReady = textState === 'ready'
+  // PENDING spans two situations the backend distinguishes by a stamp: no
+  // textQueuedAt means the feeder hasn't dispatched the row and nothing is
+  // extracting yet. Reporting that as "in progress" is what made a whole
+  // backlog look like it was running at once.
+  const isWaitingInQueue = mediaTextState === 'PENDING' && !textQueuedAt
   const isRunning =
-    textState === 'pending' || textState === 'loading' || mediaTextState === 'PENDING'
+    !isWaitingInQueue &&
+    (textState === 'pending' || textState === 'loading' || mediaTextState === 'PENDING')
   // UNSUPPORTED is the backend's terminal "won't process" state (wrong type or too
   // large) — the worker never ran, so it's not a failure. Show a neutral "Not supported"
   // chip with the reason instead of the destructive "Failed" badge.
@@ -116,12 +126,19 @@ export function MediaTextPanel (props: {
 
   const placeholder = isPlaceholderText(segments)
   const hasAnyText = textTotalLength > 0 && !placeholder
-  const showEmptyState = shouldShowEmptyState({ isRunning, isErrorState, textState, hasAnyText })
+  // Waiting counts as busy here: an empty-state CTA under a "Queued" banner
+  // reads as "nothing is going to happen".
+  const showEmptyState = shouldShowEmptyState({
+    isRunning: isRunning || isWaitingInQueue,
+    isErrorState,
+    textState,
+    hasAnyText,
+  })
   const canShowViewer = isTextReady && hasAnyText && !showEmptyState
   const isCopyDisabled =
     !isTextReady || isCopying || textTotalLength === 0 || placeholder
 
-  const statusChip = getStatusChip({ isErrorState, isRunning, canShowViewer, isUnsupported: isUnsupportedType })
+  const statusChip = getStatusChip({ isErrorState, isRunning, canShowViewer, isUnsupported: isUnsupportedType, isQueued: isWaitingInQueue })
   const sourceChipLabel = formatSourceChipLabel(textSource)
   const lastUpdatedText = formatLastUpdatedText(undefined)
   const languageStatus = document?.textLanguageStatus ?? null
@@ -149,6 +166,7 @@ export function MediaTextPanel (props: {
           isRunning={isRunning}
           isDeleting={isDeleting}
           hasAnyText={hasAnyText}
+          isUnsupported={isUnsupportedType}
           onQueued={onQueuedOcr}
           onError={setCopyMessage}
           onLanguageApplied={setLanguageOverride}
@@ -177,6 +195,14 @@ export function MediaTextPanel (props: {
               <span className='text-xs'>Completed in {completedIn}</span>
             )}
           </div>
+        )}
+
+        {isWaitingInQueue && (
+          <TextQueuedBanner
+            mediaId={id}
+            onPrioritized={onQueuedOcr}
+            onError={setCopyMessage}
+          />
         )}
 
         {isRunning && (

@@ -1,4 +1,6 @@
-// File: apps/api/src/services/thumbnails/renderPdfThumbnail.ts
+/**
+ * Draws the first page of a PDF as an image, to use as its thumbnail.
+ */
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { Path2D, DOMMatrix, ImageData } from "@napi-rs/canvas";
@@ -12,18 +14,21 @@ async function getCanvas() {
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 
 function toPdfJsData (input: Uint8Array | Buffer): Uint8Array {
-  // Copy into a fresh ArrayBuffer — pdf.js may transfer (detach) the buffer it
-  // receives, so a view into Node.js's shared pool would cause
-  // "Unable to deserialize cloned data" on subsequent access.
+  // The bytes are copied first. The PDF library may take ownership of the
+  // buffer it is handed, and a Node buffer is a window onto memory shared with
+  // other buffers, which would then be unusable.
   return new Uint8Array(input);
 }
 
+// The drawing types the PDF library expects a browser to provide.
 type CanvasGlobals = {
   Path2D?: typeof Path2D;
   DOMMatrix?: typeof DOMMatrix;
   ImageData?: typeof ImageData;
 };
 
+// Puts the drawing types on the global object, since the PDF library looks for
+// them there rather than accepting them as arguments.
 async function ensureCanvasGlobals () {
   const { Path2D, DOMMatrix, ImageData } = await getCanvas();
   const g = globalThis as typeof globalThis & CanvasGlobals;
@@ -32,6 +37,13 @@ async function ensureCanvasGlobals () {
   if (!g.ImageData) g.ImageData = ImageData;
 }
 
+/**
+ * Returns the first page of `pdf` drawn as a PNG.
+ *
+ * The page is drawn at `targetWidth` unless that would make an image larger
+ * than `maxPixels`, in which case it is drawn smaller. A page with
+ * transparency is drawn onto white, so a scanned page does not come out black.
+ */
 export async function renderPdfThumbnail (args: {
   pdf: Uint8Array | Buffer;
   targetWidth?: number;
@@ -47,6 +59,8 @@ export async function renderPdfThumbnail (args: {
 
   const init: DocumentInitParameters & { disableWorker?: boolean } = {
     data,
+    // Drawing happens in this process rather than a background worker, because
+    // the thumbnail worker is already a process of its own.
     disableWorker: true,
     StandardFontDataFactory: class {
       private baseUrl: string;

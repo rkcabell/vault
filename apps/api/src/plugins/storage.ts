@@ -9,11 +9,10 @@ declare module "fastify" {
 }
 
 /**
- * Decorate `app.storage` with the filesystem storage adapter. Must be
- * registered before any plugin/route that uses `app.storage` (e.g.
- * mediaServices). Blobs live under STORAGE_FS_PATH; the browser reaches them
- * through the authenticated proxy routes in `routes/storage.ts` — presign URLs
- * are site-relative (/api/storage/blob/...), so cookies authenticate.
+ * Puts the filesystem storage adapter on the Fastify instance, which is how
+ * everything reads and writes thumbnails and other derived files.
+ *
+ * Register this before any plugin or route that reads `app.storage`.
  */
 export default fp(
   async app => {

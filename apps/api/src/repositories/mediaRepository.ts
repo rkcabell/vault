@@ -1,7 +1,14 @@
 import path from "node:path";
-import { Prisma, type PrismaClient, type TagOrigin } from "@prisma/client";
+import { Prisma, type PrismaClient, type TagOrigin, type TextSource } from "@prisma/client";
 import { THUMBNAIL_TOO_LARGE_REASON, THUMBNAIL_UNSUPPORTED_REASON } from "../lib/media/processingSupport.js";
 import { normalizeTags } from "../lib/tags/normalizeTags.js";
+import { isDedupStrictOrder } from "../lib/config/dedup.js";
+
+/**
+ * Every Prisma call that touches a Media row. Routes and services never query
+ * the database themselves, so the filters, the keyset pagination and the state
+ * guards are all written once, here.
+ */
 
 export type MediaListFilters = {
   userId: string;
@@ -9,7 +16,8 @@ export type MediaListFilters = {
   tags?: string[];
   excludeTags?: string[];
   thumbState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
-  textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED";
+  /** NEEDS_OCR backs the library's "Scanned — text not extracted yet" filter. */
+  textState?: "PENDING" | "READY" | "ERROR" | "FAILED" | "UNSUPPORTED" | "NEEDS_OCR";
   mimeTypePrefix?: string;
   orderBy: Prisma.MediaOrderByWithRelationInput[];
   take: number;
@@ -51,7 +59,7 @@ export type ReconcileEntry = {
   id: string;
   sourcePath: string;
   mimeType: string;
-  storageKey: string;
+  storageKey: string | null;
   sizeBytes: number;
   mtimeMs: number | null;
   fileDate: Date | null;
@@ -61,16 +69,22 @@ export type ReconcileEntry = {
 /** The columns the delete worker needs to remove a media item (DB row + storage). */
 export type MediaDeletionRow = {
   id: string;
-  storageKey: string;
+  storageKey: string | null;
   thumbnailKey: string | null;
   sourcePath: string | null;
 };
 
+/** Per-state row counts for one derivative, scoped to a user. */
+export type DerivativeProgressCounts = {
+  thumb: { pending: number; ready: number; failed: number; unsupported: number };
+  text: { pending: number; ready: number; needsOcr: number; error: number; unsupported: number };
+  hash: { pending: number; ready: number; unsupported: number };
+};
+
 /**
- * Filter on a worker state via plain equality. Non-retriable "won't process"
- * items now carry the dedicated UNSUPPORTED state, so the "error" filters
- * (thumbState=FAILED / textState=ERROR) exclude them automatically — no sentinel
- * string or mimeType heuristic needed.
+ * Filters on a worker state by plain equality. An item that will never be
+ * processed carries UNSUPPORTED, so the error filters exclude it without a
+ * sentinel value or a guess from its MIME type.
  */
 function thumbStateWhereOrm (thumbState?: string): Prisma.MediaWhereInput {
   if (!thumbState) return {};
@@ -85,9 +99,9 @@ function textStateWhereOrm (textState?: string): Prisma.MediaWhereInput {
 export class MediaRepository {
   constructor (private readonly prisma: PrismaClient) {}
 
-  /** Insert a new Media row and return its id, storageKey, and title.
-   *  `autoTags` names the subset of `data.tags` the system applied (e.g. the
-   *  MIME-type tag); those are recorded with origin AUTO, the rest as USER. */
+  /** Inserts a Media row and returns its id, storage key and title. `autoTags`
+   *  names the tags in `data.tags` the system applied; those are recorded with
+   *  origin AUTO, and the rest as USER. */
   async createMedia (data: Prisma.MediaUncheckedCreateInput, opts?: { autoTags?: string[] }) {
     const media = await this.prisma.media.create({
       data,
@@ -102,10 +116,9 @@ export class MediaRepository {
   }
 
   /**
-   * Bulk-insert Media rows without returning individual ids (used in batch
-   * upload init and in-place indexing). `skipDuplicates` lets the index worker
-   * tolerate a race on the (userId, sourcePath) unique index without failing
-   * the whole batch.
+   * Inserts many Media rows, returning no ids. `skipDuplicates` lets the index
+   * worker survive a race on the (userId, sourcePath) unique index without
+   * losing the whole batch.
    */
   async createBatch (
     items: Prisma.MediaCreateManyInput[],
@@ -135,24 +148,11 @@ export class MediaRepository {
     }
   }
 
-  async markSourcesReady (userId: string, ids: string[]) {
-    // Raw SQL is required here: Prisma's updateMany does not support RETURNING,
-    // and the returned rows (id + storageKey) are used by finalizeBatch to enqueue
-    // OCR and thumbnail jobs. Switching to updateMany would silently drop those
-    // values and break job enqueueing without a type error.
-    return this.prisma.$queryRaw<{ id: string; storageKey: string; mimeType: string; sizeBytes: number }[]>`
-      UPDATE "Media"
-      SET "sourceState" = 'READY'
-      WHERE "userId" = ${userId} AND "id" IN (${Prisma.join(ids)})
-      RETURNING "id", "storageKey", "mimeType", "sizeBytes"
-    `;
-  }
-
   /**
-   * Paginated media listing. When no tag filter is present the ORM path is
-   * used (cursor + skip:1). When tags are present a single raw SQL query is
-   * used so the case-insensitive array-containment check is inlined and no
-   * unbounded IN list is materialised. Keyset pagination is used in that path.
+   * Returns one page of a user's media. Without a tag filter it goes through the
+   * ORM. With one it takes a single raw query, so the case-insensitive array
+   * check stays inline and no unbounded IN list is built; that path paginates
+   * by keyset.
    */
   async listMedia (filters: MediaListFilters) {
     // fileDate is nullable; Prisma cursor pagination over a nullable order
@@ -239,9 +239,7 @@ export class MediaRepository {
       params.push(`%${queryText}%`, queryText);
       p += 2;
     }
-    // Plain equality on each state. The dedicated UNSUPPORTED state means the
-    // "error" filters (thumbState=FAILED / textState=ERROR) already exclude
-    // never-processable items — no sentinel string or mimeType heuristic needed.
+    // Plain equality on each state — same rationale as `thumbStateWhereOrm`.
     if (thumbState) {
       conditions.push(`m."thumbState" = $${p++}`);
       params.push(thumbState);
@@ -381,7 +379,7 @@ export class MediaRepository {
     return result[0]?.count ?? 0;
   }
 
-  /** Return all media IDs matching the given filters — no pagination, used for bulk operations. */
+  /** Returns every media id matching the filters, unpaginated. */
   async listAllMediaIds (filters: Omit<MediaListFilters, "orderBy" | "take" | "cursor">): Promise<string[]> {
     const { tags, excludeTags, queryText } = filters;
     if (tags?.length || excludeTags?.length || queryText) return this._listAllMediaIdsRaw(filters);
@@ -422,7 +420,7 @@ export class MediaRepository {
     return result.map(r => r.id);
   }
 
-  // ---- Set-based bulk delete (used by the delete worker) -------------------
+  // Set-based bulk delete, used by the delete worker.
 
   /** Columns the delete worker needs per row: the PK plus the storage keys it
    *  must unlink. `sourcePath` is set on in-place indexed items — their original
@@ -501,7 +499,7 @@ export class MediaRepository {
    *  a stray id from another user can never be deleted (defense in depth — callers
    *  already pre-filter by userId). DB-level cascades remove the dependent
    *  BundleItem / Document / MediaExtractedMetadata rows and SetNull the
-   *  Reminder / Bundle.sourceMediaId references. Returns the rows actually deleted.
+   *  Reminder / Bundle.sourceMediaId references. Returns the count of rows deleted.
    *  (userId is the second arg so the delete worker's injected port stays compatible.) */
   async deleteMediaByIds (ids: string[], userId: string): Promise<number> {
     if (ids.length === 0) return 0;
@@ -509,7 +507,8 @@ export class MediaRepository {
     return count;
   }
 
-  /** Return storageKey and thumbnailKey for a media item (used to delete S3 objects). */
+  /** Returns the storage keys for an item, so its stored objects can be
+   *  removed with it. */
   async findMediaKeys (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
@@ -555,11 +554,12 @@ export class MediaRepository {
     });
   }
 
-  /** Bulk-delete all media for a user in 4 queries. Returns S3 keys for deletion.
-   *  DB-level cascades handle BundleItem, Document, MediaExtractedMetadata, and
-   *  the SetNull relations (Reminder.mediaId, Bundle.sourceMediaId). The only
-   *  non-FK field, Bundle.coverMediaId, is cleared manually. */
-  async deleteAllMediaForUser (userId: string): Promise<Array<{ storageKey: string; thumbnailKey: string | null; sourcePath: string | null }>> {
+  /** Deletes all of a user's media in four queries, and returns the storage
+   *  keys the caller still has to remove. Database cascades take care of
+   *  BundleItem, Document and MediaExtractedMetadata, and null out
+   *  Reminder.mediaId and Bundle.sourceMediaId. Bundle.coverMediaId carries no
+   *  foreign key and is cleared here. */
+  async deleteAllMediaForUser (userId: string): Promise<Array<{ storageKey: string | null; thumbnailKey: string | null; sourcePath: string | null }>> {
     const items = await this.prisma.media.findMany({
       where: { userId },
       select: { storageKey: true, thumbnailKey: true, sourcePath: true },
@@ -571,8 +571,9 @@ export class MediaRepository {
     return items;
   }
 
-  /** Recompute Tag.count from actual Media rows and delete any tags with no remaining media.
-   *  Call this after any bulk delete to fix counts that went stale due to concurrent transactions. */
+  /** Recomputes Tag.count from the Media rows themselves, and deletes a tag no
+   *  row still carries. Run it after a bulk delete, where concurrent
+   *  transactions leave the counts behind. */
   async reconcileTagCounts (userId: string): Promise<void> {
     const rows = await this.prisma.$queryRaw<Array<{ name: string; count: bigint }>>`
       SELECT t.name, COUNT(m.id) AS count
@@ -602,8 +603,8 @@ export class MediaRepository {
   }
 
   /** One keyset page of media rows for the organize worker, with the extracted
-   *  metadata joined in (EXIF/PDF dates live there). Ordered by id so the
-   *  worker can resume from the last id of the previous page. */
+   *  metadata joined in, which is where an EXIF or PDF date is held. Ordered by
+   *  id, so the worker resumes from the last id of the previous page. */
   async listMediaForOrganize (userId: string, afterId: string | null, limit: number) {
     const rows = await this.prisma.media.findMany({
       where: { userId, ...(afterId ? { id: { gt: afterId } } : {}) },
@@ -684,7 +685,6 @@ export class MediaRepository {
       tags: true,
     };
 
-    // When tags are changing and we have a userId, sync Tag counts in a transaction.
     if (data.tags !== undefined && userId !== undefined) {
       return this.prisma.$transaction(async tx => {
         const oldMedia = await tx.media.findUnique({ where: { id }, select: { tags: true } });
@@ -752,6 +752,19 @@ export class MediaRepository {
     await this.prisma.media.update({ where: { id: mediaId }, data: { contentHash: hash } });
   }
 
+  /**
+   * Terminal write for an explicit hash job. Guards on hashState = PENDING —
+   * same rationale as {@link setThumbFailed}/{@link setTextState} — so a late
+   * worker can't overwrite a state stall detection has already resolved.
+   */
+  async setHashState (mediaId: string, state: "READY" | "FAILED"): Promise<boolean> {
+    const result = await this.prisma.media.updateMany({
+      where: { id: mediaId, hashState: "PENDING" },
+      data: { hashState: state },
+    });
+    return result.count > 0;
+  }
+
   /** Persist the resolved file date (EXIF capture → PDF created → fs mtime). */
   async setFileDate (mediaId: string, fileDate: Date): Promise<void> {
     await this.prisma.media.update({ where: { id: mediaId }, data: { fileDate } });
@@ -808,6 +821,22 @@ export class MediaRepository {
     });
   }
 
+  /**
+   * Flip every unhashed READY row back to hashState PENDING with a cleared
+   * dispatch stamp, so the feeder claims them — the dedup scan no longer pushes
+   * hash jobs itself. `hashState <> 'PENDING'` excludes rows already PENDING
+   * (either genuinely unclaimed already, or claimed with a stamp in flight);
+   * clearing the stamp on the latter would let the feeder double-dispatch.
+   * Returns the number of rows reset.
+   */
+  async resetUnhashedForScan (userId: string): Promise<number> {
+    const result = await this.prisma.media.updateMany({
+      where: { userId, contentHash: null, sourceState: "READY", hashState: { not: "PENDING" } },
+      data: { hashState: "PENDING", hashQueuedAt: null },
+    });
+    return result.count;
+  }
+
   async findStorageKey (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
@@ -819,6 +848,14 @@ export class MediaRepository {
     return this.prisma.media.findMany({
       where: { id: { in: ids }, userId },
       select: { id: true, storageKey: true, sourcePath: true, title: true, mimeType: true, filename: true },
+    });
+  }
+
+  /** Just enough to decide which of a freshly-ingested batch are archives. */
+  async findMimeTypesByIds (userId: string, ids: string[]) {
+    return this.prisma.media.findMany({
+      where: { id: { in: ids }, userId },
+      select: { id: true, mimeType: true },
     });
   }
 
@@ -835,7 +872,9 @@ export class MediaRepository {
   async findForTextJob (userId: string, id: string) {
     return this.prisma.media.findFirst({
       where: { id, userId },
-      select: { id: true, storageKey: true, title: true, sourcePath: true, mimeType: true },
+      // textState is selected so the caller can tell a deferred scan (NEEDS_OCR)
+      // from a plain re-run: on the former, "extract text" must force tier 2.
+      select: { id: true, storageKey: true, title: true, sourcePath: true, mimeType: true, textState: true },
     });
   }
 
@@ -845,14 +884,53 @@ export class MediaRepository {
    * doesn't exist or is in an unexpected state (shouldn't happen in practice).
    */
   async setTextStatePending (id: string): Promise<boolean> {
-    // Re-run trigger: allowed from READY or ERROR (and idempotently from PENDING).
-    // NOT allowed if somehow the record ends up in an unknown state — but all three
-    // normal states are listed here, so that case doesn't arise in practice.
     const result = await this.prisma.media.updateMany({
-      where: { id, textState: { in: ["PENDING", "READY", "ERROR"] } },
-      data: { textState: "PENDING" },
+      // NEEDS_OCR included: "Extract text" on a deferred scan is the main way a
+      // user starts tier-2 OCR when ocrMode is onDemand.
+      where: { id, textState: { in: ["PENDING", "READY", "ERROR", "NEEDS_OCR"] } },
+      // Stamped, not cleared: the caller enqueues this one directly (push), so
+      // the feeder must not pick it up a second time.
+      data: { textState: "PENDING", textQueuedAt: new Date() },
     });
     return result.count > 0;
+  }
+
+  /** How many of the user's rows are parked waiting for tier-2 OCR. Backs the
+   *  "Extract all" count — this is the same set the library's
+   *  "Scanned — text not extracted" filter shows. */
+  async countNeedsOcr (userId: string): Promise<number> {
+    return this.prisma.media.count({ where: { userId, textState: "NEEDS_OCR" } });
+  }
+
+  /**
+   * Claim a bounded batch of NEEDS_OCR rows for tier-2 extraction: flip them to
+   * PENDING and hand back what the caller needs to build the jobs.
+   *
+   * Raw SQL because this must be one statement. Prisma's updateMany has no
+   * RETURNING, so the alternative is select-then-update — and in that gap two
+   * concurrent "Extract all" presses (or a press racing the background sweeper)
+   * both claim the same rows and enqueue them twice. `FOR UPDATE SKIP LOCKED`
+   * makes concurrent callers take disjoint batches instead of blocking.
+   *
+   * `textQueuedAt` is stamped in the same statement that flips the state: the
+   * caller enqueues on ocr_queue itself, and a PENDING row with a NULL stamp is
+   * what the feeder claims, so leaving it would re-run tier 1 over the top.
+   */
+  async claimNeedsOcrBatch (userId: string, limit: number) {
+    return this.prisma.$queryRaw<
+      { id: string; storageKey: string | null; sourcePath: string | null; title: string }[]
+    >`
+      UPDATE "Media"
+      SET "textState" = 'PENDING', "textQueuedAt" = NOW()
+      WHERE "id" IN (
+        SELECT "id" FROM "Media"
+        WHERE "userId" = ${userId} AND "textState" = 'NEEDS_OCR'
+        ORDER BY "createdAt" DESC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING "id", "storageKey", "sourcePath", "title"
+    `;
   }
 
   async setLinkedBundle (id: string, bundleId: string) {
@@ -881,6 +959,9 @@ export class MediaRepository {
         thumbState: true,
         thumbError: true,
         textState: true,
+        // PENDING alone can't tell the detail panel whether extraction is
+        // running or still queued — a NULL stamp is the backlog.
+        textQueuedAt: true,
         thumbnailKey: true,
         linkedBundleId: true,
         bundleItems: {
@@ -916,6 +997,18 @@ export class MediaRepository {
     });
   }
 
+  /** A READY thumbnail belonging to another row with the same contentHash — the
+   *  reuse candidate for thumbnailService's copy-not-render path. Covered by
+   *  the existing @@index([userId, contentHash]). */
+  async findReusableThumbnail (userId: string, contentHash: string, excludeId: string): Promise<{ id: string; thumbnailKey: string } | null> {
+    const row = await this.prisma.media.findFirst({
+      where: { userId, contentHash, id: { not: excludeId }, thumbState: "READY", thumbnailKey: { not: null } },
+      select: { id: true, thumbnailKey: true },
+    });
+    if (!row?.thumbnailKey) return null;
+    return { id: row.id, thumbnailKey: row.thumbnailKey };
+  }
+
   /**
    * Atomically mark the thumbnail as ready and store its key.
    * Guards on thumbState = PENDING so a late-arriving worker can't overwrite
@@ -923,8 +1016,6 @@ export class MediaRepository {
    * Returns false if the guard prevented the update.
    */
   async setThumbReady (mediaId: string, thumbnailKey: string): Promise<boolean> {
-    // Guard: only transition from PENDING. Prevents a late-arriving worker from
-    // overwriting a FAILED state with READY (e.g., retry completing after exhaustion).
     const result = await this.prisma.media.updateMany({
       where: { id: mediaId, thumbState: "PENDING" },
       data: { thumbnailKey, thumbState: "READY", thumbError: null },
@@ -932,11 +1023,18 @@ export class MediaRepository {
     return result.count > 0;
   }
 
-  /** Clear thumbnailKey and reset thumbState to PENDING (used to re-trigger thumbnail generation). */
+  /**
+   * Clear thumbnailKey and reset thumbState to PENDING.
+   *
+   * Reset for a *push* re-run: `regenerateThumbnail` adds the job itself, so the
+   * dispatch stamp is set here rather than cleared. Clearing it would hand the
+   * same row to the feeder as well, and `regenerateThumbnail` uses a timestamped
+   * jobId — so BullMQ's dedup would not catch the second job.
+   */
   async resetThumbState (mediaId: string): Promise<boolean> {
     const result = await this.prisma.media.updateMany({
       where: { id: mediaId },
-      data: { thumbnailKey: null, thumbState: "PENDING", thumbError: null },
+      data: { thumbnailKey: null, thumbState: "PENDING", thumbError: null, thumbQueuedAt: new Date() },
     });
     return result.count > 0;
   }
@@ -946,7 +1044,6 @@ export class MediaRepository {
    * Guards on thumbState = PENDING to prevent retrograde READY → FAILED writes.
    */
   async setThumbFailed (mediaId: string, error: string): Promise<boolean> {
-    // Guard: only transition from PENDING. Prevents retrograde READY → FAILED writes.
     const result = await this.prisma.media.updateMany({
       where: { id: mediaId, thumbState: "PENDING" },
       data: { thumbState: "FAILED", thumbError: error },
@@ -957,11 +1054,28 @@ export class MediaRepository {
   async findForOcr (mediaId: string) {
     return this.prisma.media.findUnique({
       where: { id: mediaId },
-      select: { id: true, storageKey: true, sourcePath: true, mimeType: true, textState: true, sizeBytes: true },
+      select: { id: true, userId: true, storageKey: true, sourcePath: true, mimeType: true, textState: true, sizeBytes: true, contentHash: true },
     });
   }
 
-  /** Read the current textState for a media item (used to check for cancellation before processing). */
+  /** A READY, byte-identical row's extracted text — the reuse candidate for
+   *  ocrProcessingService's copy-not-reprocess path. Covered by the existing
+   *  @@index([userId, contentHash]). */
+  async findReusableDocument (
+    userId: string,
+    contentHash: string,
+    excludeId: string,
+  ): Promise<{ id: string; rawText: string; pages: Prisma.JsonValue; textSource: TextSource | null } | null> {
+    const row = await this.prisma.media.findFirst({
+      where: { userId, contentHash, id: { not: excludeId }, textState: "READY" },
+      select: { id: true, document: { select: { rawText: true, pages: true, textSource: true } } },
+    });
+    if (!row?.document) return null;
+    return { id: row.id, rawText: row.document.rawText, pages: row.document.pages, textSource: row.document.textSource };
+  }
+
+  /** Returns an item's current textState, which a worker reads to notice a
+   *  cancellation before it starts. */
   async getTextState (mediaId: string) {
     const media = await this.prisma.media.findUnique({
       where: { id: mediaId },
@@ -970,32 +1084,269 @@ export class MediaRepository {
     return media?.textState ?? null;
   }
 
-  async setTextState (mediaId: string, state: "PENDING" | "READY" | "ERROR" | "UNSUPPORTED"): Promise<boolean> {
-    // Guard: worker-initiated writes (including PDF intermediate PENDING→PENDING re-queues)
-    // are only allowed from PENDING. This prevents a late worker from overwriting a cancel
-    // or stall-detection ERROR with READY.
+  async setTextState (mediaId: string, state: "PENDING" | "READY" | "ERROR" | "UNSUPPORTED" | "NEEDS_OCR"): Promise<boolean> {
+    // Guard: worker-initiated writes are only allowed from a state that means
+    // "extraction is legitimately outstanding" — PENDING, or NEEDS_OCR for a
+    // deferred OCR job finally running. This prevents a late worker from
+    // overwriting a cancel or stall-detection ERROR with READY, while still
+    // letting tier-2 OCR complete a row it parked at NEEDS_OCR itself.
     const result = await this.prisma.media.updateMany({
-      where: { id: mediaId, textState: "PENDING" },
+      where: { id: mediaId, textState: { in: ["PENDING", "NEEDS_OCR"] } },
       data: { textState: state },
     });
     return result.count > 0;
   }
 
-  // ---------------------------------------------------------------------------
-  // Stall detection helpers
-  // ---------------------------------------------------------------------------
+  // Stall detection.
 
-  /** Returns media whose thumbState or textState has been stuck at PENDING since before staleBefore. */
+  /**
+   * Rows whose dispatched derivative job never reported back.
+   *
+   * Keyed on the dispatch stamp, not `updatedAt`. Under the pull model most of a
+   * large library sits at PENDING with a NULL stamp for hours or days by design
+   * — it is waiting for the feeder, not stalled — and an `updatedAt` clock would
+   * mark the entire backlog FAILED/ERROR fifteen minutes into the first index.
+   * `updatedAt` was the wrong signal even before the feeder existed: retagging an
+   * item bumps it and silently reset the stall clock on a stuck job.
+   */
   async findStalledMedia (staleBefore: Date) {
     return this.prisma.media.findMany({
       where: {
         OR: [
-          { thumbState: "PENDING", updatedAt: { lt: staleBefore } },
-          { textState: "PENDING", updatedAt: { lt: staleBefore } },
+          { thumbState: "PENDING", thumbQueuedAt: { not: null, lt: staleBefore } },
+          { textState: "PENDING", textQueuedAt: { not: null, lt: staleBefore } },
+          { hashState: "PENDING", hashQueuedAt: { not: null, lt: staleBefore } },
         ],
       },
-      select: { id: true, thumbState: true, textState: true },
+      select: { id: true, thumbState: true, textState: true, hashState: true },
     });
+  }
+
+  /**
+   * The feeder's eligibility test, as one fragment.
+   *
+   * Every claim and anything that has to agree with one — the by-id promotions
+   * and {@link countTextBacklogAhead}'s queue position — reads this same
+   * definition. A second copy of the list drifts the first time either is
+   * edited: spelling it out inline in the by-id claims is what let promotion
+   * walk rows past the DEDUP_STRICT_ORDER barrier while the position count
+   * still honoured it.
+   *
+   * `sourceState = READY` excludes an upload whose bytes have not finished writing yet;
+   * dispatching one burns every attempt on SOURCE_NOT_READY and files it FAILED.
+   * `missingSince IS NULL` excludes a tombstoned source: nothing on disk to read.
+   */
+  private derivativeEligible (
+    column: "thumbQueuedAt" | "textQueuedAt" | "hashQueuedAt",
+    stateColumn: "thumbState" | "textState" | "hashState",
+  ): Prisma.Sql {
+    // Column names are from the closed unions above, never from caller input.
+    const col = Prisma.raw(`"${column}"`);
+    const stateCol = Prisma.raw(`"${stateColumn}"`);
+    // DEDUP_STRICT_ORDER: thumb/text wait for their own row's hash job first,
+    // so G2's reuse check has a chance to see a READY twin instead of racing
+    // it — never applied to the hash claim itself. `<> 'PENDING'`, not
+    // `= 'READY'`: a hash that failed still lets the derivative run, it only
+    // loses dedup, and it keeps the flag safe to have set inconsistently
+    // between worker and API (see lib/config/dedup.ts).
+    const hashGate = isDedupStrictOrder() && stateColumn !== "hashState"
+      ? Prisma.sql`AND "hashState" <> 'PENDING'`
+      : Prisma.empty;
+    return Prisma.sql`
+      ${stateCol} = 'PENDING' AND ${col} IS NULL
+      AND "sourceState" = 'READY'
+      AND "missingSince" IS NULL
+      ${hashGate}
+    `;
+  }
+
+  /**
+   * Claim a bounded batch of rows waiting for a derivative and mark them
+   * dispatched. Returns what the feeder needs to build the jobs.
+   *
+   * One statement, for the same reason as {@link claimNeedsOcrBatch}: a
+   * select-then-update would let two feeders (or a feeder racing its own next
+   * tick) claim the same rows. `FOR UPDATE SKIP LOCKED` makes concurrent
+   * claimers take disjoint batches instead of blocking on each other.
+   *
+   * Newest first, matching the library's default sort — the part of the library
+   * the user is looking at fills in before the tail. The `id` tiebreak
+   * makes that a total order: createMany stamps a whole index batch with one
+   * `createdAt`, and {@link countTextBacklogAhead} has to reproduce the order.
+   *
+   * There is deliberately no stale-reclaim window here. A row whose stamp is set
+   * but whose job died is recovered by stall detection, which marks it terminal
+   * and lets the user re-run it; adding a second recovery path that silently
+   * re-dispatches the same row would mean two mechanisms racing over one row.
+   */
+  private async claimDerivativeBatch (column: "thumbQueuedAt" | "textQueuedAt" | "hashQueuedAt", stateColumn: "thumbState" | "textState" | "hashState", limit: number) {
+    if (limit <= 0) return [];
+    const col = Prisma.raw(`"${column}"`);
+    return this.prisma.$queryRaw<
+      { id: string; userId: string; storageKey: string | null; sourcePath: string | null }[]
+    >`
+      UPDATE "Media"
+      SET ${col} = NOW()
+      WHERE "id" IN (
+        SELECT "id" FROM "Media"
+        WHERE ${this.derivativeEligible(column, stateColumn)}
+        ORDER BY "createdAt" DESC, "id" DESC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING "id", "userId", "storageKey", "sourcePath"
+    `;
+  }
+
+  /**
+   * Where a row sits in the tier-1 text backlog, 1-indexed, and how many rows
+   * are in it. Null unless the id is the caller's and is itself waiting.
+   *
+   * "Ahead" is the count of eligible rows the feeder would claim first, under
+   * the same `(createdAt DESC, id DESC)` order {@link claimDerivativeBatch}
+   * uses. Comparing `createdAt` alone reports every row in an index batch as
+   * position 1 — createMany gives them all one timestamp.
+   *
+   * The count is not scoped by user because the feeder's claim isn't either — a
+   * position that ignored other users' rows would under-report. Scoping is on
+   * the target lookup, so someone else's id answers nothing.
+   */
+  async countTextBacklogAhead (userId: string, mediaId: string): Promise<{ position: number; total: number } | null> {
+    const eligible = this.derivativeEligible("textQueuedAt", "textState");
+    const rows = await this.prisma.$queryRaw<{ ahead: bigint; total: bigint; self: bigint; mine: bigint }[]>`
+      WITH target AS (
+        SELECT "createdAt" AS ts FROM "Media" WHERE "id" = ${mediaId} AND "userId" = ${userId}
+      )
+      SELECT
+        count(*) FILTER (
+          WHERE ("createdAt", "id") > ((SELECT ts FROM target), ${mediaId})
+        ) AS ahead,
+        count(*) FILTER (WHERE "id" = ${mediaId}) AS self,
+        count(*) AS total,
+        (SELECT count(*) FROM target) AS mine
+      FROM "Media"
+      WHERE ${eligible}
+    `;
+    const row = rows[0];
+    // `mine` 0 would otherwise leave `ts` NULL, making every comparison NULL and
+    // answering "position 1" for a row belonging to someone else. `self` 0 means
+    // it is dispatched or finished: no position, only a count it isn't part of.
+    if (!row || Number(row.mine) === 0 || Number(row.self) === 0) return null;
+    return { position: Number(row.ahead) + 1, total: Number(row.total) };
+  }
+
+  /**
+   * Claim named rows for tier-1 text extraction. Text-column twin of
+   * {@link claimThumbByIds}; same guards, same "fewer rows than asked for is
+   * normal" contract.
+   */
+  async claimTextByIds (userId: string, mediaIds: string[]) {
+    if (mediaIds.length === 0) return [];
+    return this.prisma.$queryRaw<
+      { id: string; userId: string; storageKey: string | null; sourcePath: string | null }[]
+    >`
+      UPDATE "Media"
+      SET "textQueuedAt" = NOW()
+      WHERE "id" IN (
+        SELECT "id" FROM "Media"
+        WHERE "id" = ANY(${mediaIds}::text[])
+          AND "userId" = ${userId}
+          AND ${this.derivativeEligible("textQueuedAt", "textState")}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING "id", "userId", "storageKey", "sourcePath"
+    `;
+  }
+
+  /** Claim rows waiting for a thumbnail. See {@link claimDerivativeBatch}. */
+  claimThumbBatch (limit: number) {
+    return this.claimDerivativeBatch("thumbQueuedAt", "thumbState", limit);
+  }
+
+  /** Claim rows waiting for tier-1 text extraction. See {@link claimDerivativeBatch}. */
+  claimTextBatch (limit: number) {
+    return this.claimDerivativeBatch("textQueuedAt", "textState", limit);
+  }
+
+  /** Claim rows waiting for a stream-hash job. See {@link claimDerivativeBatch}. */
+  claimHashBatch (limit: number) {
+    return this.claimDerivativeBatch("hashQueuedAt", "hashState", limit);
+  }
+
+  /**
+   * Claim named rows for thumbnailing, ignoring backlog order entirely.
+   *
+   * This is the viewport path: the grid says "these forty items are on screen",
+   * and they jump the queue however many tens of thousands are ahead of them.
+   * Order is all it skips: the guards are {@link derivativeEligible}, the same
+   * fragment {@link claimDerivativeBatch} uses, so promoting an id that is
+   * already dispatched, already READY, not the caller's, or (under
+   * DEDUP_STRICT_ORDER) still waiting on its own hash simply returns nothing.
+   * That "returns fewer rows than asked for" case is the normal one, not an
+   * error: most of a viewport is usually already done.
+   *
+   * Scoped by userId because unlike the feeder's own claim this one takes ids
+   * from an HTTP request.
+   */
+  async claimThumbByIds (userId: string, mediaIds: string[]) {
+    if (mediaIds.length === 0) return [];
+    return this.prisma.$queryRaw<
+      { id: string; userId: string; storageKey: string | null; sourcePath: string | null }[]
+    >`
+      UPDATE "Media"
+      SET "thumbQueuedAt" = NOW()
+      WHERE "id" IN (
+        SELECT "id" FROM "Media"
+        WHERE "id" = ANY(${mediaIds}::text[])
+          AND "userId" = ${userId}
+          AND ${this.derivativeEligible("thumbQueuedAt", "thumbState")}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING "id", "userId", "storageKey", "sourcePath"
+    `;
+  }
+
+  /**
+   * Undo a claim. Called when the enqueue that followed it threw, so the rows go
+   * back to "waiting" instead of sitting dispatched-with-no-job until stall
+   * detection gives up on them fifteen minutes later.
+   */
+  async releaseDerivativeClaim (kind: "thumb" | "text" | "hash", mediaIds: string[]): Promise<void> {
+    if (mediaIds.length === 0) return;
+    await this.prisma.media.updateMany({
+      where: { id: { in: mediaIds } },
+      data: kind === "thumb" ? { thumbQueuedAt: null } : kind === "text" ? { textQueuedAt: null } : { hashQueuedAt: null },
+    });
+  }
+
+  /**
+   * Per-state counts for all three derivatives, scoped to one user — the raw
+   * material for the backlog strip's progress readout (see
+   * services/media/derivativeProgress.ts). Redis only ever holds the working
+   * set now, so these counts (not queue depth) are the real backlog.
+   */
+  async countDerivativeProgress (userId: string): Promise<DerivativeProgressCounts> {
+    const [thumbRows, textRows, hashRows] = await Promise.all([
+      this.prisma.media.groupBy({ by: ["thumbState"], where: { userId }, _count: true }),
+      this.prisma.media.groupBy({ by: ["textState"], where: { userId }, _count: true }),
+      this.prisma.media.groupBy({ by: ["hashState"], where: { userId }, _count: true }),
+    ]);
+    const thumbCount = (state: string) => thumbRows.find(r => r.thumbState === state)?._count ?? 0;
+    const textCount = (state: string) => textRows.find(r => r.textState === state)?._count ?? 0;
+    const hashCount = (state: string) => hashRows.find(r => r.hashState === state)?._count ?? 0;
+    return {
+      thumb: {
+        pending: thumbCount("PENDING"), ready: thumbCount("READY"),
+        failed: thumbCount("FAILED"), unsupported: thumbCount("UNSUPPORTED"),
+      },
+      text: {
+        pending: textCount("PENDING"), ready: textCount("READY"), needsOcr: textCount("NEEDS_OCR"),
+        error: textCount("ERROR"), unsupported: textCount("UNSUPPORTED"),
+      },
+      hash: {
+        pending: hashCount("PENDING"), ready: hashCount("READY"), unsupported: hashCount("UNSUPPORTED"),
+      },
+    };
   }
 
   /** Marks thumbState PENDING → FAILED for a batch of media ids. Returns the number updated. */
@@ -1012,6 +1363,15 @@ export class MediaRepository {
     const result = await this.prisma.media.updateMany({
       where: { id: { in: mediaIds }, textState: "PENDING" },
       data: { textState: "ERROR" },
+    });
+    return result.count;
+  }
+
+  /** Marks hashState PENDING → FAILED for a batch of media ids. Returns the number updated. */
+  async markHashStalled (mediaIds: string[]): Promise<number> {
+    const result = await this.prisma.media.updateMany({
+      where: { id: { in: mediaIds }, hashState: "PENDING" },
+      data: { hashState: "FAILED" },
     });
     return result.count;
   }
@@ -1051,7 +1411,8 @@ export class MediaRepository {
   }
 
   /** The Media id for an in-place item at this exact source path, or null. Used
-   *  by the live watcher to resolve an `unlink` event to the row to delete. */
+   *  by the live watcher to resolve an `unlink` event to the row to delete, and
+   *  by ingest to read back an id that the watcher may have created first. */
   async findIdBySourcePath (userId: string, sourcePath: string): Promise<string | null> {
     const row = await this.prisma.media.findFirst({
       where: { userId, sourcePath },
@@ -1090,17 +1451,27 @@ export class MediaRepository {
     };
   }
 
+  /**
+   * `sourcePath` sits inside directory `prefix` — shared so the two prefix
+   * queries below cannot drift. Prisma's `startsWith` is unusable here: it
+   * compiles to `LIKE 'E:\root\%'` leaving `\`, `%` and `_` unescaped, and
+   * Postgres reads backslash as LIKE's escape character, so a Windows prefix
+   * matches nothing. `starts_with()` has no pattern syntax to escape. The
+   * trailing separator keeps `/a/b` off a sibling `/a/bc`; either one counts,
+   * so a POSIX prefix is not handed a backslash on Windows.
+   */
+  private sourcePathUnder (prefix: string): Prisma.Sql {
+    const withSep = /[\\/]$/.test(prefix) ? prefix : prefix + path.sep;
+    return Prisma.sql`starts_with("sourcePath", ${withSep})`;
+  }
+
   /** Media ids for in-place items whose source path sits under `prefix` (a
-   *  removed directory). The trailing separator prevents `/a/b` from matching
-   *  a sibling `/a/bc`. Uses the OS separator so it matches the backslash paths
-   *  stored on Windows (path.join output), not just POSIX `/`. Used by the
-   *  watcher's `unlinkDir` handler. */
+   *  removed directory). Used by the watcher's `unlinkDir` handler. */
   async findIdsBySourcePathPrefix (userId: string, prefix: string): Promise<string[]> {
-    const withSep = prefix.endsWith(path.sep) ? prefix : prefix + path.sep;
-    const rows = await this.prisma.media.findMany({
-      where: { userId, sourcePath: { startsWith: withSep } },
-      select: { id: true },
-    });
+    const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "Media"
+      WHERE "userId" = ${userId} AND ${this.sourcePathUnder(prefix)}
+    `;
     return rows.map(r => r.id);
   }
 
@@ -1195,23 +1566,23 @@ export class MediaRepository {
 
   /**
    * Every in-place row whose source sits under `root` — the library's side of
-   * the reconcile diff. The root itself is included (a root is a directory, so
-   * appending the separator is what the prefix means), and the trailing
-   * separator stops `/a/b` from also matching a sibling `/a/bc`. Uses the OS
-   * separator so it matches the backslash paths stored on Windows.
+   * the reconcile diff. A root is a directory, so everything below it is in
+   * scope; see {@link sourcePathUnder} for why this cannot use the ORM.
    */
   async listReconcileEntries (userId: string, root: string): Promise<ReconcileEntry[]> {
-    const withSep = root.endsWith(path.sep) ? root : root + path.sep;
-    const rows = await this.prisma.media.findMany({
-      where: { userId, sourcePath: { startsWith: withSep } },
-      select: {
-        id: true, sourcePath: true, mimeType: true, storageKey: true,
-        sizeBytes: true, sourceMtimeMs: true, fileDate: true, missingSince: true,
-      },
-    });
+    const rows = await this.prisma.$queryRaw<Array<{
+      id: string; sourcePath: string; mimeType: string; storageKey: string | null;
+      sizeBytes: number; sourceMtimeMs: number | null;
+      fileDate: Date | null; missingSince: Date | null;
+    }>>`
+      SELECT "id", "sourcePath", "mimeType", "storageKey", "sizeBytes",
+             "sourceMtimeMs", "fileDate", "missingSince"
+      FROM "Media"
+      WHERE "userId" = ${userId} AND ${this.sourcePathUnder(root)}
+    `;
     return rows.map(r => ({
       id: r.id,
-      sourcePath: r.sourcePath!,
+      sourcePath: r.sourcePath,
       mimeType: r.mimeType,
       storageKey: r.storageKey,
       sizeBytes: r.sizeBytes,
@@ -1240,6 +1611,10 @@ export class MediaRepository {
       mtimeMs: number | null;
       resetThumb: boolean;
       resetText: boolean;
+      /** Only for rows the thumb worker won't rehash inline (non-renderable or
+       *  too-large) — a renderable row stays UNSUPPORTED and gets its hash back
+       *  as a side effect of resetThumb's re-render, no separate job needed. */
+      resetHash: boolean;
       /** Only set when the old fileDate was still the untouched mtime — never
        *  clobbers an EXIF/PDF date the thumb worker extracted. */
       fileDate?: Date;
@@ -1253,8 +1628,13 @@ export class MediaRepository {
         ...(data.fileDate !== undefined ? { fileDate: data.fileDate } : {}),
         missingSince: null,
         contentHash: null,
-        ...(data.resetThumb ? { thumbnailKey: null, thumbState: "PENDING" as const, thumbError: null } : {}),
-        ...(data.resetText ? { textState: "PENDING" as const } : {}),
+        // Back to PENDING with the stamp cleared: reconcile does not enqueue
+        // anything itself, so the feeder has to be able to see these again.
+        // Leaving the stamp set would strand the row — never re-dispatched, and
+        // marked FAILED by stall detection fifteen minutes later.
+        ...(data.resetThumb ? { thumbnailKey: null, thumbState: "PENDING" as const, thumbError: null, thumbQueuedAt: null } : {}),
+        ...(data.resetText ? { textState: "PENDING" as const, textQueuedAt: null } : {}),
+        ...(data.resetHash ? { hashState: "PENDING" as const, hashQueuedAt: null } : {}),
       },
     });
   }
@@ -1268,7 +1648,7 @@ export class MediaRepository {
    * incomplete, because the row predates the `sourceMtimeMs` column or the
    * `fileDate` one. Routing this through `applySourceChanged` would null
    * `contentHash` (correct only when the bytes really changed, where a re-hash
-   * always follows) and silently cost the user their duplicate detection.
+   * always follows) and quietly lose the user their duplicate detection.
    *
    * `fileDate` is guarded on `null` in the WHERE, mirroring `backfillFileDates`,
    * so a date the thumb worker upgraded from EXIF/PDF metadata is never
@@ -1347,6 +1727,17 @@ export class MediaRepository {
     });
   }
 
+  /** Mark rows the thumb worker will hash inline — "no job needed", not "can't
+   *  be hashed" (see the hashState column comment in schema.prisma). Guards on
+   *  PENDING like the sibling `mark*Unsupported` methods. */
+  async markHashUnsupported (mediaIds: string[]): Promise<void> {
+    if (mediaIds.length === 0) return;
+    await this.prisma.media.updateMany({
+      where: { id: { in: mediaIds }, hashState: "PENDING" },
+      data: { hashState: "UNSUPPORTED" },
+    });
+  }
+
   /**
    * Return the most-used tags for a user, ordered by frequency descending then
    * alphabetically. Queries the denormalized Tag table directly — O(limit) instead
@@ -1367,6 +1758,32 @@ export class MediaRepository {
       tags: rows.map(r => ({ tag: r.name, count: r.count, color: r.color ?? null, origin: r.origin })),
       total,
     };
+  }
+
+  /**
+   * Every tag under the given namespaces, ignoring the paged tag list entirely.
+   *
+   * The sidebar's facet groups derive from these. Slicing them out of
+   * {@link listTopTags}' `count desc` page instead means a `year:2019` with four
+   * items sits hundreds of rows down and the whole Year group is missing until
+   * the tag list has been scrolled that far.
+   *
+   * Capped so a pathological `folder:` vocabulary can't turn the sidebar into a
+   * table scan. Prisma's `startsWith` escaping problem (see `sourcePathUnder`)
+   * doesn't apply — these prefixes are our own constants, not user input.
+   */
+  async listFacetTags (userId: string, namespaces: string[]) {
+    if (namespaces.length === 0) return [];
+    const rows = await this.prisma.tag.findMany({
+      where: {
+        userId,
+        OR: namespaces.map(ns => ({ name: { startsWith: `${ns}:` } })),
+      },
+      orderBy: [{ count: 'desc' }, { name: 'asc' }],
+      take: 500,
+      select: { name: true, count: true, color: true, origin: true },
+    });
+    return rows.map(r => ({ tag: r.name, count: r.count, color: r.color ?? null, origin: r.origin }));
   }
 
   /**

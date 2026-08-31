@@ -50,7 +50,7 @@ function estimateHeightFromText(text: string): number {
 function estimateHeight(segment: TextSegment, hasMatches: boolean): number {
   // When a segment has matches we render the original text (offset accuracy).
   // When no matches we render collapsed text. Use the same text for estimation
-  // so the row height matches what is actually rendered.
+  // so the row height matches what is rendered.
   const text = hasMatches
     ? segment.text ?? ''
     : collapseWhitespace(segment.text ?? '')

@@ -1,10 +1,14 @@
-// File: apps/api/src/routes/profile.ts
+/**
+ * Serves the account details a user sees and edits on their profile page.
+ */
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { requireAuth } from "../utils/authGuard.js";
 import { ProfileRepository } from "../repositories/profileRepository.js";
 import { ProfileService } from "../services/profileService.js";
 
+// Every field is optional and may be set to null, so a request updates only
+// what it names. An unrecognized field is rejected rather than ignored.
 const profileSchema = z
   .object({
     name: z.string().trim().max(200).optional().nullable(),

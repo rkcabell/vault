@@ -6,9 +6,14 @@ import { extractPdfMetadata } from "./pdf/extractPdfMetadata.js";
 import { extractOfficeMetadata } from "./office/extractOfficeMetadata.js";
 
 /**
- * Extract image/PDF/office metadata from an already-downloaded buffer.
- * Does not touch S3 and does not include text stats (those are derived from
- * the Document record in the read path).
+ * Chooses the extractor that matches a file's type, and merges what it returns
+ * into one metadata record.
+ */
+
+/**
+ * Extracts image, PDF or Office metadata from a buffer already in memory. Reads
+ * nothing, and returns no text statistics: those come from the stored document
+ * record instead.
  */
 export async function extractMetadataFromBuffer(
   buffer: Buffer,
@@ -28,6 +33,10 @@ export async function extractMetadataFromBuffer(
   return Object.keys(metadata).length > 0 ? metadata : null;
 }
 
+/**
+ * Reads the file from storage and returns everything known about it, including
+ * the text statistics. Null when nothing could be extracted.
+ */
 export async function extractMediaMetadata (args: ExtractArgs): Promise<MediaMetadata | null> {
   const { media, document, storage, bucket, logger } = args;
   const metadata: MediaMetadata = {};

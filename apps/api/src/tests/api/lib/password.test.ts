@@ -11,7 +11,7 @@ test("validatePassword: accepts a reasonable password", () => {
   assert.deepEqual(result, { ok: true });
 });
 
-test("validatePassword: accepts exactly the minimum length", () => {
+test("validatePassword: accepts the minimum length", () => {
   assert.equal(validatePassword("a".repeat(PASSWORD_MIN_LENGTH - 1) + "b").ok, true);
 });
 

@@ -54,7 +54,7 @@ test("LOG_FORMATTERS handles empty object", () => {
 
 // ─── buildTransportTargets ────────────────────────────────────────────────────
 
-test("buildTransportTargets returns exactly two targets", () => {
+test("buildTransportTargets returns two targets", () => {
   assert.equal(buildTransportTargets("info").length, 2);
 });
 

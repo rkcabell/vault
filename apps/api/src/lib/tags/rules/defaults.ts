@@ -1,15 +1,13 @@
 import type { TagRuleSource } from "@vault/types";
 
 /**
- * The rule set every user starts with. Seeded for new users at registration
- * (tagRuleRepository.seedDefaults) and for existing users by the
- * 20260719000000_tag_rules migration — keep the two in sync.
+ * The tagging rules a new account starts with, giving every item a file type,
+ * a year, a month and a folder tag.
  *
- * These deliver the deterministic retrieval axes from
- * docs/plans/search-interface.md Stage 1: `type:` (MIME), `year:`/`month:`
- * (EXIF capturedAt → PDF createdAt → mtime), and `folder:` (sourcePath
- * segments under the index roots). The `source:upload|index|unpacked` axis is
- * built into evaluateRules and needs no rule row.
+ * `tagRuleRepository.seedDefaults` writes these rows for a new user.
+ *
+ * The `source:` axis, which records how an item entered the library, has no
+ * rule here because evaluateRules produces it directly.
  */
 export const DEFAULT_TAG_RULES: ReadonlyArray<{
   name: string;

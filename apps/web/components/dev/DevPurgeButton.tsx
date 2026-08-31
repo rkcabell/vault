@@ -12,7 +12,7 @@ type Props = {
 
 // Delete all media for this account via the shared delete-progress context so
 // the LibraryUpdateBanner, reconcile re-fetch, and sidebar tag refresh all fire
-// exactly as they do for a normal bulk delete.
+// as they do for a normal bulk delete.
 // For development/testing purposes only, not exposed in production builds.
 export default function DevPurgeButton({ onSuccess, onError }: Props) {
   const { start } = useDeleteProgress();

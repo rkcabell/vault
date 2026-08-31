@@ -1,10 +1,14 @@
 import { extOf } from "./extensions.js";
 
 /**
- * Map a file extension to a MIME type. Used by in-place indexing, where files
- * are discovered on disk and the browser's `File.type` is unavailable. The set
- * mirrors the extensions enumerated in `lib/tags/mimeTypeTag.ts` so indexed and
- * uploaded items classify, tag, and OCR identically.
+ * Works out a file's type from its name. In-place indexing finds files on disk,
+ * where the browser's `File.type` is not available.
+ */
+
+/**
+ * The extensions Vault recognises. The set mirrors the one in
+ * `lib/tags/mimeTypeTag.ts`, so a file is classified and tagged the same way
+ * however it reached the library.
  */
 export const EXT_MIME: Record<string, string> = {
   // Images
@@ -58,8 +62,8 @@ export const EXT_MIME: Record<string, string> = {
 };
 
 /**
- * Infer a MIME type from a filename's extension, falling back to
- * `application/octet-stream` for unknown/extension-less names.
+ * Returns the MIME type for a filename's extension. An unknown extension, or
+ * none at all, gives `application/octet-stream`.
  */
 export function mimeFromExtension (filename: string): string {
   return EXT_MIME[extOf(filename)] ?? "application/octet-stream";

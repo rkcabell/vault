@@ -1,0 +1,20 @@
+# TLS opt-in overlay. Base compose alone stays plain HTTP with zero config;
+# this file requires certs to already exist or nginx fails to start.
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.tls.yml up -d
+#
+# See docs/security/TLS.md for the three supported cert setups.
+services:
+  nginx:
+    volumes:
+      # Same container path as the base file's default.conf mount, so this
+      # source replaces it instead of adding a second copy.
+      - ../../infra/docker/nginx.tls.conf:/etc/nginx/conf.d/default.conf:ro
+      # fullchain.pem + privkey.pem live here. Point this at wherever your
+      # certs are if not the repo-root certs/ folder.
+      - ../../certs:/etc/nginx/certs:ro
+      # Swap to nginx-snippets/hsts-on.conf once a CA-trusted cert is in
+      # place (docs/security/TLS.md) — never for a self-signed LAN cert.
+      - ../../infra/docker/nginx-snippets/hsts-off.conf:/etc/nginx/snippets/hsts.conf:ro
+    ports:
+      - "443:443"

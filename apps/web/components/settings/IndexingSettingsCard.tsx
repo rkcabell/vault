@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { usePreferences } from "@/hooks/usePreferences";
+import { useAppInit } from "@/hooks/useAppInit";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { CheckCircle2, XCircle, FolderPlus, Loader2, Save, X } from "lucide-react";
@@ -47,7 +48,8 @@ function normalizeExt (value: string): string {
  * and take effect immediately — no restart required.
  */
 export function IndexingSettingsCard () {
-  const { prefs, updatePreferences, isLoaded: prefsLoaded } = usePreferences();
+  const { prefs, updatePreferences } = usePreferences();
+  const { isLoaded: initSettled } = useAppInit();
   const [config, setConfig] = useState<IndexConfig | null>(null);
   const [skipInfo, setSkipInfo] = useState<SkipInfo | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -55,6 +57,12 @@ export function IndexingSettingsCard () {
   const [blacklist, setBlacklist] = useState<string[]>([]);
   const [excludeFolders, setExcludeFolders] = useState<string[]>([]);
   const [skipNonContent, setSkipNonContent] = useState(true);
+  // Staged like everything else in this card, against a baseline copy rather
+  // than the live preferences store. The store is shared: a second tab or the
+  // late /api/init seed writing to it would move the comparison value onto the
+  // staged value, and Save goes dark with the toggle unsaved.
+  const [ignoreHidden, setIgnoreHidden] = useState<boolean | null>(null);
+  const [savedIgnoreHidden, setSavedIgnoreHidden] = useState<boolean | null>(null);
   const [extInput, setExtInput] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [excludePickerOpen, setExcludePickerOpen] = useState(false);
@@ -77,6 +85,15 @@ export function IndexingSettingsCard () {
       .catch(() => !cancelled && setLoadError(true));
     return () => { cancelled = true; };
   }, []);
+
+  // Keyed on /api/init settling, not on the preferences store's own isLoaded:
+  // that flips as soon as localStorage is read, so seeding from it captures a
+  // guess and never re-seeds when the server's value lands a moment later.
+  useEffect(() => {
+    if (!initSettled) return;
+    setSavedIgnoreHidden(prev => (prev === null ? prefs.ignoreHiddenFiles : prev));
+    setIgnoreHidden(prev => (prev === null ? prefs.ignoreHiddenFiles : prev));
+  }, [initSettled, prefs.ignoreHiddenFiles]);
 
   const addExt = () => {
     const ext = normalizeExt(extInput);
@@ -120,6 +137,12 @@ export function IndexingSettingsCard () {
   const handleSave = useCallback(async () => {
     setSaving(true);
     setSaveResult(null);
+    // Preferences write through their own debounced PATCH, so this is fire-and-
+    // forget rather than part of the index-config round trip below.
+    if (ignoreHidden !== null && ignoreHidden !== savedIgnoreHidden) {
+      updatePreferences({ ignoreHiddenFiles: ignoreHidden });
+      setSavedIgnoreHidden(ignoreHidden);
+    }
     try {
       const res = await apiFetch("/api/server/index-config", {
         method: "PATCH",
@@ -133,7 +156,15 @@ export function IndexingSettingsCard () {
         setBlacklist(body.blacklist ?? []);
         setExcludeFolders(body.excludeFolders ?? []);
         setSkipNonContent(body.skipNonContent ?? true);
-        setSaveResult({ ok: true, message: "Saved." });
+        // Removing the root that held it leaves the send-files folder outside
+        // the allow-list, so the server clears it. Silence here would read as
+        // "sending still works" until the next send failed.
+        setSaveResult({
+          ok: true,
+          message: body.ingestFolderCleared
+            ? "Saved. The folder for files sent to Vault was inside a folder you removed, so sending is switched off until you choose another on Add files."
+            : "Saved.",
+        });
       } else {
         setSaveResult({ ok: false, message: body?.message ?? `Failed to save (${res.status}).` });
       }
@@ -142,14 +173,15 @@ export function IndexingSettingsCard () {
     } finally {
       setSaving(false);
     }
-  }, [roots, blacklist, excludeFolders, skipNonContent]);
+  }, [roots, blacklist, excludeFolders, skipNonContent, ignoreHidden, savedIgnoreHidden, updatePreferences]);
 
   const isDirty =
-    config !== null &&
-    (JSON.stringify(roots) !== JSON.stringify(config.roots) ||
-      JSON.stringify(blacklist) !== JSON.stringify(config.blacklist) ||
-      JSON.stringify(excludeFolders) !== JSON.stringify(config.excludeFolders) ||
-      skipNonContent !== config.skipNonContent);
+    (config !== null &&
+      (JSON.stringify(roots) !== JSON.stringify(config.roots) ||
+        JSON.stringify(blacklist) !== JSON.stringify(config.blacklist) ||
+        JSON.stringify(excludeFolders) !== JSON.stringify(config.excludeFolders) ||
+        skipNonContent !== config.skipNonContent)) ||
+    (ignoreHidden !== null && ignoreHidden !== savedIgnoreHidden);
 
   // No allowed folders = indexing is off; the dependent options have no effect
   // until at least one folder is whitelisted, so present them disabled.
@@ -292,11 +324,9 @@ export function IndexingSettingsCard () {
               className="mt-0.5 h-4 w-4 shrink-0"
             />
             <span className="space-y-0.5">
-              <span className="block text-sm font-medium">Skip build &amp; dependency files</span>
+              <span className="block text-sm font-medium">Skip build &amp; dependency files (recommended)</span>
               <span className="block text-xs text-muted-foreground">
-                Skips common developer folders (node_modules, .git, dist, vcpkg, caches, and more)
-                and indexes only recognized content types — images, documents, text, video, audio,
-                and archives. Source code, binaries, and unrecognized file types are skipped.
+                Skips source code, binaries, unrecognized file types, and common developer folders (node_modules, .git, dist, vcpkg, caches, ...)
               </span>
             </span>
           </label>
@@ -329,16 +359,15 @@ export function IndexingSettingsCard () {
           <label className="flex items-start gap-3">
             <input
               type="checkbox"
-              checked={prefs.ignoreHiddenFiles}
-              disabled={!indexingEnabled || !prefsLoaded}
-              onChange={e => updatePreferences({ ignoreHiddenFiles: e.target.checked })}
+              checked={ignoreHidden ?? prefs.ignoreHiddenFiles}
+              disabled={!indexingEnabled || ignoreHidden === null}
+              onChange={e => { setIgnoreHidden(e.target.checked); setSaveResult(null); }}
               className="mt-0.5 h-4 w-4 shrink-0"
             />
             <span className="space-y-0.5">
               <span className="block text-sm font-medium">Ignore hidden files</span>
               <span className="block text-xs text-muted-foreground">
-                Skip dotfiles and hidden folders (e.g. .DS_Store, .immich). Applies and saves
-                immediately.
+                Skip dotfiles and hidden folders (e.g. .DS_Store, .immich).
               </span>
             </span>
           </label>
@@ -349,6 +378,13 @@ export function IndexingSettingsCard () {
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Save
           </Button>
+          {/* Everything above is staged, and leaving the page drops it. The Add
+              files page adds a root immediately, so silence here reads as saved. */}
+          {isDirty && (
+            <span className="text-xs text-muted-foreground" role="status">
+              Unsaved changes — nothing here takes effect until you save.
+            </span>
+          )}
         </div>
 
         {/* Reconciles the *saved* config, so it sits below Save rather than

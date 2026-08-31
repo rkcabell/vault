@@ -1,110 +1,26 @@
-import crypto from "node:crypto";
-import path from "node:path";
-import type { Writable } from "node:stream";
-import archiver from "archiver";
 import type { Queue } from "bullmq";
 import type { OcrJobData } from "../ocrProcessingService.js";
 import type { MediaRepository } from "../../repositories/mediaRepository.js";
 import type { BundleRepository } from "../../repositories/bundleRepository.js";
 import type { StorageAdapter } from "../../adapters/storage/types.js";
-import { openSourceStream } from "../../adapters/storage/openSource.js";
 import type { ThumbJob } from "../../queues/enqueueThumbnail.js";
-import { computeThumbKey, enqueueThumbBulk } from "../../queues/enqueueThumbnail.js";
-import { enqueueOcrBulk } from "../../queues/enqueueOcr.js";
-import type { UnpackJob } from "../../queues/enqueueUnpack.js";
-import type { IndexJobData } from "../../queues/enqueueIndex.js";
-import { makeStorageKey } from "../../lib/media/keys.js";
-import { extractArchive, isCoverCandidate } from "../archive/extractArchive.js";
-import { normalizeTag, normalizeTags } from "../../lib/tags/normalizeTags.js";
-import { evaluateRules, type TagRuleInput } from "../../lib/tags/rules/evaluateRules.js";
-import { ARCHIVE_MIME_TYPES } from "../../lib/media/archiveTypes.js";
+import { computeThumbKey } from "../../queues/enqueueThumbnail.js";
+import { textJobId, TEXT_JOB_OPTIONS } from "../../queues/enqueueText.js";
+import { enqueueOcrBulk, enqueueOcrJob, OCR_PRIORITY_USER } from "../../queues/enqueueOcr.js";
+import { normalizeTags } from "../../lib/tags/normalizeTags.js";
 import { ocrSupported, thumbnailSupported } from "../../lib/media/processingSupport.js";
-import { signalIndexAbort, type AbortRedis } from "../../lib/media/indexAbort.js";
-
-const MIME_TO_EXT: Record<string, string> = {
-  "image/jpeg": ".jpg",
-  "image/jpg": ".jpg",
-  "image/png": ".png",
-  "image/gif": ".gif",
-  "image/webp": ".webp",
-  "image/heic": ".heic",
-  "image/heif": ".heif",
-  "image/tiff": ".tiff",
-  "image/bmp": ".bmp",
-  "image/svg+xml": ".svg",
-  "video/mp4": ".mp4",
-  "video/quicktime": ".mov",
-  "video/x-msvideo": ".avi",
-  "video/webm": ".webm",
-  "video/x-matroska": ".mkv",
-  "application/pdf": ".pdf",
-  "text/plain": ".txt",
-  "text/html": ".html",
-  "text/csv": ".csv",
-  "application/json": ".json",
-  "application/zip": ".zip",
-  "application/msword": ".doc",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-  "application/vnd.ms-excel": ".xls",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
-  "application/vnd.ms-powerpoint": ".ppt",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
-};
 
 /**
- * Coerce an arbitrary string into a valid tag by stripping invalid characters
- * before passing through the canonical normalizeTag path. Returns null if the
- * result cannot produce a valid tag (e.g. empty after stripping).
+ * Changes one media item: deleting it, editing its title and tags, starring it,
+ * and re-running its text extraction or its thumbnail.
  */
-function coerceTag(name: string): string | null {
-  const prepped = name
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^a-z0-9-]/g, "")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  try {
-    return normalizeTag(prepped);
-  } catch {
-    return null;
-  }
-}
-
-function sanitizeTitle (title: string): string {
-  const cleaned = title.replace(/[/\\:*?"<>|]/g, "").trim().slice(0, 100);
-  return cleaned || "";
-}
-
-function extFromFilename (filename: string): string {
-  const dot = filename.lastIndexOf(".");
-  return dot > 0 ? filename.slice(dot) : "";
-}
-
-function buildFilename (
-  item: { id: string; title: string; mimeType: string | null; filename: string },
-  usedNames: Set<string>,
-): string {
-  const ext =
-    (item.mimeType && MIME_TO_EXT[item.mimeType]) ??
-    extFromFilename(item.filename) ??
-    "";
-  const base = sanitizeTitle(item.title) || item.id;
-  let name = `${base}${ext}`;
-  if (!usedNames.has(name)) {
-    usedNames.add(name);
-    return name;
-  }
-  let counter = 2;
-  while (usedNames.has(name)) {
-    name = `${base}_${counter}${ext}`;
-    counter++;
-  }
-  usedNames.add(name);
-  return name;
-}
 
 const MAX_PRESIGNED_SECONDS = 600;
+
+/** Bounds on a single "Extract all" press. */
+const EXTRACT_ALL_DEFAULT_LIMIT = 5000;
+const EXTRACT_ALL_MAX_LIMIT = 20_000;
+const EXTRACT_ALL_CHUNK = 250;
 
 export type TextExtractionOptions = {
   language?: string;
@@ -118,30 +34,38 @@ type MediaActionsDeps = {
   bundleRepository: BundleRepository;
   storage: StorageAdapter;
   bucket: string;
+  /** Tier 1 — native pdf.js / plain-text reads. */
+  textQueue: Queue<OcrJobData>;
+  /** Tier 2 — ocrmypdf/Tesseract. Only user-forced extraction and the
+   *  `background` sweep add jobs here. */
   ocrQueue: Queue<OcrJobData>;
   thumbQueue: Queue<ThumbJob>;
-  // Optional so unit tests that only exercise media actions don't have to wire
-  // every queue. The route always provides them for the dev abort endpoint.
-  unpackQueue?: Queue<UnpackJob>;
-  indexQueue?: Queue<IndexJobData>;
-  // Used by the dev abort to bump the index-abort epoch (stops an in-flight walk).
-  redis?: Pick<AbortRedis, "incr">;
-  /** The user's enabled Tag Organizer rules, applied to unpacked archive
-   *  entries. Optional so tests that never unpack don't have to wire it. */
-  listTagRules?: (userId: string) => Promise<TagRuleInput[]>;
-  /** Publishes a media event so open library views refresh without a manual
-   *  reload (delete removes an item, unpack creates children). */
+  /** Publishes a media event, so open library views drop the deleted item. */
   publishJobUpdate?: (update: { userId: string; mediaId: string; field: string; value: string }) => void;
 };
 
 export function createMediaActionsService (deps: MediaActionsDeps) {
+  /**
+   * Removes this item's text job from both tiers. The two queues share a job id
+   * ({@link textJobId}) in separate key spaces, and BullMQ drops an add for an
+   * id that still exists, so clearing one tier alone leaves the next enqueue
+   * doing nothing. An active job cannot be removed, and is left to finish.
+   */
+  const removeTextJobs = async (mediaId: string) => {
+    const jobId = textJobId(mediaId);
+    await Promise.allSettled([
+      deps.textQueue.getJob(jobId).then(job => job?.remove()),
+      deps.ocrQueue.getJob(jobId).then(job => job?.remove()),
+    ]);
+  };
+
   const deleteMedia = async (userId: string, id: string) => {
     const media = await deps.repository.findMediaKeys(userId, id);
     if (!media) return null;
 
-    // In-place indexed items live on the user's drive; Vault must never delete
-    // the source. Only managed originals are removed from storage.
-    if (!media.sourcePath) {
+    // Vault never deletes a source file on the user's own drive. Only a managed
+    // original is removed from storage.
+    if (!media.sourcePath && media.storageKey) {
       await deps.storage.deleteIfPresent({ bucket: deps.bucket, key: media.storageKey });
     }
     if (media.thumbnailKey) {
@@ -150,18 +74,15 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
 
     await deps.repository.deleteMedia(id);
 
-    // Clear coverMediaId on any bundle that used this media as its cover.
     await deps.bundleRepository.clearCoverMedia(id);
 
-    // Remove any BullMQ jobs for this media item so failed counts stay accurate.
-    // OCR jobs use jobId "ocr-{id}"; thumb jobs use jobId "{id}".
+    // Removing the jobs keeps the queues' failed counts accurate.
     await Promise.allSettled([
-      deps.ocrQueue.getJob(`ocr-${id}`).then(job => job?.remove().catch(() => {})),
+      removeTextJobs(id),
       deps.thumbQueue.getJob(id).then(job => job?.remove().catch(() => {})),
     ]);
 
-    // Cross-tab/view refresh: the deleting page updates itself optimistically,
-    // but any other open library view only learns of the removal from this event.
+    // Other open library views learn of the removal only from this event.
     deps.publishJobUpdate?.({ userId, mediaId: id, field: "mediaDeleted", value: "1" });
 
     return { ok: true };
@@ -175,8 +96,8 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     const media = await deps.repository.findMediaForUpdate(userId, id);
     if (!media) return null;
 
-    // Normalize here, not only at the HTTP edge — any caller of this service
-    // must not be able to persist raw tags (count drift + case mismatches).
+    // Normalized here as well as at the HTTP edge, so no caller of this service
+    // can store a raw tag.
     const normalized = data.tags !== undefined
       ? { ...data, tags: normalizeTags(data.tags) }
       : data;
@@ -193,60 +114,59 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     const media = await deps.repository.findForTextJob(userId, id);
     if (!media) return null;
 
-    // Check if file type supports text extraction. If not, mark as unsupported.
     if (!ocrSupported(media.mimeType ?? "")) {
       await deps.repository.markTextUnsupported([id]);
-      return { ok: true };
+      return { ok: true, queued: false };
     }
 
-    // BullMQ deduplicates by jobId — a completed or failed job with the same id
-    // blocks new adds silently. Remove any stale terminal job before re-queueing.
-    const staleJob = await deps.ocrQueue.getJob(`ocr-${media.id}`);
-    if (staleJob) {
-      try {
-        await staleJob.remove();
-      } catch {
-        // Active jobs cannot be removed; dedup will prevent a duplicate (correct).
-      }
+    // BullMQ drops an add while a completed or failed job still holds the id.
+    await removeTextJobs(media.id);
+
+    // PENDING is set before the enqueue: the worker only writes state for a row
+    // already at PENDING or NEEDS_OCR, so a job picked up in the gap would have
+    // its own completion rejected. A row already at UNSUPPORTED refuses the
+    // change, and is reported as not queued.
+    const queued = await deps.repository.setTextStatePending(id);
+    if (!queued) return { ok: true, queued: false };
+
+    // A row at NEEDS_OCR has already had the native pass find no text in it, so
+    // a request to extract its text can only mean tier 2.
+    const forceOcr = options.forceOcr ?? media.textState === "NEEDS_OCR";
+
+    const jobData = {
+      mediaId: media.id,
+      userId,
+      storageKey: media.storageKey,
+      title: media.title,
+      language: options.language,
+      rotation: options.rotation,
+      // The worker re-validates the path against `allowedRoots` and holds no
+      // list of its own, so the caller's snapshot travels with the job.
+      ...(media.sourcePath ? { allowedRoots } : {}),
+    };
+
+    // A forced job runs Tesseract for minutes and belongs on the OCR pool. An
+    // unforced job sent there would wait behind that pool's backlog instead.
+    if (forceOcr) {
+      await enqueueOcrJob(deps.ocrQueue, jobData, { priority: OCR_PRIORITY_USER });
+    } else {
+      await deps.textQueue.add("text", { ...jobData, forceOcr: false }, {
+        ...TEXT_JOB_OPTIONS,
+        // The user is waiting on this one, so it skips the batch warm-up delay.
+        delay: 0,
+        jobId: textJobId(media.id),
+        priority: OCR_PRIORITY_USER,
+      });
     }
 
-    await deps.ocrQueue.add(
-      "ocr",
-      {
-        mediaId: media.id,
-        userId,
-        storageKey: media.storageKey,
-        title: media.title,
-        language: options.language,
-        rotation: options.rotation,
-        forceOcr: options.forceOcr ?? false,
-        // In-place indexed items read their original from disk. Carry the
-        // caller's current allow-list snapshot so the worker can re-validate
-        // the source path — the worker's env-based allowedRoots are empty now
-        // that the list lives in user preferences, so without this the source
-        // read is rejected and re-extraction fails. Mirrors regenerateThumbnail.
-        ...(media.sourcePath ? { allowedRoots } : {}),
-      },
-      { attempts: 1, jobId: `ocr-${media.id}`, removeOnFail: true, removeOnComplete: true },
-    );
-
-    await deps.repository.setTextStatePending(id);
-
-    return { ok: true };
+    return { ok: true, queued: true };
   };
 
   const cancelTextExtraction = async (userId: string, id: string) => {
     const media = await deps.repository.findForTextJob(userId, id);
     if (!media) return null;
 
-    const job = await deps.ocrQueue.getJob(`ocr-${media.id}`);
-    if (job) {
-      try {
-        await job.remove();
-      } catch {
-        // Active jobs cannot be removed; cancellation is best-effort.
-      }
-    }
+    await removeTextJobs(media.id);
 
     await deps.repository.setTextState(media.id, "ERROR");
 
@@ -257,10 +177,15 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     const media = await deps.repository.findStorageKey(userId, id);
     if (!media) return null;
 
-    // In-place originals can't be presigned (they're outside storage) — stream
-    // them through the same-origin source proxy, which authenticates by cookie.
+    // A source file on the user's drive sits outside storage, so it is served
+    // through the same-origin proxy route, which authenticates by cookie.
     if (media.sourcePath) {
       return { url: `/api/media/${id}/source` };
+    }
+
+    if (!media.storageKey) {
+      // media_source_xor makes this unreachable for a well-formed row.
+      throw new Error(`Media ${id} has neither sourcePath nor storageKey`);
     }
 
     const url = await deps.storage.presignGet({
@@ -272,51 +197,12 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     return { url };
   };
 
-  const getBulkDownloadItems = async (userId: string, ids: string[]) => {
-    return deps.repository.findBulkDownloadItems(userId, ids);
-  };
-
-  const streamBulkArchive = async (
-    items: { id: string; storageKey: string; sourcePath?: string | null; title: string; mimeType: string | null; filename: string }[],
-    dest: Writable,
-    logger: { error: (obj: unknown, msg: string) => void },
-    allowedRoots: string[],
-  ) => {
-    const archive = archiver("zip", { zlib: { level: 0 } });
-
-    archive.on("error", (err) => {
-      logger.error(err, "bulk-download archive error");
-      if (!dest.writableEnded) dest.destroy(err);
-    });
-
-    archive.pipe(dest);
-
-    const usedNames = new Set<string>();
-    for (const item of items) {
-      // In-place items stream from disk; managed items from storage. openSourceStream
-      // branches on sourcePath and re-validates it against the allow-list.
-      const result = await openSourceStream({
-        storage: deps.storage,
-        bucket: deps.bucket,
-        storageKey: item.storageKey,
-        sourcePath: item.sourcePath,
-        allowedRoots,
-      });
-      if (!result) continue;
-      const filename = buildFilename(item, usedNames);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      archive.append(result.body as any, { name: filename });
-    }
-
-    await archive.finalize();
-  };
-
   const regenerateThumbnail = async (userId: string, id: string, allowedRoots: string[] = []) => {
     const media = await deps.repository.findMediaKeys(userId, id);
     if (!media) return null;
 
-    // Don't re-queue a thumbnail for a type the worker can't render (e.g. a
-    // watched .txt being edited fires onChange → regenerate). No-op cleanly.
+    // Editing a watched file triggers this, so a type the worker cannot render
+    // must not be queued again.
     if (!thumbnailSupported(media.mimeType ?? "")) {
       await deps.repository.markThumbUnsupported([id]);
       return { ok: true, queued: false };
@@ -333,11 +219,9 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
         storageKey: media.storageKey,
         outKey: computeThumbKey(id),
         size: 512,
-        // In-place indexed items read their original from disk. Carry the path
-        // and the caller's current allow-list snapshot so the worker can
-        // re-validate it — the worker's env-based allowedRoots are empty now
-        // that the list lives in user preferences, so without this the source
-        // read is rejected and regeneration fails with SOURCE_NOT_READY.
+        // Regenerate means a fresh render, not a copy of a duplicate's thumbnail.
+        noReuse: true,
+        // The allow-list snapshot travels with the job; see `enqueueTextExtraction`.
         ...(media.sourcePath ? { sourcePath: media.sourcePath, allowedRoots } : {}),
       },
       { jobId: `thumb-regen-${id}-${Date.now()}`, attempts: 3, backoff: { type: "exponential", delay: 2000 }, removeOnFail: true, removeOnComplete: true },
@@ -347,20 +231,12 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
   };
 
   /**
-   * Move a pending thumbnail job to the front of the queue. Called when a user
-   * opens an item's detail page so its thumbnail is generated ahead of a large
-   * backlog (e.g. the tens of thousands of jobs queued after indexing a folder).
+   * Moves a waiting thumbnail job ahead of the backlog. Does nothing when the
+   * job is gone or already active.
    *
-   * Uses changePriority({ lifo: true }) rather than a numeric priority on
-   * purpose: in BullMQ an *unprioritized* job (the default for our thumb jobs)
-   * outranks every job that has a numeric priority, so promoting via pri:1 would
-   * actually push the item *behind* the existing unprioritized backlog. lifo
-   * keeps the job unprioritized but RPUSHes it to the tail of the wait list,
-   * which is exactly where the worker pops next (RPOPLPUSH). No backlog
-   * migration required.
-   *
-   * No-op when the job is already gone (completed/removed) or active — those
-   * can't or needn't be reprioritized.
+   * BullMQ ranks an unprioritized job above every job that carries a priority,
+   * and thumbnail jobs are added unprioritized, so setting a numeric priority
+   * would move this item behind the backlog instead.
    */
   const prioritizeThumbnail = async (id: string) => {
     try {
@@ -369,215 +245,19 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
       await job.changePriority({ lifo: true });
       return { ok: true };
     } catch {
-      // Job became active/completed between the lookup and the change — fine.
+      // The job became active or completed between the lookup and the change.
       return { ok: false };
     }
   };
 
-  /** Toggle the star on a media item (mirrors the bundle star). Returns the
-   *  new starred state, or null when the item isn't the user's. */
+  /** Toggles the star on an item. Returns the new starred state, or null when
+   *  the item is not the user's. */
   const toggleStar = async (userId: string, id: string): Promise<boolean | null> => {
     return deps.repository.toggleStar(id, userId);
   };
 
-  const unpackArchive = async (
-    userId: string,
-    mediaId: string,
-  ): Promise<{ bundleId: string } | null | "already-linked" | "not-archive"> => {
-    // Load the media item including its mimeType and title
-    const media = await deps.repository.findDetail(userId, mediaId);
-    if (!media) return null;
-
-    // Already unpacked
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if ((media as any).linkedBundleId) return "already-linked";
-
-    // Only proceed for recognised archive types (ZIP, TAR, GZ)
-    if (!ARCHIVE_MIME_TYPES.has(media.mimeType)) return "not-archive";
-
-    // Fetch the archive stream from S3
-    const s3Result = await deps.storage.getObjectStream({ bucket: deps.bucket, key: media.storageKey });
-    if (!s3Result) return null;
-
-    // Derive bundle name from the archive title (strip extension)
-    const baseName = path.basename(media.title ?? media.filename, path.extname(media.filename));
-    const bundleName = baseName || media.title || "Unpacked Archive";
-
-    // Create the bundle
-    const bundle = await deps.bundleRepository.createBundle(userId, bundleName);
-    const bundleId = bundle.id;
-
-    // One rules fetch covers every extracted entry.
-    const rules = (await deps.listTagRules?.(userId)) ?? [];
-
-    const createdIds: string[] = [];
-    const thumbItems: { mediaId: string; userId: string; storageKey: string }[] = [];
-    const ocrItems: { mediaId: string; userId: string; storageKey: string }[] = [];
-    const thumbUnsupportedIds: string[] = [];
-    const textUnsupportedIds: string[] = [];
-    let coverCandidateId: string | null = null;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const bodyStream = s3Result.body as any;
-
-    for await (const entry of extractArchive(bodyStream, media.mimeType)) {
-      const newId = crypto.randomUUID();
-      const filename = path.basename(entry.path);
-      if (!filename) continue;
-
-      const storageKey = makeStorageKey(userId, newId, filename);
-
-      // Upload extracted file to S3
-      await deps.storage.putObject({
-        bucket: deps.bucket,
-        key: storageKey,
-        body: entry.stream,
-        contentType: entry.mimeType,
-        contentLength: entry.size,
-      });
-
-      // Derive title from filename (strip extension)
-      const title = path.basename(filename, path.extname(filename)) || filename;
-
-      // Create Media record. The bundle-name tag plus the user's Tag Organizer
-      // rules (type:, source:unpacked, …) — all system-applied, recorded AUTO.
-      const ruleTags = evaluateRules(rules, {
-        filename,
-        mimeType: entry.mimeType,
-        sizeBytes: entry.size ?? 0,
-        ingest: "unpacked",
-      });
-      const extractedTags = Array.from(
-        new Set([coerceTag(bundleName), ...ruleTags].filter((t): t is string => t !== null)),
-      );
-      await deps.repository.createMedia(
-        {
-          id: newId,
-          userId,
-          storageKey,
-          filename,
-          mimeType: entry.mimeType,
-          sizeBytes: entry.size ?? 0,
-          title,
-          tags: extractedTags,
-          sourceState: "READY",
-          thumbState: "PENDING",
-          textState: "PENDING",
-          isExtractedFromArchive: true,
-          sourceArchiveId: mediaId,
-        },
-        { autoTags: extractedTags },
-      );
-
-      createdIds.push(newId);
-      // Filter by type so unpacking an archive full of e.g. source files doesn't
-      // flood the queues with jobs that can only fail (mirrors upload + index).
-      if (thumbnailSupported(entry.mimeType)) thumbItems.push({ mediaId: newId, userId, storageKey });
-      else thumbUnsupportedIds.push(newId);
-      if (ocrSupported(entry.mimeType)) ocrItems.push({ mediaId: newId, userId, storageKey });
-      else textUnsupportedIds.push(newId);
-
-      if (!coverCandidateId && isCoverCandidate(entry.mimeType)) {
-        coverCandidateId = newId;
-      }
-    }
-
-    if (createdIds.length === 0) {
-      // Nothing was extracted — clean up the empty bundle
-      await deps.bundleRepository.deleteBundle(bundleId, userId);
-      return null;
-    }
-
-    // Enqueue thumbnail + OCR jobs only for compatible types; mark the rest
-    // UNSUPPORTED directly so their state is correct without running a doomed job.
-    if (thumbItems.length > 0) await enqueueThumbBulk(deps.thumbQueue, thumbItems);
-    if (ocrItems.length > 0) await enqueueOcrBulk(deps.ocrQueue, ocrItems);
-    if (thumbUnsupportedIds.length > 0) await deps.repository.markThumbUnsupported(thumbUnsupportedIds);
-    if (textUnsupportedIds.length > 0) await deps.repository.markTextUnsupported(textUnsupportedIds);
-
-    // Add all items to bundle
-    await deps.bundleRepository.addItems(bundleId, userId, createdIds);
-
-    // Set cover
-    if (coverCandidateId) {
-      await deps.bundleRepository.updateBundle(bundleId, userId, { coverMediaId: coverCandidateId });
-    }
-
-    // Link the archive to the bundle (bidirectionally)
-    await deps.repository.setLinkedBundle(mediaId, bundleId);
-    await deps.bundleRepository.setSourceMedia(bundleId, mediaId);
-
-    // New items exist — tell open library views (relevant for auto-unpack on
-    // finalize, where no client action follows to trigger a refetch).
-    deps.publishJobUpdate?.({ userId, mediaId: "*", field: "mediaCreated", value: String(createdIds.length) });
-
-    return { bundleId };
-  };
-
-  /**
-   * Dev escape hatch: stop all background processing by clearing the queue
-   * backlog. Index queue first to cut the producer, then the fan-out queues it
-   * feeds.
-   *
-   * Deliberately does NOT obliterate: obliterate({ force }) deletes jobs that
-   * are mid-process, so the worker then throws "Missing key for job …
-   * moveToDelayed" when it tries to finalise/retry them. Instead we pause (stop
-   * pulling new jobs), drain the waiting + delayed backlog, clear terminal jobs,
-   * then resume so the queue is usable again. The handful of jobs already active
-   * (≤ each worker's concurrency) finish on their own without error.
-   */
-  const stopIndexWalk = async () => {
-    if (!deps.redis) return;
-    await signalIndexAbort(deps.redis);
-  };
-
-  const abortProcessing = async () => {
-    // Stop the producer first: bump the abort epoch so an index walk that's
-    // mid-scan in the worker stops adding jobs. Without this, draining only
-    // lowers the count for a moment — the active walk immediately refills it.
-    if (deps.redis) {
-      try {
-        await signalIndexAbort(deps.redis);
-      } catch {
-        // Best-effort; the queue drain below still clears the existing backlog.
-      }
-    }
-
-    // Only drain the index queue — thumb and ocr jobs already enqueued should
-    // finish so thumbnails and text extraction aren't lost mid-walk.
-    const targets: [string, Queue<unknown> | undefined][] = [
-      ["index", deps.indexQueue as Queue<unknown> | undefined],
-    ];
-    const cleared: string[] = [];
-    await Promise.all(
-      targets.map(async ([name, queue]) => {
-        if (!queue) return;
-        try {
-          await queue.pause();
-          await queue.drain(true); // remove waiting + delayed (the backlog)
-          await queue.clean(0, 0, "failed");
-          await queue.clean(0, 0, "completed");
-          cleared.push(name);
-        } catch {
-          // Best-effort for a dev tool — a worker tick can race the drain.
-        } finally {
-          // Never leave a queue paused, or future indexing/uploads would stall.
-          try {
-            await queue.resume();
-          } catch {
-            /* ignore */
-          }
-        }
-      }),
-    );
-    return { ok: true, cleared };
-  };
-
-  // Batch re-queue helpers. Library multi-select is hand-picked (bounded set),
-  // so we reuse the single-item methods in a loop rather than the bulk-delete
-  // 202+jobId machinery — this keeps the careful per-item stale-job removal,
-  // allow-list handling, and unsupported-type no-ops intact. `missing` counts
-  // ids the user no longer owns (single-item methods return null).
+  // These loop over the single-item methods, which keeps their stale-job removal
+  // and unsupported-type handling. `missing` counts ids the user no longer owns.
   const regenerateThumbnailsBatch = async (
     userId: string,
     ids: string[],
@@ -608,21 +288,60 @@ export function createMediaActionsService (deps: MediaActionsDeps) {
     return { queued, missing };
   };
 
+  /**
+   * Queues OCR for the rows the native pass found no text in. Stops at `limit`
+   * and returns how many are `remaining`, because each job runs for minutes.
+   * Rows are claimed in batches, so two presses at once take disjoint sets.
+   */
+  const extractAllScannedText = async (
+    userId: string,
+    allowedRoots: string[] = [],
+    limit = EXTRACT_ALL_DEFAULT_LIMIT,
+  ) => {
+    const cap = Math.max(0, Math.min(limit, EXTRACT_ALL_MAX_LIMIT));
+    let queued = 0;
+
+    while (queued < cap) {
+      const rows = await deps.repository.claimNeedsOcrBatch(
+        userId,
+        Math.min(EXTRACT_ALL_CHUNK, cap - queued),
+      );
+      if (rows.length === 0) break;
+
+      // A retained job under this id would make the add a silent no-op.
+      await Promise.all(rows.map(row => removeTextJobs(row.id)));
+
+      await enqueueOcrBulk(
+        deps.ocrQueue,
+        rows.map(row => ({
+          mediaId: row.id,
+          userId,
+          storageKey: row.storageKey,
+          title: row.title,
+          // The allow-list snapshot travels with the job; see `enqueueTextExtraction`.
+          ...(row.sourcePath ? { sourcePath: row.sourcePath, allowedRoots } : {}),
+        })),
+        { priority: OCR_PRIORITY_USER },
+      );
+
+      queued += rows.length;
+      if (rows.length < EXTRACT_ALL_CHUNK) break; // backlog exhausted
+    }
+
+    return { queued, remaining: await deps.repository.countNeedsOcr(userId) };
+  };
+
   return {
     deleteMedia,
-    stopIndexWalk,
-    abortProcessing,
     updateMediaMetadata,
     enqueueTextExtraction,
     enqueueTextExtractionBatch,
+    extractAllScannedText,
     cancelTextExtraction,
     getDownloadUrl,
     regenerateThumbnail,
     regenerateThumbnailsBatch,
     prioritizeThumbnail,
-    getBulkDownloadItems,
-    streamBulkArchive,
-    unpackArchive,
     toggleStar,
   };
 }

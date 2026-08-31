@@ -1,9 +1,20 @@
 import { inflateRawSync } from "node:zlib";
 import type { OfficeMetadata } from "../types.js";
 
+/**
+ * Reads the author, application and revision fields a Word, Excel or PowerPoint
+ * file records about itself. Those files are zip archives, and this reads the
+ * few entries it needs straight out of the archive rather than unpacking it.
+ */
+
+// Caps on what one archive may expand to, so a crafted file cannot exhaust memory.
 const MAX_ZIP_ENTRIES = 2000;
 const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 5 * 1024 * 1024;
 
+/**
+ * Returns the metadata an Office file carries, or null when it holds none of
+ * the fields read here.
+ */
 export function extractOfficeMetadata (buffer: Buffer): OfficeMetadata | null {
   try {
     const entries = readZipEntries(buffer);
@@ -58,6 +69,11 @@ type ZipEntry = {
   localHeaderOffset: number;
 };
 
+/**
+ * Lists the files in a zip archive by reading its central directory. The
+ * directory is found by scanning backwards for the end-of-central-directory
+ * signature, because a zip records its layout at the end, not the start.
+ */
 function readZipEntries (buffer: Buffer): ZipEntry[] {
   const signature = 0x06054b50;
   const maxComment = 65535;
@@ -80,6 +96,7 @@ function readZipEntries (buffer: Buffer): ZipEntry[] {
   const entries: ZipEntry[] = [];
   let cursor = centralDirOffset;
   for (let i = 0; i < totalEntries; i += 1) {
+    // 0x02014b50 opens a central-directory entry. Anything else ends the list.
     if (buffer.readUInt32LE(cursor) !== 0x02014b50) break;
     const compression = buffer.readUInt16LE(cursor + 10);
     const compressedSize = buffer.readUInt32LE(cursor + 20);
@@ -107,9 +124,15 @@ function readZipEntries (buffer: Buffer): ZipEntry[] {
   return entries;
 }
 
+/**
+ * Returns one entry's contents. Null when the entry expands past the cap, when
+ * its header is not where the directory said, or when it uses a compression
+ * method other than none or deflate.
+ */
 function readZipEntry (buffer: Buffer, entry: ZipEntry | null): Buffer | null {
   if (!entry) return null;
   if (entry.uncompressedSize > MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES) return null;
+  // 0x04034b50 opens a local file header.
   if (buffer.readUInt32LE(entry.localHeaderOffset) !== 0x04034b50) return null;
 
   const filenameLen = buffer.readUInt16LE(entry.localHeaderOffset + 26);
@@ -133,6 +156,7 @@ function readZipEntry (buffer: Buffer, entry: ZipEntry | null): Buffer | null {
   return null;
 }
 
+// Office XML tags may or may not carry a namespace prefix.
 function readXmlTag (xml: string, tagName: string): string | null {
   const pattern = new RegExp(`<(?:\\w+:)?${tagName}[^>]*>([\\s\\S]*?)</(?:\\w+:)?${tagName}>`, "i");
   const match = xml.match(pattern);

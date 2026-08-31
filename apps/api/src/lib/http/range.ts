@@ -1,22 +1,19 @@
 /**
- * Minimal single-range parser for `Range: bytes=...` request headers, backing
- * HTTP 206 responses on the storage proxy and in-place source routes (video
- * seeking and large-file partial reads depend on it).
+ * Reads the byte range a client asked for out of a `Range` request header.
  *
- * Only the first range of a multi-range header is honored — browsers request
- * one range per media fetch, and multipart/byteranges responses aren't worth
- * their complexity here.
+ * Only the first range in the header is honored. A request for several ranges
+ * at once is answered with the first one alone.
  */
 
 export type ByteRange = { start: number; end: number };
 
 /**
- * Parse a Range header against a known object size.
+ * Returns the byte range to send for `header`, given an object of `size` bytes.
  *
- * Returns:
- *   - `null` — no header / not a bytes range / malformed → serve the full body (200)
- *   - `ByteRange` — a satisfiable, clamped inclusive range → serve 206
- *   - `"unsatisfiable"` — syntactically valid but outside the object → serve 416
+ * Three outcomes, and the caller must handle each differently:
+ *   - `null` — no range was asked for, or the header made no sense; send the whole body with 200.
+ *   - a range — the start and end are both inclusive, and already clamped to the object; send 206.
+ *   - `"unsatisfiable"` — a well-formed range that falls outside the object; send 416.
  */
 export function parseRangeHeader (header: string | undefined, size: number): ByteRange | "unsatisfiable" | null {
   if (!header || size <= 0) return header && size === 0 ? "unsatisfiable" : null;

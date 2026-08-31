@@ -1,16 +1,11 @@
-/**
- * Minimal EXIF parser operating directly on a raw buffer (no external deps).
- *
- * Supports the TIFF-encoded EXIF header embedded in JPEG APP1 segments.
- * Handles both little-endian (Intel, "II") and big-endian (Motorola, "MM")
- * byte orders, and reads IFD0, the Exif sub-IFD (0x8769), and the GPS
- * sub-IFD (0x8825).
- *
- * Only the TIFF types actually used by common EXIF tags are decoded (ASCII,
- * SHORT, LONG, RATIONAL, UNDEFINED, SLONG, SRATIONAL). Unknown types and
- * out-of-bounds reads return null rather than throwing.
- */
 import type { ImageGps } from "../types.js";
+
+/**
+ * Reads the camera, lens and GPS fields out of an image's EXIF block, without
+ * an external library. Only the TIFF value types that common EXIF tags use are
+ * decoded; an unknown type, and any read past the end of the buffer, comes back
+ * as null instead of throwing.
+ */
 
 export type ParsedExif = {
   make?: string | null;
@@ -30,9 +25,9 @@ export type ParsedExif = {
 export type Rational = { numerator: number; denominator: number };
 
 /**
- * Parse an EXIF buffer (starting with the "Exif\0\0" header) and return the
- * camera/lens/GPS fields used by the app. Returns null if the header is
- * missing, malformed, or too short to contain a valid IFD0.
+ * Parses an EXIF block that opens with the Exif header, returning the camera,
+ * lens and GPS fields. Null when that header is missing, malformed, or too
+ * short to hold IFD0.
  */
 export function parseExif (exif: Buffer): ParsedExif | null {
   if (exif.length < 14) return null;
@@ -93,10 +88,9 @@ export function parseExif (exif: Buffer): ParsedExif | null {
 }
 
 /**
- * Read a TIFF Image File Directory (IFD) starting at `offset`.
- * Each 12-byte entry holds: tag (2), type (2), count (4), value/offset (4).
- * `tiffStart` anchors all value offsets that point outside the 4-byte inline
- * value field (i.e. when byteLength > 4).
+ * Reads a TIFF Image File Directory at `offset`. Each 12-byte entry holds a tag
+ * (2 bytes), a type (2), a count (4), then a value or an offset (4).
+ * `tiffStart` anchors the offsets of values too large to sit inline.
  */
 function readIfd (
   buffer: Buffer,
@@ -124,15 +118,12 @@ function readIfd (
 }
 
 /**
- * Decode the value for a single IFD entry according to its TIFF type id.
+ * Decodes one IFD entry's value according to its TIFF type id.
  *
- * If the total byte length of the value is ≤ 4, the value is stored inline
- * starting at entryOffset + 8 (the value/offset field of the IFD entry).
- * Otherwise it is stored at tiffStart + valueOffset.
- *
- * Returns null for unknown types, out-of-bounds accesses, or a count of zero.
- * Scalar values (count == 1) are unwrapped from their array; multi-component
- * values are returned as arrays.
+ * A value of four bytes or fewer sits inline at `entryOffset + 8`; a longer one
+ * sits at `tiffStart + valueOffset`. A single-component value is unwrapped from
+ * its array, and multi-component values stay arrays. An unknown type, a count
+ * of zero, and an out-of-bounds read all return null.
  */
 function readExifValue (
   buffer: Buffer,
@@ -173,8 +164,7 @@ function readExifValue (
       }
       return count === 1 ? values[0] : values;
     }
-    // Type 5 — RATIONAL: two unsigned 32-bit integers (numerator / denominator).
-    // Each component is 8 bytes. Used for exposure time, f-number, focal length, GPS coords, etc.
+    // Type 5 — RATIONAL: numerator then denominator, both unsigned 32-bit.
     case 5: {
       const values: Rational[] = [];
       for (let i = 0; i < count; i += 1) {
@@ -184,8 +174,7 @@ function readExifValue (
       }
       return count === 1 ? values[0] : values;
     }
-    // Type 7 — UNDEFINED: raw bytes with application-defined meaning.
-    // Returned as a Buffer slice; callers interpret the bytes themselves.
+    // Type 7 — UNDEFINED: raw bytes, with a meaning the tag defines.
     case 7: {
       return buffer.subarray(valueStart, valueStart + byteLength);
     }
@@ -197,8 +186,7 @@ function readExifValue (
       }
       return count === 1 ? values[0] : values;
     }
-    // Type 10 — SRATIONAL: two signed 32-bit integers (numerator / denominator).
-    // Same layout as RATIONAL but uses int32 arithmetic; used for signed GPS altitude offsets, etc.
+    // Type 10 — SRATIONAL: the same layout as RATIONAL, signed.
     case 10: {
       const values: Rational[] = [];
       for (let i = 0; i < count; i += 1) {
@@ -208,8 +196,8 @@ function readExifValue (
       }
       return count === 1 ? values[0] : values;
     }
-    // Types 1 (BYTE), 6 (SBYTE), 8 (SSHORT), and any vendor extension are not
-    // needed by the tags we extract, so they fall through to null.
+    // Types 1 (BYTE), 6 (SBYTE), 8 (SSHORT) and vendor extensions carry none of
+    // the tags read here.
     default:
       return null;
   }
@@ -235,9 +223,9 @@ function getExifTypeSize (type: number) {
 }
 
 /**
- * Convert raw GPS IFD tags into decimal-degree latitude/longitude/altitude.
- * Returns null if the mandatory ref or coordinate tags are absent or invalid.
- * Altitude is negated when GPSAltitudeRef (0x0005) equals 1 (below sea level).
+ * Converts the GPS IFD tags into decimal degrees. Null when a reference or a
+ * coordinate tag is missing or invalid. Altitude is negated when GPSAltitudeRef
+ * (0x0005) is 1, which means below sea level.
  */
 function parseGps (tags: Map<number, unknown>): ImageGps | null {
   const latRef = toString(tags.get(0x0001));
@@ -263,8 +251,8 @@ function parseGps (tags: Map<number, unknown>): ImageGps | null {
 }
 
 /**
- * Convert a [degrees, minutes, seconds] RATIONAL triplet to a decimal degree
- * value. Pass `negative = true` for S latitude or W longitude.
+ * Converts a [degrees, minutes, seconds] triplet to decimal degrees. Pass
+ * `negative` for a south latitude or a west longitude.
  */
 function rationalTripletToDecimal (values: Rational[], negative: boolean): number | null {
   const [deg, min, sec] = values;
@@ -276,21 +264,21 @@ function rationalTripletToDecimal (values: Rational[], negative: boolean): numbe
   return negative ? -result : result;
 }
 
-/** Coerce an EXIF tag value to a trimmed string, or null if not string-like. */
+// Coerces a tag value to a trimmed string, or null when it is not string-like.
 function toString (value: unknown): string | null {
   if (typeof value === "string") return value.trim() || null;
   if (Buffer.isBuffer(value)) return value.toString("ascii").trim() || null;
   return null;
 }
 
-/** Coerce an EXIF tag value to a finite number, or null. Unwraps single-item arrays. */
+// Coerces a tag value to a finite number, or null. Unwraps a single-item array.
 function toNumber (value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (Array.isArray(value)) return toNumber(value[0]);
   return null;
 }
 
-/** Divide numerator by denominator, returning null if denominator is zero or value is null. */
+// Divides numerator by denominator. Null when the denominator is zero.
 function rationalToNumber (value: Rational | null): number | null {
   if (!value) return null;
   const denominator = value.denominator;
@@ -298,7 +286,7 @@ function rationalToNumber (value: Rational | null): number | null {
   return value.numerator / denominator;
 }
 
-/** Narrow an unknown tag value to a Rational object, or null if the shape doesn't match. */
+// Narrows a tag value to a Rational, or null when the shape does not match.
 function toRational (value: unknown): Rational | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Rational;
@@ -308,7 +296,7 @@ function toRational (value: unknown): Rational | null {
   return null;
 }
 
-/** Narrow an unknown tag value to an array of Rational objects (e.g. GPS coordinate triplets). */
+// Narrows a tag value to an array of Rationals, such as a GPS coordinate triplet.
 function toRationalArray (value: unknown): Rational[] | null {
   if (!Array.isArray(value)) return null;
   const items = value.map(toRational).filter(Boolean) as Rational[];

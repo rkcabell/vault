@@ -6,17 +6,17 @@ import {
   type OrganizeJobProgress,
 } from "../../queues/enqueueOrganize.js";
 
+/**
+ * Starts Tag Organizer runs over an existing library and reports their progress.
+ * Rule evaluation and tag writes happen in the organize worker, so a large
+ * library does not hold the HTTP request open.
+ */
+
 type OrganizeJobServiceDeps = {
   organizeQueue: Queue<OrganizeJobData>;
   logger: { info: (obj: object, msg: string) => void };
 };
 
-/**
- * Drives retroactive Tag Organizer runs: enqueues an organize job and reports
- * its progress. The actual rule evaluation + tag writes happen in the organize
- * worker (see worker/organizeWorker.ts), so a large library never blocks the
- * HTTP request. Mirrors deleteJobService.
- */
 export function createOrganizeJobService (deps: OrganizeJobServiceDeps) {
   const startRun = async (userId: string, dryRun: boolean): Promise<{ jobId: string }> => {
     const jobId = await enqueueOrganize(deps.organizeQueue, { userId, dryRun });
@@ -24,8 +24,8 @@ export function createOrganizeJobService (deps: OrganizeJobServiceDeps) {
     return { jobId };
   };
 
-  // Map a BullMQ job to the wire status. Progress is updated per chunk;
-  // returnvalue holds the final counts once the job completes.
+  // Progress stops updating at the run's last chunk. The return value holds the
+  // final counts.
   const toStatus = async (
     job: NonNullable<Awaited<ReturnType<typeof deps.organizeQueue.getJob>>>,
   ): Promise<OrganizeStatus> => {
@@ -55,8 +55,8 @@ export function createOrganizeJobService (deps: OrganizeJobServiceDeps) {
     };
   };
 
-  /** Read a run's live progress. Only the owning user may read their job — the
-   *  jobId embeds the userId, checked here. Returns null when unknown. */
+  /** Returns a run's live progress, or null when the job is unknown or belongs to
+   *  another user. The jobId embeds the userId, which is the ownership check. */
   const getStatus = async (userId: string, jobId: string): Promise<OrganizeStatus | null> => {
     if (!jobId.startsWith(`organize-${userId}-`)) return null;
     const job = await deps.organizeQueue.getJob(jobId);
@@ -64,7 +64,7 @@ export function createOrganizeJobService (deps: OrganizeJobServiceDeps) {
     return toStatus(job);
   };
 
-  /** The user's in-flight run (if any) so the UI can re-attach after a reload. */
+  /** Returns the user's still-running run, or null when there is none. */
   const getActive = async (userId: string): Promise<OrganizeStatus | null> => {
     const jobs = await deps.organizeQueue.getJobs(["active", "waiting", "delayed"]);
     const prefix = `organize-${userId}-`;

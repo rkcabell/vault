@@ -8,6 +8,9 @@
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
 
+  /* What <body> paints. A sticky element needs it to hide what scrolls under. */
+  --color-page: hsl(var(--page-background));
+
   --color-primary: hsl(var(--primary));
   --color-primary-foreground: hsl(var(--primary-foreground));
 
@@ -111,6 +114,11 @@
     --tag-filter-include-border: rgb(16 185 129 / 0.6); /* emerald-500/60 */
     --tag-filter-include-bg: rgb(16 185 129 / 0.1);     /* emerald-500/10 */
     --tag-filter-exclude: #991b1b;          /* red-800 — AA on light backgrounds */
+
+    /* Selected settings chapter. The card surface reads as raised against the
+       muted rail on light themes; dark themes override both. */
+    --chapter-active-bg: hsl(var(--background));
+    --chapter-active-border: hsl(var(--border));
   }
 
 
@@ -168,6 +176,12 @@
     --tag-filter-include-border: rgb(16 185 129 / 0.6); /* emerald-500/60 */
     --tag-filter-include-bg: rgb(16 185 129 / 0.1);     /* emerald-500/10 */
     --tag-filter-exclude: #f87171;          /* red-400 — AA on dark backgrounds */
+
+    /* Every dark theme puts --background within a few percent of its page, so
+       the selected chapter is lit by a wash of the theme's own foreground:
+       ~5:1 on the rail at 0.55, and text stays past 5:1 on the 0.22 fill. */
+    --chapter-active-bg: hsl(var(--foreground) / 0.22);
+    --chapter-active-border: hsl(var(--foreground) / 0.55);
   }
 
   /* ---- Light theme variants ---- */
@@ -425,6 +439,11 @@ html.dark.theme-new-moon {
     --border: 120 20% 16%;
     --input: 120 20% 16%;
     --ring: 120 90% 52%;
+
+    /* A green foreground wash would tint the whole chip; matrix keeps the dark
+       surface and marks the selected chapter with the phosphor outline. */
+    --chapter-active-bg: hsl(var(--background));
+    --chapter-active-border: hsl(var(--primary));
   }
 
   html.dark.theme-solarized {

@@ -1,6 +1,11 @@
+/**
+ * Reads the files out of a zip or tar archive one at a time, without writing
+ * the whole archive to disk first.
+ */
 import type { Readable } from "node:stream";
 import path from "node:path";
 
+/** One file found inside an archive. `stream` must be read before the next entry is taken. */
 export type ArchiveEntry = {
   path: string;
   stream: Readable;
@@ -8,6 +13,7 @@ export type ArchiveEntry = {
   mimeType: string;
 };
 
+// Archive entries carry no recorded type, so it is worked out from the name.
 const EXT_TO_MIME: Record<string, string> = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -52,12 +58,13 @@ const EXT_TO_MIME: Record<string, string> = {
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
 
+/** Returns the type for `filename` based on its extension, or the unknown-bytes type. */
 export function mimeFromFilename(filename: string): string {
   const ext = path.extname(filename).toLowerCase();
   return EXT_TO_MIME[ext] ?? "application/octet-stream";
 }
 
-/** True for MIME types where thumbnails and OCR are worth attempting */
+/** True if an entry of this type could be shown as the bundle's cover image. */
 export function isCoverCandidate(mimeType: string): boolean {
   return (
     mimeType.startsWith("image/") ||
@@ -66,6 +73,8 @@ export function isCoverCandidate(mimeType: string): boolean {
   );
 }
 
+// Yields each file in a zip. Folder entries are discarded, and their contents
+// still arrive as entries of their own.
 async function* extractZip(stream: Readable): AsyncIterable<ArchiveEntry> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const unzipper = (await import("unzipper")) as any;
@@ -95,13 +104,17 @@ async function* extractZip(stream: Readable): AsyncIterable<ArchiveEntry> {
   }
 }
 
+// Yields each file in a tar, decompressing first when `mimeType` says the tar
+// is gzipped.
+//
+// The tar library reports entries through events rather than as a sequence, so
+// they are collected as they arrive and handed on in order.
 async function* extractTar(stream: Readable, mimeType: string): AsyncIterable<ArchiveEntry> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tar = (await import("tar")) as any;
 
   const isGzip = mimeType === "application/gzip" || mimeType === "application/x-gzip";
 
-  // Collect entries via the event-based tar.Parse
   const entries: Array<{ entryPath: string; size?: number; entryStream: Readable }> = [];
   let done = false;
 
@@ -129,8 +142,8 @@ async function* extractTar(stream: Readable, mimeType: string): AsyncIterable<Ar
 
   stream.pipe(parser);
 
-  // Wait for parsing to start producing entries — we yield them as they arrive
-  // by processing the entries array as it fills.
+  // Entries are given out as they turn up rather than after parsing finishes,
+  // so a large archive is not held in memory.
   let idx = 0;
   while (true) {
     if (idx < entries.length) {
@@ -149,6 +162,12 @@ async function* extractTar(stream: Readable, mimeType: string): AsyncIterable<Ar
   }
 }
 
+/**
+ * Yields each file inside `stream`, an archive of the format named by
+ * `mimeType`.
+ *
+ * Raises for a format that cannot be read, which includes rar and 7z.
+ */
 export async function* extractArchive(
   stream: Readable,
   mimeType: string,

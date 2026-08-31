@@ -9,7 +9,7 @@ import { ChevronDown, ChevronRight, Tag, Folder, Loader2, Search, X, MoreVertica
 import { cn } from '@/lib/utils';
 import { Badge } from '@/ui/Badge';
 import type { Route } from "next";
-import { emitTagsUpdated, partitionTagsByOrigin, tagNamespace } from '@/lib/tags';
+import { emitTagsUpdated, partitionTagsByOrigin, tagNamespace, TAGS_UPDATED_EVENT } from '@/lib/tags';
 import type { TagOrigin } from '@vault/types';
 import { BUNDLES_UPDATED_EVENT } from '@/lib/bundles';
 import { ConfirmPopover } from '@/components/ui/ConfirmPopover';
@@ -99,12 +99,13 @@ function SidebarSection({
 const PAGE_SIZE = 30;
 
 // Facet groups render in this order; namespaces not listed follow alphabetically.
-const FACET_ORDER = ['type', 'folder', 'source'];
+const FACET_ORDER = ['type', 'year', 'folder'];
 
-// Time browsing lives in the library's "Year" sort (year/month section breaks)
-// now — the year:/month: tags still exist and stay searchable/deep-linkable,
-// they just don't render as sidebar facet groups anymore.
-const HIDDEN_FACETS = new Set(['year', 'month']);
+// Hidden namespaces stay searchable and deep-linkable, they are just not
+// browsing axes. `month:` is twelve rows per year and buries every other group;
+// `source:` records how a file arrived, which is provenance rather than a way
+// anyone looks for something.
+const HIDDEN_FACETS = new Set(['month', 'source']);
 
 function facetLabel (namespace: string): string {
   return namespace.charAt(0).toUpperCase() + namespace.slice(1);
@@ -124,6 +125,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
   const renameInputRef = useRef<HTMLInputElement>(null);
   // Infinite scroll state
   const [displayedTags, setDisplayedTags] = useState<TagItem[]>([]);
+  const [facetTags, setFacetTags] = useState<TagItem[]>([]);
   const [hasMoreTags, setHasMoreTags] = useState(false);
   const [isFetchingMoreTags, setIsFetchingMoreTags] = useState(false);
   const tagOffsetRef = useRef(0);
@@ -289,6 +291,28 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
     setHasMoreTags(more);
   }, [tags]);
 
+  // Facets come from their own unpaged request. Slicing them out of the paged
+  // `count desc` list instead means a low-count namespace — a `year:` with four
+  // items — is hundreds of rows down, and its whole group is missing until the
+  // tag list happens to be scrolled that far.
+  const fetchFacetTags = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/api/tags?facets=${FACET_ORDER.join(',')}`, { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json() as { tags: Array<{ name: string; count: number; color: string | null; origin?: TagOrigin }> };
+      setFacetTags(data.tags.map(t => ({ id: t.name, name: t.name, count: t.count, color: t.color, origin: t.origin })));
+    } catch {
+      // Leaves the previous facets up; the paged list is unaffected either way.
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchFacetTags();
+    const handler = () => { void fetchFacetTags(); };
+    window.addEventListener(TAGS_UPDATED_EVENT, handler);
+    return () => window.removeEventListener(TAGS_UPDATED_EVENT, handler);
+  }, [fetchFacetTags]);
+
   const fetchMoreTags = useCallback(async () => {
     if (fetchingRef.current || !hasMoreRef.current) return;
     fetchingRef.current = true;
@@ -314,20 +338,29 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
   // before auto), then one collapsible group per namespace (`type:`, `year:`,
   // `folder:` …) so the auto-tag axes read as facets instead of one flat cloud.
   const { plainTags, facetGroups } = useMemo(() => {
-    const visible = (displayedTags ?? []).filter(t =>
+    const isVisible = (t: TagItem) =>
       !optimisticallyDeletedTags.has(t.name) &&
-      (!tagSearch || t.name.toLowerCase().includes(tagSearch.toLowerCase()))
-    );
-    const plain: TagItem[] = [];
+      (!tagSearch || t.name.toLowerCase().includes(tagSearch.toLowerCase()));
+
+    const plain = (displayedTags ?? []).filter(t => isVisible(t) && !tagNamespace(t.name));
+
+    // Known facet namespaces come from the unpaged fetch; any other namespace a
+    // user invents still groups out of the paged list, as it always did.
     const byNamespace = new Map<string, TagItem[]>();
-    for (const tag of visible) {
+    const seen = new Set<string>();
+    for (const tag of [...facetTags, ...(displayedTags ?? [])]) {
+      if (seen.has(tag.name) || !isVisible(tag)) continue;
       const ns = tagNamespace(tag.name);
-      if (!ns) { plain.push(tag); continue; }
-      if (HIDDEN_FACETS.has(ns)) continue;
+      if (!ns || HIDDEN_FACETS.has(ns)) continue;
+      seen.add(tag.name);
       const group = byNamespace.get(ns);
       if (group) group.push(tag);
       else byNamespace.set(ns, [tag]);
     }
+    // Years read newest-first, matching the library's default sort. Every other
+    // namespace keeps the order the tags arrived in (usage count, descending).
+    const years = byNamespace.get('year');
+    if (years) years.sort((a, b) => b.name.localeCompare(a.name));
     const rank = (ns: string) => {
       const i = FACET_ORDER.indexOf(ns);
       return i === -1 ? FACET_ORDER.length : i;
@@ -339,7 +372,7 @@ export function Sidebar({ tags, tagsError, isLoading = false, className }: Sideb
       plainTags: partitionTagsByOrigin(plain, t => t.origin === 'AUTO'),
       facetGroups: groups,
     };
-  }, [displayedTags, optimisticallyDeletedTags, tagSearch]);
+  }, [displayedTags, facetTags, optimisticallyDeletedTags, tagSearch]);
 
   // IntersectionObserver: fire when sentinel scrolls into the tags container.
   // Re-runs when the sentinel mounts/unmounts (hasMoreTags) and after the first

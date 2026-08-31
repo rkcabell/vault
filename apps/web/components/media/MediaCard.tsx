@@ -176,7 +176,7 @@ export function MediaCard({
   const router = useRouter();
   const searchParams = useSearchParams();
   // The file is gone from disk but the item is deliberately kept, because a
-  // move looks exactly like a delete until the file turns up somewhere else.
+  // move looks like a delete until the file turns up somewhere else.
   const isMissing = !!media?.missingSince;
   const id = media?.id;
   const q = searchParams.get("q") ?? searchParams.get("search");
@@ -341,6 +341,8 @@ export function MediaCard({
   if (variant === 'list') {
     return (
       <Card
+        data-media-id={media.id}
+        data-thumb-pending={media.thumbState === "PENDING" ? "true" : undefined}
         className={cn('rounded-none shadow-none bg-transparent border-0 border-b border-border/40 hover:bg-muted/50 transition-colors', isSelectMode && 'cursor-pointer select-none', isMissing && 'opacity-60', className)}
         style={isSelectMode && isSelected ? { outline: '2px solid var(--color-selection, #06b6d4)', outlineOffset: '0px' } : undefined}
         onClick={isSelectMode ? handleSelectClick : undefined}
@@ -550,7 +552,11 @@ export function MediaCard({
   }
 
   return (
+    // data-thumb-pending marks the cards useThumbnailPriority watches: an item
+    // whose thumbnail is still in the backlog and which the user can see.
     <Card
+      data-media-id={media.id}
+      data-thumb-pending={media.thumbState === "PENDING" ? "true" : undefined}
       className={cn('group flex flex-col overflow-hidden hover:shadow-lg transition-shadow', isSelectMode && 'select-none', isMissing && 'opacity-60', className)}
       style={isSelectMode && isSelected ? { outline: '2px solid var(--color-selection, #06b6d4)', outlineOffset: '0px' } : undefined}
     >

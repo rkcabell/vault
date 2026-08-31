@@ -1,3 +1,7 @@
+/**
+ * Deletes many items in the background, a chunk at a time, so the request that
+ * asked for it does not have to wait.
+ */
 import type { Job, Processor } from "bullmq";
 import type { DeleteJobData, DeleteJobFilters, DeleteJobProgress } from "../queues/enqueueDelete.js";
 import type { MediaDeletionRow } from "../repositories/mediaRepository.js";
@@ -10,8 +14,7 @@ type DeleteLogger = {
 /** Filter shape the repository expects (job filters + the resolved userId). */
 type RepoFilters = DeleteJobFilters & { userId: string };
 
-/** Structural deps so the worker is unit-testable with simple fakes (mirrors the
- *  injected-dependency convention used across the services). */
+/** Everything the worker touches, passed in so it can be run against test doubles. */
 type DeleteWorkerDeps = {
   mediaRepository: {
     countMediaForDeletion: (filters: RepoFilters) => Promise<number>;
@@ -35,17 +38,20 @@ type DeleteWorkerDeps = {
   readAbortEpoch?: () => Promise<number>;
   /** How many rows to delete per chunk (tests use a small value). */
   chunkSize?: number;
-  /** Cap on concurrent storage unlinks per chunk (guards against EMFILE on local FS). */
+  /** How many files may be removed from storage at once, so the process does not run out of open file handles. */
   storageConcurrency?: number;
 };
 
-/** Rows deleted per DB statement / per re-select pass. Large enough that the DB
- *  work is a handful of queries; small enough that progress ticks frequently and
- *  an abort lands promptly. */
+/**
+ * Rows handled per pass.
+ *
+ * Large enough that the database does little work per row, small enough that
+ * progress is reported often and a request to stop is noticed quickly.
+ */
 const CHUNK_SIZE = 500;
 const STORAGE_CONCURRENCY = 50;
 
-/** Run `fn` over `items` with at most `limit` in flight at once. */
+// Runs `fn` over `items` with at most `limit` of them in progress at once.
 async function mapLimit<T> (items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let i = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -61,8 +67,12 @@ export function createDeleteProcessor (deps: DeleteWorkerDeps): Processor<Delete
   const chunkSize = deps.chunkSize ?? CHUNK_SIZE;
   const storageConcurrency = deps.storageConcurrency ?? STORAGE_CONCURRENCY;
 
-  /** Delete one chunk: drop the rows set-based, clear any bundle covers pointing
-   *  at them, then unlink storage (never the in-place source). Returns rows deleted. */
+  /**
+   * Deletes one chunk of items and returns how many rows went.
+   *
+   * A file that was indexed where it sits belongs to the user and is left
+   * alone; only files Vault itself wrote are removed.
+   */
   const deleteChunk = async (userId: string, rows: MediaDeletionRow[]): Promise<number> => {
     // Drop the DB rows first. If the row delete throws, storage is left intact —
     // a retry is clean. Unlinking storage first would, on a DB failure, orphan

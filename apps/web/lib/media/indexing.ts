@@ -55,10 +55,14 @@ export async function getIndexStatus (jobId: string): Promise<IndexStatus | null
   }
 }
 
-/** Stop the index walker without touching the worker queues. Best-effort. */
+/**
+ * Stop the directory walk and drop any queued sweeps, leaving derivatives that
+ * were already found to finish. Best-effort — the poll reflects the new status
+ * on its next tick either way.
+ */
 export async function stopIndex (): Promise<void> {
   try {
-    await apiFetch("/api/media/index/stop", { method: "POST", credentials: "include" });
+    await apiFetch("/api/jobs/cancel-scan", { method: "POST", credentials: "include" });
   } catch {
     // best-effort; the poll will reflect the updated status on the next tick
   }

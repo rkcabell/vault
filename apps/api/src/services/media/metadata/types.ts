@@ -1,6 +1,12 @@
 import type { FastifyBaseLogger } from "fastify";
 import type { StorageAdapter } from "../../../adapters/storage/types.js";
 
+/**
+ * What Vault records about a file beyond its name and size, grouped by where it
+ * came from: the camera fields in an image, the document fields in a PDF or an
+ * Office file, and counts derived from extracted text.
+ */
+
 export type ImageGps = {
   latitude: number;
   longitude: number;
@@ -12,6 +18,7 @@ export type ImageMetadata = {
   model?: string | null;
   lens?: string | null;
   iso?: number | null;
+  /** Seconds. A 1/250 shutter reads as 0.004. */
   exposureTime?: number | null;
   fNumber?: number | null;
   focalLengthMm?: number | null;
@@ -73,6 +80,7 @@ export type ExtractArgs = {
   };
   document?: {
     rawText?: string | null;
+    /** The stored per-page array, validated where it is read. */
     pages?: unknown | null;
   } | null;
   storage: StorageAdapter;

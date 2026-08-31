@@ -1,5 +1,9 @@
+/**
+ * Turns a Redis connection URL into the settings object BullMQ expects.
+ */
 import { type ConnectionOptions } from "bullmq";
 
+/** Reads host, port, credentials and database number out of `url`. A `rediss:` URL turns TLS on. */
 export function buildRedisConnection (url: string): ConnectionOptions {
   const parsed = new URL(url);
   return {

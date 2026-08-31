@@ -1,8 +1,6 @@
-// Entry point for the OCR worker process.
-// Run independently of the thumbnail worker so a crashing OCR job
-// cannot block thumbnail processing (and vice-versa).
 import "dotenv/config";
 
+import { cpus } from "node:os";
 import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 
@@ -12,10 +10,22 @@ import { readLowMemoryPreference } from "./workerPrefs.js";
 import { createOcrProcessor, type OcrJobData } from "./ocrWorker.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { DocumentRepository } from "../repositories/documentRepository.js";
+import { PreferencesRepository } from "../repositories/preferencesRepository.js";
+import { PreferencesService } from "../services/preferencesService.js";
+import { DEFAULT_PREFERENCES } from "@vault/types";
 import { buildRedisConnection } from "../lib/config/redis.js";
 import { createLogger } from "../lib/logger.js";
 import { TextJobError } from "../lib/text/processTextJob.js";
 import { markStalledJobs } from "../services/stallDetectionService.js";
+import { OCR_QUEUE, enqueueOcrJob } from "../queues/enqueueOcr.js";
+
+/**
+ * Entry point for the tier-2 OCR worker, which runs ocrmypdf and Tesseract.
+ * Nothing reaches `ocr_queue` without `forceOcr` set. Each job is a subprocess
+ * taking about one core and up to a gigabyte of memory for seconds to tens of
+ * minutes, so the pool stays near the core count however deep the backlog: a
+ * larger one buys context switching and out-of-memory kills, not throughput.
+ */
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const BUCKET = workerBucket();
@@ -24,8 +34,13 @@ const BUCKET = workerBucket();
 const LOW_MEMORY = process.env.LOW_MEMORY === "true" || process.env.LOW_MEMORY === "1"
   || await readLowMemoryPreference(prisma);
 
-const OCR_QUEUE            = process.env.OCR_QUEUE ?? "ocr_queue";
-const OCR_CONCURRENCY      = parseEnvNumber("OCR_CONCURRENCY", LOW_MEMORY ? 2 : 4);
+// Capped at 4 whatever the core count: past that, memory and disk limit it
+// rather than cores, and a 32-core machine does not have 32 GB to spare for
+// Tesseract. OCR_CONCURRENCY overrides it.
+const OCR_CONCURRENCY      = parseEnvNumber(
+  "OCR_CONCURRENCY",
+  Math.max(1, Math.floor(Math.min(4, cpus().length - 1) / (LOW_MEMORY ? 2 : 1))),
+);
 const OCR_LOCK_DURATION_MS = parseEnvNumber("OCR_LOCK_DURATION_MS", 30 * 60 * 1000);
 const OCR_LOCK_RENEW_MS    = parseEnvNumber(
   "OCR_LOCK_RENEW_MS",
@@ -49,6 +64,7 @@ async function main() {
 
   const mediaRepository    = new MediaRepository(prisma);
   const documentRepository = new DocumentRepository(prisma);
+  const preferencesService = new PreferencesService(new PreferencesRepository(prisma));
   const storage            = createWorkerStorage();
 
   const ocrLogger = logger.child({ queue: OCR_QUEUE, jobName: "ocr" });
@@ -62,7 +78,13 @@ async function main() {
       storage,
       bucket: BUCKET,
       allowedRoots: workerAllowedRoots(),
-      enqueueOcr: async (data, opts) => ocrQueue.add("ocr", data, opts),
+      // Self-enqueue: a forced job that turns out to still need a handoff
+      // (retry after a transient read failure) goes back on this same queue.
+      enqueueOcr: async (data, opts) => enqueueOcrJob(ocrQueue, data, opts),
+      getOcrMode: async userId =>
+        userId ? (await preferencesService.getPreferences(userId)).ocrMode : DEFAULT_PREFERENCES.ocrMode,
+      getOcrTimeoutCapMinutes: async userId =>
+        userId ? (await preferencesService.getPreferences(userId)).ocrTimeoutCapMinutes : DEFAULT_PREFERENCES.ocrTimeoutCapMinutes,
       logger: ocrLogger,
       queueName: OCR_QUEUE,
       publishJobUpdate,
@@ -76,13 +98,14 @@ async function main() {
     },
   );
 
-  if (LOW_MEMORY) logger.info("low-memory mode: ocr concurrency capped at 2");
+  if (LOW_MEMORY) logger.info({ concurrency: OCR_CONCURRENCY }, "low-memory mode: ocr concurrency halved");
 
   ocrWorker.on("ready", () =>
     ocrLogger.info({ queue: OCR_QUEUE, concurrency: OCR_CONCURRENCY }, "ocr worker ready"),
   );
 
-  // Stall detection lives here because it monitors OCR/text state only.
+  // Stall detection watches text state only, so it belongs to a text-side
+  // process. worker/text.ts runs it too; the sweep can be repeated safely.
   const stallLogger  = logger.child({ component: "stall-detection" });
   const runStallCheck = () =>
     markStalledJobs(mediaRepository, stallLogger).catch(err =>

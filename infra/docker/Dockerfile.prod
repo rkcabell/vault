@@ -78,7 +78,7 @@ COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
 # pnpm deploy copies workspace packages without their dist/ (not built at that point).
-# Patch the compiled output into node_modules where Node actually resolves them.
+# Patch the compiled output into node_modules where Node resolves them from.
 COPY --from=builder /app/packages/db/dist    ./node_modules/@vault/db/dist
 COPY --from=builder /app/packages/types/dist ./node_modules/@vault/types/dist
 

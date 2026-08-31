@@ -3,6 +3,11 @@ import { z, ZodError } from "zod";
 import { requireAuth } from "../utils/authGuard.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
 
+/**
+ * Creates and edits bundles, moves items in and out of them, and streams one
+ * out as a zip.
+ */
+
 export const bundlesRoutes: FastifyPluginAsync = async app => {
   const repo = new BundleRepository(app.prisma);
 
@@ -15,14 +20,12 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     }
   }
 
-  // GET / — list user's bundles
   app.get("/", { preHandler: [requireAuth] }, async req => {
     const { q } = z.object({ q: z.string().optional() }).parse(req.query);
     const bundles = await repo.listBundles(req.userId!, q?.trim() || undefined);
     return { bundles };
   });
 
-  // POST / — create bundle
   app.post("/", { preHandler: [requireAuth] }, async (req, reply) => {
     const Body = z.object({
       name: z.string().min(1).max(200),
@@ -36,7 +39,6 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     return { bundle };
   });
 
-  // GET /:id — get bundle detail with items
   app.get("/:id", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const bundle = await repo.getBundleById(id, req.userId!);
@@ -44,7 +46,6 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     return { bundle };
   });
 
-  // PATCH /:id — update name/description/starred/coverMediaId
   app.patch("/:id", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const Body = z.object({
@@ -60,7 +61,6 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     return { ok: true };
   });
 
-  // DELETE /:id — delete bundle
   app.delete("/:id", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const userId = req.userId!;
@@ -69,8 +69,8 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
 
     if (!result.found) return reply.notFound();
 
-    // If this bundle was created by unpacking an archive, delete all extracted
-    // media items that are not members of any other bundle.
+    // A bundle made by unpacking an archive owns its entries, so deleting it
+    // deletes any that no other bundle still holds.
     if (result.extractedMediaIds.length > 0) {
       const stillMembered = await app.prisma.bundleItem.findMany({
         where: { mediaId: { in: result.extractedMediaIds } },
@@ -88,7 +88,6 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     reply.code(204);
   });
 
-  // POST /:id/items — add media to bundle
   app.post("/:id/items", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const Body = z.object({
@@ -101,7 +100,6 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     return { ok: true };
   });
 
-  // DELETE /:id/items/:mediaId — remove item from bundle
   app.delete("/:id/items/:mediaId", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id, mediaId } = z.object({ id: z.string(), mediaId: z.string() }).parse(req.params);
     const ok = await repo.removeItem(id, req.userId!, mediaId);
@@ -110,7 +108,6 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     reply.code(204);
   });
 
-  // POST /:id/star — toggle starred
   app.post("/:id/star", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const starred = await repo.toggleStar(id, req.userId!);
@@ -119,7 +116,6 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     return { ok: true, starred };
   });
 
-  // GET /:id/export — stream all bundle items as a zip
   app.get("/:id/export", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const userId = req.userId!;
@@ -135,7 +131,7 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     reply.raw.setHeader("Content-Disposition", `attachment; filename="${safeName}.zip"`);
     reply.hijack();
 
-    await app.mediaServices.actionsService.streamBulkArchive(
+    await app.mediaServices.archiveService.streamBulkArchive(
       exportData.items,
       reply.raw,
       req.log,
@@ -143,7 +139,6 @@ export const bundlesRoutes: FastifyPluginAsync = async app => {
     );
   });
 
-  // PUT /:id/items/order — reorder items
   app.put("/:id/items/order", { preHandler: [requireAuth] }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const Body = z.object({

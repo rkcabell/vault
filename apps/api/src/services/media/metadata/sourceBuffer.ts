@@ -3,8 +3,17 @@ import type { FastifyBaseLogger } from "fastify";
 import { streamToBuffer } from "../../../lib/streams/toBuffer.js";
 import type { StorageAdapter } from "../../../adapters/storage/types.js";
 
+/**
+ * Reads a stored file into memory for the metadata extractors, which each need
+ * the whole file at once.
+ */
+
 const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
 
+/**
+ * Returns the whole object as a buffer. Null when it is missing, unreadable, or
+ * larger than `MAX_SOURCE_BYTES`.
+ */
 export async function getSourceBuffer ({
   bucket,
   key,
@@ -30,6 +39,7 @@ export async function getSourceBuffer ({
     }
 
     const buffer = await streamToBuffer(stream);
+    // The declared length can be absent or wrong, so the real one is checked too.
     if (buffer.length > MAX_SOURCE_BYTES) return null;
     return buffer;
   } catch (err) {

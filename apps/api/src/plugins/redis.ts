@@ -1,3 +1,10 @@
+/**
+ * Puts a Redis client on the Fastify instance for caching, rate limiting and
+ * the derivative pause switch.
+ *
+ * The queueEvents plugin opens a second connection of its own, because a
+ * client that is subscribed to a channel cannot run ordinary commands.
+ */
 import fp from "fastify-plugin";
 import IORedis from "ioredis";
 

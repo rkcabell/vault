@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import {
   computeOcrTimeout,
   isTransientError,
@@ -51,7 +52,11 @@ function buildMinimalPdf (text: string): Buffer {
 
 // ── mock builder ──────────────────────────────────────────────────────────────
 
-type MediaRow = { id: string; textState: string; storageKey: string; sizeBytes: number; mimeType: string };
+type MediaRow = {
+  id: string; textState: string; storageKey: string; sizeBytes: number; mimeType: string;
+  userId?: string; contentHash?: string | null;
+};
+type ReusableDocument = { id: string; rawText: string; pages: unknown; textSource: string | null };
 
 function makeDeps (opts: {
   findForOcr?: () => Promise<MediaRow | null>;
@@ -62,12 +67,21 @@ function makeDeps (opts: {
   onStorageRead?: () => void;
   textDeps?: OcrProcessingDeps["textDeps"];
   publishJobUpdate?: OcrProcessingDeps["publishJobUpdate"];
+  /** Left unset on purpose: the service then falls back to DEFAULT_PREFERENCES
+   *  ("onDemand"), so tests exercise the shipping default unless they opt out.
+   *  Tests that want tier-2 OCR to run must ask for "background". */
+  getOcrMode?: OcrProcessingDeps["getOcrMode"];
+  getOcrTimeoutCapMinutes?: OcrProcessingDeps["getOcrTimeoutCapMinutes"];
+  /** No twin by default — every existing test's row also carries no
+   *  contentHash, so the reuse check never fires unless a test opts in. */
+  findReusableDocument?: (_userId: string, _hash: string, _excludeId: string) => Promise<ReusableDocument | null>;
 } = {}): OcrProcessingDeps {
   return {
     mediaRepository: {
       findForOcr: opts.findForOcr ?? (async () => null),
       setTextState: opts.setTextState ?? (async () => true),
       addTagIfAbsent: opts.addTagIfAbsent ?? (async () => {}),
+      findReusableDocument: opts.findReusableDocument ?? (async () => null),
     } as unknown as OcrProcessingDeps["mediaRepository"],
     documentRepository: {
       upsertDocument: opts.upsertDocument ?? (async () => {}),
@@ -83,6 +97,8 @@ function makeDeps (opts: {
     } as unknown as OcrProcessingDeps["storage"],
     bucket: "test-bucket",
     enqueueOcr: opts.enqueueOcr ?? (async () => {}),
+    getOcrMode: opts.getOcrMode,
+    getOcrTimeoutCapMinutes: opts.getOcrTimeoutCapMinutes,
     logger,
     queueName: "ocr",
     sleep: async () => {},
@@ -115,6 +131,42 @@ test("computeOcrTimeout: result never exceeds 600 000 ms", () => {
   assert.ok(computeOcrTimeout(Number.MAX_SAFE_INTEGER) <= 600_000);
 });
 
+test("computeOcrTimeout: custom cap overrides the 10-minute default", () => {
+  assert.equal(computeOcrTimeout(100 * 1024 * 1024, 5 * 60_000), 300_000);
+  assert.equal(computeOcrTimeout(0, 5 * 60_000), 60_000);
+});
+
+test("processOcrJob: getOcrTimeoutCapMinutes resolves the cap when deps.timeoutMs is unset", async () => {
+  let loggedTimeoutMs: number | null = null;
+  const spyLogger = {
+    info: (obj: Record<string, unknown>) => { if ("timeoutMs" in obj) loggedTimeoutMs = obj.timeoutMs as number; },
+    warn: () => {},
+    error: () => {},
+    debug: () => {},
+  } as unknown as Logger;
+
+  const ocrPdf = buildMinimalPdf("cap test output");
+  const deps = {
+    ...makeDeps({
+      findForOcr: async () => ({
+        id: "cap1", textState: "PENDING", storageKey: "s/big.pdf", sizeBytes: 100 * 1024 * 1024,
+        mimeType: "application/pdf",
+      }),
+      textDeps: {
+        getObjectBuffer: async () => Buffer.from("x"),
+        ocrWithOcrmypdf: async () => ({ ocrPdf }),
+      },
+      getOcrTimeoutCapMinutes: async () => 5,
+    }),
+    logger: spyLogger,
+    timeoutMs: undefined,
+  };
+
+  await processOcrJob(deps, { mediaId: "cap1", forceOcr: true });
+
+  assert.equal(loggedTimeoutMs, 5 * 60_000, "a 100 MB file should be capped at the custom 5-minute limit, not the 10-minute default");
+});
+
 // ── isTransientError ──────────────────────────────────────────────────────────
 
 test("isTransientError: TextJobError with SOURCE_NOT_READY code → true", () => {
@@ -125,16 +177,8 @@ test("isTransientError: plain Error containing SOURCE_NOT_READY → true", () =>
   assert.equal(isTransientError(new Error("SOURCE_NOT_READY")), true);
 });
 
-test("isTransientError: NetworkingError → true", () => {
-  assert.equal(isTransientError(new Error("NetworkingError: connection refused")), true);
-});
-
 test("isTransientError: Timeout → true", () => {
   assert.equal(isTransientError(new Error("Timeout after 30s")), true);
-});
-
-test("isTransientError: Throttling → true", () => {
-  assert.equal(isTransientError(new Error("Throttling")), true);
 });
 
 test("isTransientError: non-transient Error → false", () => {
@@ -200,8 +244,11 @@ test("processOcrJob: throws SOURCE_NOT_READY when the source object is absent", 
     textDeps: { getObjectBuffer: async () => null } as unknown as OcrProcessingDeps["textDeps"],
   });
 
+  // Reaching the source read at all requires tier 2, and since the queue split
+  // no ocrMode runs tier 2 from a tier-1 job — `background` enqueues instead.
+  // forceOcr is what a job pulled off ocr_queue carries.
   await assert.rejects(
-    () => processOcrJob(deps, { mediaId: "m1" }),
+    () => processOcrJob(deps, { mediaId: "m1", forceOcr: true }),
     (err: unknown) => err instanceof TextJobError && (err as TextJobError).code === "SOURCE_NOT_READY",
   );
 });
@@ -248,7 +295,9 @@ test("processOcrJob: non-PDF path runs OCR and sets textState READY", async () =
     },
   });
 
-  await processOcrJob(deps, { mediaId: "m2" });
+  // An image is pure tier-2 work: this is the ocr_queue job, not the text_queue
+  // one that parked the row.
+  await processOcrJob(deps, { mediaId: "m2", forceOcr: true });
 
   const ua = upsertArgs as { rawText: string; textSource: string };
   assert.ok(ua.rawText.includes("OCR extracted result text content here"));
@@ -325,7 +374,7 @@ test("processOcrJob: fires publishJobUpdate with READY on success", async () => 
     publishJobUpdate: (u) => { updates.push(u); },
   });
 
-  await processOcrJob(deps, { mediaId: "m3", userId: "user-1" });
+  await processOcrJob(deps, { mediaId: "m3", userId: "user-1", forceOcr: true });
 
   const textStateUpdate = updates.find((u) => (u as { field?: string }).field === "textState") as
     | { field: string; value: string; userId: string }
@@ -334,4 +383,267 @@ test("processOcrJob: fires publishJobUpdate with READY on success", async () => 
   assert.equal(textStateUpdate.field, "textState");
   assert.equal(textStateUpdate.value, "READY");
   assert.equal(textStateUpdate.userId, "user-1");
+});
+
+// ── ocrMode: deferring tier-2 (Tesseract) work ────────────────────────────────
+
+test("processOcrJob: onDemand parks an image at NEEDS_OCR without reading it", async () => {
+  let textStateSet: string | null = null;
+  let ocrmypdfCalled = false;
+  let sourceRead = false;
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "img1", textState: "PENDING", storageKey: "s/scan.png", sizeBytes: 2048,
+      mimeType: "image/png",
+    }),
+    setTextState: async (_id, state) => { textStateSet = state; return true; },
+    textDeps: {
+      getObjectBuffer: async () => { sourceRead = true; return Buffer.from("x"); },
+      ocrWithOcrmypdf: async () => { ocrmypdfCalled = true; return { ocrPdf: Buffer.alloc(0) }; },
+    },
+    // getOcrMode unset → DEFAULT_PREFERENCES.ocrMode ("onDemand")
+  });
+
+  await processOcrJob(deps, { mediaId: "img1" });
+
+  assert.equal(textStateSet, "NEEDS_OCR");
+  assert.equal(ocrmypdfCalled, false, "Tesseract must not run under onDemand");
+  assert.equal(sourceRead, false, "deferring must not even read the source");
+});
+
+test("processOcrJob: forceOcr overrides onDemand — the user asked for it", async () => {
+  const ocrPdf = buildMinimalPdf("forced ocr text output");
+  let textStateSet: string | null = null;
+  let ocrmypdfCalled = false;
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "img2", textState: "NEEDS_OCR", storageKey: "s/scan.png", sizeBytes: 2048,
+      mimeType: "image/png",
+    }),
+    setTextState: async (_id, state) => { textStateSet = state; return true; },
+    textDeps: {
+      getObjectBuffer: async () => Buffer.from("x"),
+      ocrWithOcrmypdf: async () => { ocrmypdfCalled = true; return { ocrPdf }; },
+    },
+  });
+
+  await processOcrJob(deps, { mediaId: "img2", forceOcr: true });
+
+  assert.equal(ocrmypdfCalled, true, "forceOcr runs Tesseract regardless of mode");
+  assert.equal(textStateSet, "READY");
+});
+
+test("processOcrJob: a scanned PDF parks at NEEDS_OCR and queues nothing under onDemand", async () => {
+  // No text layer → pdf.js reports needsOcr, which is the deferral trigger.
+  const scanPdf = buildMinimalPdf("");
+  let textStateSet: string | null = null;
+  let enqueued = 0;
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "pdf1", textState: "PENDING", storageKey: "s/scan.pdf", sizeBytes: 4096,
+      mimeType: "application/pdf",
+    }),
+    setTextState: async (_id, state) => { textStateSet = state; return true; },
+    enqueueOcr: async () => { enqueued += 1; },
+    textDeps: { getObjectBuffer: async () => scanPdf },
+  });
+
+  await processOcrJob(deps, { mediaId: "pdf1" });
+
+  assert.equal(textStateSet, "NEEDS_OCR");
+  assert.equal(enqueued, 0, "onDemand must not queue the fallback");
+});
+
+test("processOcrJob: background mode queues the scanned-PDF fallback behind user work", async () => {
+  const scanPdf = buildMinimalPdf("");
+  const enqueuedOpts: unknown[] = [];
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "pdf2", textState: "PENDING", storageKey: "s/scan.pdf", sizeBytes: 4096,
+      mimeType: "application/pdf",
+    }),
+    textDeps: { getObjectBuffer: async () => scanPdf },
+    getOcrMode: async () => "background",
+  });
+  // makeDeps types enqueueOcr as a no-arg thunk; capture the real args here.
+  deps.enqueueOcr = async (_data, opts) => { enqueuedOpts.push(opts); };
+
+  await processOcrJob(deps, { mediaId: "pdf2" });
+
+  assert.equal(enqueuedOpts.length, 1, "background mode queues the fallback");
+  const opts = enqueuedOpts[0] as { priority?: number };
+  assert.ok(
+    typeof opts.priority === "number" && opts.priority > 1,
+    "sweeper work must yield to user-initiated extraction (priority 1)",
+  );
+});
+
+// ── the queue split: tier 1 must never run Tesseract itself ───────────────────
+
+test("processOcrJob: background mode hands an image to tier 2 instead of running it", async () => {
+  let ocrmypdfCalled = false;
+  let sourceRead = false;
+  let textStateSet: string | null = null;
+  const enqueued: { data: unknown; opts: unknown }[] = [];
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "img3", textState: "PENDING", storageKey: "s/photo.png", sizeBytes: 2048,
+      mimeType: "image/png",
+    }),
+    setTextState: async (_id, state) => { textStateSet = state; return true; },
+    textDeps: {
+      getObjectBuffer: async () => { sourceRead = true; return Buffer.from("x"); },
+      ocrWithOcrmypdf: async () => { ocrmypdfCalled = true; return { ocrPdf: Buffer.alloc(0) }; },
+    },
+    getOcrMode: async () => "background",
+  });
+  deps.enqueueOcr = async (data, opts) => { enqueued.push({ data, opts }); };
+
+  await processOcrJob(deps, { mediaId: "img3" });
+
+  // This is the whole point of splitting the queues: a job on text_queue that
+  // meets Tesseract work enqueues it rather than holding a high-concurrency slot
+  // for the length of the run. Before the split, background mode shelled out here.
+  assert.equal(ocrmypdfCalled, false, "tier 1 must never shell out to ocrmypdf");
+  assert.equal(sourceRead, false, "handing off must not read the source either");
+  assert.equal(textStateSet, "NEEDS_OCR");
+  assert.equal(enqueued.length, 1, "background mode hands the image to ocr_queue");
+  assert.equal((enqueued[0].data as { forceOcr?: boolean }).forceOcr, true);
+});
+
+test("processOcrJob: a PDF whose native pass fails is handed off, not OCR'd in place", async () => {
+  let ocrmypdfCalled = false;
+  let textStateSet: string | null = null;
+  let enqueued = 0;
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "pdf3", textState: "PENDING", storageKey: "s/broken.pdf", sizeBytes: 4096,
+      mimeType: "application/pdf",
+    }),
+    setTextState: async (_id, state) => { textStateSet = state; return true; },
+    textDeps: {
+      // Not a PDF at all → pdf.js throws something other than SOURCE_NOT_READY,
+      // which is the "fall through to OCR" path.
+      getObjectBuffer: async () => Buffer.from("not a pdf"),
+      ocrWithOcrmypdf: async () => { ocrmypdfCalled = true; return { ocrPdf: Buffer.alloc(0) }; },
+    },
+    getOcrMode: async () => "background",
+  });
+  deps.enqueueOcr = async () => { enqueued += 1; };
+
+  await processOcrJob(deps, { mediaId: "pdf3" });
+
+  assert.equal(ocrmypdfCalled, false, "the pdf.js-failure fallback is tier-2 work too");
+  assert.equal(textStateSet, "NEEDS_OCR");
+  assert.equal(enqueued, 1);
+});
+
+test("processOcrJob: the tier-2 handoff carries the in-place allow-list snapshot", async () => {
+  const enqueued: unknown[] = [];
+  const root = path.join(path.sep, "nas");
+  const source = path.join(root, "scan.png");
+
+  // An image, so the deferral happens before any source read — the point here is
+  // the shape of the handoff, not the extraction.
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "img4", textState: "PENDING", storageKey: "external/u/img4/scan.png",
+      sizeBytes: 2048, mimeType: "image/png", sourcePath: source,
+    }),
+    getOcrMode: async () => "background",
+  });
+  deps.enqueueOcr = async (data) => { enqueued.push(data); };
+
+  await processOcrJob(deps, { mediaId: "img4", allowedRoots: [root] });
+
+  // Without this the tier-2 job re-validates the source path against an empty
+  // allow-list and the read is rejected — the handoff would always fail.
+  const data = enqueued[0] as { sourcePath?: string; allowedRoots?: string[] };
+  assert.equal(data.sourcePath, source);
+  assert.deepEqual(data.allowedRoots, [root]);
+});
+
+// ── text/OCR reuse (G2) ──────────────────────────────────────────────────────
+
+test("processOcrJob: reuses an identical file's already-extracted text, skips both tiers", async () => {
+  let upsertArgs: unknown = null;
+  let textStateSet: string | null = null;
+  let storageRead = false;
+  let findReusableArgs: unknown = null;
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "m1", userId: "u1", textState: "PENDING", storageKey: "s/k.pdf", sizeBytes: 1024,
+      mimeType: "application/pdf", contentHash: "abc123",
+    }),
+    upsertDocument: async (args) => { upsertArgs = args; },
+    setTextState: async (_id, state) => { textStateSet = state; return true; },
+    onStorageRead: () => { storageRead = true; },
+    findReusableDocument: async (userId, hash, excludeId) => {
+      findReusableArgs = { userId, hash, excludeId };
+      return { id: "twin", rawText: "reused text", pages: null, textSource: "NATIVE" };
+    },
+  });
+
+  await processOcrJob(deps, { mediaId: "m1", userId: "u1" });
+
+  assert.deepEqual(findReusableArgs, { userId: "u1", hash: "abc123", excludeId: "m1" });
+  assert.equal(storageRead, false, "never reads the source when reusing");
+  const ua = upsertArgs as { rawText: string; mediaId: string; textSource: string };
+  assert.equal(ua.mediaId, "m1");
+  assert.equal(ua.rawText, "reused text");
+  assert.equal(ua.textSource, "NATIVE");
+  assert.equal(textStateSet, "READY");
+});
+
+test("processOcrJob: forceOcr:true still reuses — skips an entire Tesseract run", async () => {
+  let upsertArgs: unknown = null;
+  let storageRead = false;
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "m1", userId: "u1", textState: "NEEDS_OCR", storageKey: "s/scan.png", sizeBytes: 2048,
+      mimeType: "image/png", contentHash: "hash-x",
+    }),
+    upsertDocument: async (args) => { upsertArgs = args; },
+    onStorageRead: () => { storageRead = true; },
+    findReusableDocument: async () => ({ id: "twin", rawText: "already ocr'd", pages: null, textSource: "OCR" }),
+    // No textDeps.ocrWithOcrmypdf: if reuse didn't short-circuit before the
+    // real tier-2 path, this would throw trying to run Tesseract with no fixture.
+  });
+
+  await processOcrJob(deps, { mediaId: "m1", userId: "u1", forceOcr: true });
+
+  assert.equal(storageRead, false, "the whole point — skips reading the source at all");
+  const ua = upsertArgs as { rawText: string; textSource: string };
+  assert.equal(ua.rawText, "already ocr'd");
+  assert.equal(ua.textSource, "OCR");
+});
+
+test("processOcrJob: no contentHash means no reuse attempt", async () => {
+  let reuseCalled = false;
+
+  const deps = makeDeps({
+    findForOcr: async () => ({
+      id: "m1", userId: "u1", textState: "PENDING", storageKey: "missing/key", sizeBytes: 0,
+      mimeType: "image/png", contentHash: null,
+    }),
+    textDeps: { getObjectBuffer: async () => null } as unknown as OcrProcessingDeps["textDeps"],
+    findReusableDocument: async () => { reuseCalled = true; return null; },
+  });
+
+  // Falls through to the normal path, which fails the same way the existing
+  // "source object is absent" test does — proof the reuse check was skipped
+  // rather than silently swallowed.
+  await assert.rejects(
+    () => processOcrJob(deps, { mediaId: "m1", userId: "u1", forceOcr: true }),
+    (err: unknown) => err instanceof TextJobError && (err as TextJobError).code === "SOURCE_NOT_READY",
+  );
+  assert.equal(reuseCalled, false, "must not even query for a twin without a hash");
 });

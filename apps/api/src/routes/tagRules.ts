@@ -4,6 +4,12 @@ import { MATCHER_SCHEMAS, TagRuleSourceSchema, type TagRuleSource } from "@vault
 import { requireAuth } from "../utils/authGuard.js";
 import { TagRuleRepository } from "../repositories/tagRuleRepository.js";
 import { normalizeTag, TagValidationError } from "../lib/tags/normalizeTags.js";
+import { TAG_RULE_RUN } from "../lib/http/rateLimits.js";
+
+/**
+ * Creates, edits and deletes a user's tag rules, and starts a run that applies
+ * them to the whole library.
+ */
 
 const RuleCreateBody = z.object({
   name: z.string().min(1).max(64),
@@ -19,8 +25,8 @@ const RulePatchBody = RuleCreateBody.partial().refine(
   { message: "Provide at least one field to update" },
 );
 
-/** A template must yield a valid tag once `{value}` is substituted. Returns an
- *  error message, or null when the template is fine. */
+/** Returns why `template` is unusable, or null when it is fine. A template has
+ *  to yield a valid tag once `{value}` is substituted. */
 function templateError (template: string): string | null {
   const sampled = template.replaceAll("{value}", "sample");
   try {
@@ -32,7 +38,7 @@ function templateError (template: string): string | null {
   }
 }
 
-/** Matcher must parse under the schema for its rule source. */
+/** Returns why `matcher` is invalid for `source`, or null when it parses. */
 function matcherError (source: TagRuleSource, matcher: unknown): string | null {
   const parsed = MATCHER_SCHEMAS[source].safeParse(matcher ?? {});
   if (parsed.success) return null;
@@ -117,17 +123,15 @@ export const tagRulesRoutes: FastifyPluginAsync = async app => {
     return { ok: true };
   });
 
-  // POST /tag-rules/run?dryRun=true — retroactively apply the rules to every
-  // media item (dry run previews without writing). Work happens in the
-  // organize worker; poll /run/status for progress.
-  app.post("/run", { preHandler: [requireAuth] }, async req => {
+  // Applies the rules to every item already in the library. The work happens
+  // in the organize worker, and /run/status reports its progress.
+  app.post("/run", { preHandler: [requireAuth, app.userRateLimit("tag-rule-run", TAG_RULE_RUN)] }, async req => {
     const { dryRun } = z
       .object({ dryRun: z.enum(["true", "false"]).optional() })
       .parse(req.query);
     return app.mediaServices.organizeService.startRun(req.userId!, dryRun === "true");
   });
 
-  // GET /tag-rules/run/status?jobId=... — poll organize-run progress
   app.get("/run/status", { preHandler: [requireAuth] }, async (req, reply) => {
     const { jobId } = z.object({ jobId: z.string().min(1) }).parse(req.query);
     const status = await app.mediaServices.organizeService.getStatus(req.userId!, jobId);
@@ -135,8 +139,7 @@ export const tagRulesRoutes: FastifyPluginAsync = async app => {
     return status;
   });
 
-  // GET /tag-rules/run/active — the user's in-flight run, so the UI can
-  // re-attach after a reload. Returns { status: null } when nothing is running.
+  // Lets the UI re-attach to a run after a reload.
   app.get("/run/active", { preHandler: [requireAuth] }, async req => {
     const status = await app.mediaServices.organizeService.getActive(req.userId!);
     return { status };

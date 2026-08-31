@@ -19,10 +19,12 @@ function makeDeps (opts: {
 } = {}) {
   const hashes: Array<{ mediaId: string; hash: string }> = [];
   const tagged: string[] = [];
+  const states: Array<{ mediaId: string; state: "READY" | "FAILED" }> = [];
 
   const deps = {
     mediaRepository: {
       setContentHash: async (mediaId: string, hash: string) => { hashes.push({ mediaId, hash }); },
+      setHashState: async (mediaId: string, state: "READY" | "FAILED") => { states.push({ mediaId, state }); return true; },
       findDuplicateByHash: async () => (opts.duplicateId ? { id: opts.duplicateId } : null),
       addTagIfAbsent: async (mediaId: string, tagName: string) => { tagged.push(`${mediaId}:${tagName}`); },
     },
@@ -39,7 +41,7 @@ function makeDeps (opts: {
     logger: makeLogger(),
   };
 
-  return { deps, hashes, tagged };
+  return { deps, hashes, tagged, states };
 }
 
 function makeJob (data: Partial<HashJobData> = {}) {
@@ -54,12 +56,13 @@ function makeJob (data: Partial<HashJobData> = {}) {
   } as unknown as Job<HashJobData>;
 }
 
-test("hash: streams the source into sha256 and persists the digest", async () => {
+test("hash: streams the source into sha256, persists the digest, and marks READY", async () => {
   const t = makeDeps({ chunks: ["hello ", "world"] });
 
   await createHashProcessor(t.deps)(makeJob(), "tok");
 
   assert.deepEqual(t.hashes, [{ mediaId: "m1", hash: HELLO_WORLD_SHA256 }]);
+  assert.deepEqual(t.states, [{ mediaId: "m1", state: "READY" }]);
   assert.deepEqual(t.tagged, []); // detectDuplicates off → never tags
 });
 
@@ -71,11 +74,12 @@ test("hash: tags both copies when detectDuplicates finds a match", async () => {
   assert.deepEqual(t.tagged.sort(), ["m0:duplicate", "m1:duplicate"]);
 });
 
-test("hash: missing source is skipped without writing or throwing", async () => {
+test("hash: missing source is marked FAILED without throwing (retrying won't conjure it back)", async () => {
   const t = makeDeps({ chunks: null });
 
   await createHashProcessor(t.deps)(makeJob(), "tok");
 
   assert.deepEqual(t.hashes, []);
+  assert.deepEqual(t.states, [{ mediaId: "m1", state: "FAILED" }]);
   assert.deepEqual(t.tagged, []);
 });

@@ -53,13 +53,13 @@ export function IndexProgressProvider ({ children }: { children: ReactNode }) {
     setStatus(next);
     if (!next) return;
 
-    // New files landed since the last poll → refresh the sidebar (debounced).
+    // Indexed count went up since the last poll → refresh the sidebar (debounced).
     if (next.indexed > prevIndexedRef.current) {
       prevIndexedRef.current = next.indexed;
       scheduleTagRefresh();
     }
 
-    // Fire the completion side effects exactly once per job.
+    // Fire the completion side effects once per job.
     if (isTerminal(next) && toastedJobRef.current !== next.jobId) {
       toastedJobRef.current = next.jobId;
       emitTagsUpdated(); // final reconcile, no debounce
@@ -97,7 +97,6 @@ export function IndexProgressProvider ({ children }: { children: ReactNode }) {
     return () => clearInterval(id);
   }, [status, applyStatus]);
 
-  // Clear any pending debounce on unmount.
   useEffect(() => () => { if (tagDebounceRef.current) clearTimeout(tagDebounceRef.current); }, []);
 
   const start = useCallback(async (path: string, recursive: boolean) => {

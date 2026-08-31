@@ -2,18 +2,15 @@ import { EXT_MIME } from "./mimeFromExtension.js";
 import { extOf } from "./extensions.js";
 
 /**
- * Built-in "non-content" filters for in-place indexing. Pointing a scan at a
- * directory that contains a dev/build tree (node_modules, compiled binaries,
- * build output, source code) otherwise creates tens of thousands of useless
- * Media rows — each spawning a thumbnail + OCR job. These filters let the
- * indexer skip that bloat by default while keeping documents, images, media,
- * and content-text.
+ * Decides which files and directories in-place indexing skips by default.
+ * Pointing a scan at a directory holding a build tree would otherwise create
+ * tens of thousands of rows for source files and compiled output, each with its
+ * own thumbnail and text job.
  *
- * Allowlist semantics: isNonContentFile passes only extensions Vault can
- * actually process (the same set as mimeFromExtension.ts). Unknown extensions
- * and extension-less files are filtered rather than indexed. Gated by the
- * `indexSkipNonContent` preference (default on) and stacks on top of the
- * user's own `indexBlacklistExtensions` and `indexExcludeFolders`.
+ * The file test is an allow-list: only the extensions Vault can process pass,
+ * and an unknown or missing extension is skipped. The `indexSkipNonContent`
+ * preference gates all of it, on top of the user's own blacklist and excluded
+ * folders.
  */
 
 /** Dependency / build / tooling directories skipped wholesale (matched by basename). */
@@ -52,7 +49,7 @@ export const BUILD_DIR_NAMES: ReadonlySet<string> = new Set([
   ".terraform",
   ".pytest_cache",
   ".mypy_cache",
-  // Package-manager caches / install trees (the "slag" a PM spawns)
+  // Package-manager caches and install trees.
   ".npm", // npm cache
   ".yarn", // Yarn (Berry) cache + state
   ".pnpm-store", // pnpm content-addressable store
@@ -66,79 +63,97 @@ export const BUILD_DIR_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Directory *suffixes* (lowercase) that mark a dependency/metadata dir. These
- * carry a variable prefix (the package name) so an exact-name set can't match
- * them — e.g. `pytest-8.3.2.dist-info`, `requests.egg-info`. The pip/wheel
- * `.dist-info` dirs are where METADATA / WHEEL / RECORD / INSTALLER live.
+ * Directory suffixes that mark a dependency or metadata directory. Each carries
+ * the package name as a prefix, so an exact-name set cannot match them:
+ * `pytest-8.3.2.dist-info`, `requests.egg-info`.
  */
 export const BUILD_DIR_SUFFIXES: readonly string[] = [".dist-info", ".egg-info", ".egg"];
 
 /**
- * Allowlist of extensions Vault can index and process
- * mimeFromExtension.ts sync to handle new formats as they are added.
- * Any extension absent from this set is treated as non-content and skipped.
- * Exported so the settings UI can show users exactly what gets indexed.
+ * The extensions Vault can index, kept in step with mimeFromExtension.ts. An
+ * extension absent from this set counts as non-content and is skipped. Exported
+ * so the settings screen can show the user what gets indexed.
  */
 export const CONTENT_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(EXT_MIME));
 
 /**
- * Skip important directories such as OS/system files, disk metadata, trash/recycle bin.
- * TODO: Missing important skips?
+ * Operating-system and disk-metadata directories, and trash folders. Exact names
+ * only: Linux's per-user `.Trash-1000` needs a prefix test this set cannot
+ * express, so {@link isJunkDir} does that one.
  */
 export const JUNK_DIR_NAMES: ReadonlySet<string> = new Set([
   "$recycle.bin",
+  "recycler",
   "system volume information",
+  "lost+found",
   ".trash",
   ".trashes",
+  "__macosx",
+  ".appledouble",
+  ".spotlight-v100",
+  ".fseventsd",
+  ".documentrevisions-v100",
+  ".temporaryitems",
+  ".dropbox.cache",
 ]);
 
 /**
  * Exact filenames (lowercase) that are OS metadata, never content:
  * Windows thumbnail caches / folder settings, macOS Finder droppings.
- * TODO: Missing important skips?
  */
 export const JUNK_FILE_NAMES: ReadonlySet<string> = new Set([
   "thumbs.db",
+  "ehthumbs.db",
+  "ehthumbs_vista.db",
   "desktop.ini",
+  ".directory",
   ".ds_store",
   ".localized",
+  ".apdisk",
+  ".volumeicon.icns",
   "icon\r",
 ]);
 
 /** Extensions (lowercase, no dot) of transient/partial files — temp, in-progress
- *  downloads, editor swap files. Always junk regardless of skipNonContent.
- * TODO: Missing important skips?
- * */
+ *  downloads, editor swap files. Always junk regardless of skipNonContent. */
 export const JUNK_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
   "tmp",
+  "temp",
   "part",
   "partial",
   "crdownload",
+  "crswap",
+  "download",
+  "opdownload",
+  "driveupload",
+  "drivedownload",
   "swp",
   "swo",
+  "swn",
 ]);
 
-/** Checks if directory is a build-file directory */
+/** True when the directory holds dependencies or build output. */
 export function isBuildDir (name: string): boolean {
   const lower = name.toLowerCase();
   if (BUILD_DIR_NAMES.has(lower)) return true;
   return BUILD_DIR_SUFFIXES.some(suffix => lower.endsWith(suffix));
 }
 
-/**
- * Runs file's extension against Vault's known-content allowlist.
- */
+/** True when the file's extension is not one Vault can process. */
 export function isNonContentFile (name: string): boolean {
   return !CONTENT_EXTENSIONS.has(extOf(name));
 }
 
-/** Runs directory name against JUNK_DIR_NAMES. */
+/** True when the directory is operating-system metadata or a trash folder. */
 export function isJunkDir (name: string): boolean {
-  return JUNK_DIR_NAMES.has(name.toLowerCase());
+  const lower = name.toLowerCase();
+  if (JUNK_DIR_NAMES.has(lower)) return true;
+  return lower.startsWith(".trash-"); // per-uid Linux trash (.Trash-1000)
 }
 
 /**
- * Runs file against JUNK_FILE_NAMES and JUNK_FILE_EXTENSIONS, plus some common OS/editor patterns.
+ * True when the file is operating-system metadata, an editor backup, or a
+ * partly-downloaded file.
  */
 export function isJunkFile (name: string): boolean {
   const lower = name.toLowerCase();

@@ -149,7 +149,7 @@ test("length: falls back to hard cut when no whitespace in window", () => {
 });
 
 test("length: handles text that is exactly maxLength — single segment", () => {
-  const text = "exactly";
+  const text = "segment";
   const result = segmentExtractedText({ rawText: text, maxLength: 7 });
   assert.equal(result.length, 1);
   assert.equal(result[0]!.text, text);

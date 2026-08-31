@@ -69,7 +69,7 @@ test("normalizeTags: non-string non-array input throws INVALID_TYPE", () => {
   expectTagError(() => normalizeTags({ tag: "foo" }), "INVALID_TYPE");
 });
 
-test("normalizeTags: accepts exactly MAX_TAGS tags", () => {
+test("normalizeTags: accepts MAX_TAGS tags", () => {
   const tags = Array.from({ length: TAG_RULES.MAX_TAGS }, (_, i) => `tag${i}`);
   assert.equal(normalizeTags(tags).length, TAG_RULES.MAX_TAGS);
 });

@@ -1,5 +1,10 @@
 import type { PreferencesRepository } from "../repositories/preferencesRepository.js";
-import { type Preferences, DEFAULT_PREFERENCES } from "@vault/types";
+import { type Preferences, DEFAULT_PREFERENCES, normalizePreferenceKeys } from "@vault/types";
+
+/**
+ * Reads and writes a user's preferences, holding each user's set briefly in
+ * memory so a hot path does not query for them on every call.
+ */
 
 const CACHE_TTL_MS = 60_000;
 
@@ -11,7 +16,7 @@ export interface IndexConfig {
   blacklistExtensions: string[];
   ignoreHidden: boolean;
   skipNonContent: boolean;
-  /** Seconds a vanished file stays rematchable as a move. See Preferences. */
+  /** Seconds a missing file can still be matched to a move. */
   moveDetectionWindowSeconds: number;
   /** Days a missing item is kept before the sweeper deletes it for real. */
   missingFileGraceDays: number;
@@ -32,21 +37,21 @@ export class PreferencesService {
     if (cached && cached.expiresAt > Date.now()) return cached.value;
 
     const raw = await this.repo.getPreferences(userId);
-    const value = { ...DEFAULT_PREFERENCES, ...(raw as Partial<Preferences> ?? {}) };
+    const value = { ...DEFAULT_PREFERENCES, ...normalizePreferenceKeys(raw) };
     this.cache.set(userId, { value, expiresAt: Date.now() + CACHE_TTL_MS });
     return value;
   }
 
   /**
-   * The in-place indexing config for every user that has at least one allowed
-   * root. The live watcher polls this to know which directories to watch and how
-   * to filter them. Bypasses the per-user cache — it reads all users at once.
+   * Returns the indexing config of every user who has at least one allowed root.
+   * The live watcher reads it to know which directories to watch. It skips the
+   * per-user cache, reading every user in one query.
    */
   async listIndexConfigs (): Promise<IndexConfig[]> {
     const rows = await this.repo.listAll();
     const configs: IndexConfig[] = [];
     for (const row of rows) {
-      const prefs = { ...DEFAULT_PREFERENCES, ...((row.preferences as Partial<Preferences>) ?? {}) };
+      const prefs = { ...DEFAULT_PREFERENCES, ...normalizePreferenceKeys(row.preferences) };
       if (prefs.indexAllowedRoots.length === 0) continue;
       configs.push({
         userId: row.id,
@@ -65,7 +70,7 @@ export class PreferencesService {
   async updatePreferences (userId: string, patch: Partial<Preferences>): Promise<Preferences> {
     this.cache.delete(userId);
     const raw = await this.repo.updatePreferences(userId, patch as Record<string, unknown>);
-    const value = { ...DEFAULT_PREFERENCES, ...(raw as Partial<Preferences> ?? {}) };
+    const value = { ...DEFAULT_PREFERENCES, ...normalizePreferenceKeys(raw) };
     this.cache.set(userId, { value, expiresAt: Date.now() + CACHE_TTL_MS });
     return value;
   }

@@ -74,6 +74,35 @@ services:
       API_BASE_URL: http://api:8000
     ports: [ "3000:3000" ]
 
+  # Tier 1: native pdf.js / plain-text reads. Cheap, high concurrency, and
+  # deliberately its own container so a scanned-PDF backlog on jobs-ocr cannot
+  # stop a born-digital library from becoming searchable.
+  jobs-text:
+    env_file: ../../.env.docker
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: jobs
+    command: pnpm -F api run worker:text
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      STORAGE_FS_PATH: /data/vault
+    volumes:
+      - vault-data:/data/vault
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  # Tier 2: ocrmypdf/Tesseract. One subprocess per concurrency slot, each
+  # costing roughly a core and up to a gigabyte — scale by replicas, not by
+  # raising OCR_CONCURRENCY.
   jobs-ocr:
     env_file: ../../.env.docker
     build:

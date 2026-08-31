@@ -1,8 +1,15 @@
+/**
+ * Builds the short reminders panel shown on the overview screen, together with
+ * the counts displayed beside it.
+ */
 import type { PrismaClient } from "@prisma/client";
 import { SOON_WINDOW_DAYS } from "./constants.js";
 import { REMINDER_BUCKET_ORDER, getEffectiveDueAt, getReminderBucket } from "./time.js";
 import type { ReminderBucket } from "./time.js";
 
+// Grouping and sorting happen in memory because the group a reminder falls in
+// depends on its own timezone, which the database cannot order by. The query
+// therefore reads far more rows than the panel shows.
 const OVERVIEW_LIMIT = 5;
 const OVERVIEW_PREFETCH = OVERVIEW_LIMIT * 20;
 
@@ -32,6 +39,7 @@ type OverviewDbRow = {
   media: { id: string; title: string } | null;
 };
 
+/** One reminder as the overview screen renders it, with dates already turned into strings. */
 export type OverviewRow = {
   id: string;
   title: string;
@@ -45,6 +53,7 @@ export type OverviewRow = {
   remindOffsetDays: number | null;
 };
 
+/** Totals across every reminder visible now, not only the few the panel lists. */
 export type OverviewCounts = {
   visibleNow: number;
   overdue: number;
@@ -52,6 +61,14 @@ export type OverviewCounts = {
   dueSoon: number;
 };
 
+/**
+ * Returns the reminders to show on the overview screen and the counts beside
+ * them.
+ *
+ * Counts cover only reminders that are visible now. When too few of those
+ * exist to fill the panel, it is padded with reminders that are still snoozed
+ * or not yet due, and those padding rows are not counted.
+ */
 export async function buildReminderOverview(
   userId: string,
   prisma: PrismaClient,
@@ -88,6 +105,7 @@ export async function buildReminderOverview(
     };
   };
 
+  // Snoozed reminders sort below everything else, then by group, then by due date.
   const sortRows = (rows: OverviewRow[]) => {
     const nowMs = now.getTime();
     rows.sort((a, b) => {

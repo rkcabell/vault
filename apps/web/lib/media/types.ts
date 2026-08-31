@@ -23,9 +23,6 @@ export type {
   MediaListResponse,
   MediaUpdateResponse,
   MediaUpdateItem,
-  InitUploadResponse,
-  BatchInitResponse,
-  FinalizeResponse,
   OkResponse,
 } from "@vault/types";
 

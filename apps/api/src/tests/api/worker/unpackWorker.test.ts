@@ -10,8 +10,9 @@ function makeLogger() {
   const logs: Array<{ obj: object; msg: string }> = [];
   return {
     logger: {
-      info: (obj: object, msg: string) => logs.push({ obj, msg }),
-      error: (obj: object, msg: string) => logs.push({ obj, msg }),
+      info: (obj: object, msg: string) => { logs.push({ obj, msg }); },
+      warn: (obj: unknown, msg: string) => { logs.push({ obj: obj as object, msg }); },
+      error: (obj: object, msg: string) => { logs.push({ obj, msg }); },
     },
     logs,
   };
@@ -37,10 +38,6 @@ async function makeZipBuffer(): Promise<Buffer> {
   });
 }
 
-// enqueueThumbBulk and enqueueOcrBulk both call queue.addBulk()
- 
-const NOOP_QUEUE = { add: async () => {}, addBulk: async () => [], getJob: async () => null } as any;
-
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 test("createUnpackProcessor: returns early when media is not found", async () => {
@@ -53,8 +50,6 @@ test("createUnpackProcessor: returns early when media is not found", async () =>
      
     storage: {} as any,
     bucket: "test-bucket",
-    ocrQueue: NOOP_QUEUE,
-    thumbQueue: NOOP_QUEUE,
     logger,
   });
 
@@ -86,8 +81,6 @@ test("createUnpackProcessor: returns early when archive is already linked to a b
      
     storage: {} as any,
     bucket: "test-bucket",
-    ocrQueue: NOOP_QUEUE,
-    thumbQueue: NOOP_QUEUE,
     logger,
   });
 
@@ -135,8 +128,6 @@ test("createUnpackProcessor: logs bundleId after successful extraction", async (
      
     } as any,
     bucket: "test-bucket",
-    ocrQueue: NOOP_QUEUE,
-    thumbQueue: NOOP_QUEUE,
     logger,
   });
 

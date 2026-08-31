@@ -4,11 +4,13 @@ import { buildRedisConnection } from "../lib/config/redis.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { BundleRepository } from "../repositories/bundleRepository.js";
 import { TagRuleRepository } from "../repositories/tagRuleRepository.js";
-import { createMediaUploadService } from "../services/media/mediaUploadService.js";
+import { createIngestService } from "../services/media/ingestService.js";
 import { createOrganizeJobService } from "../services/media/organizeJobService.js";
 import { createMediaQueryService } from "../services/media/mediaQueryService.js";
 import { createMediaReadService } from "../services/media/mediaReadService.js";
 import { createMediaActionsService } from "../services/media/mediaActionsService.js";
+import { createArchiveService } from "../services/media/archiveService.js";
+import { createJobControlService } from "../services/media/jobControlService.js";
 import { createIndexService } from "../services/media/indexService.js";
 import { createReconcileService } from "../services/media/reconcileService.js";
 import { createDeleteJobService } from "../services/media/deleteJobService.js";
@@ -27,15 +29,24 @@ import type { OrganizeJobData } from "../queues/enqueueOrganize.js";
 import { ORGANIZE_QUEUE } from "../queues/enqueueOrganize.js";
 import type { HashJobData } from "../queues/enqueueHash.js";
 import { HASH_QUEUE } from "../queues/enqueueHash.js";
+import { TEXT_QUEUE } from "../queues/enqueueText.js";
+import { OCR_QUEUE } from "../queues/enqueueOcr.js";
 
-const OCR_QUEUE = process.env.OCR_QUEUE ?? "ocr_queue";
+/**
+ * Builds every media service the routes use, along with the queue handles they
+ * share. One connection per queue serves the whole process, and all of them are
+ * closed when the app closes.
+ */
+
 const THUMB_QUEUE = process.env.THUMB_QUEUE ?? "thumb_queue";
 
 type MediaServices = {
-  uploadService: ReturnType<typeof createMediaUploadService>;
+  ingestService: ReturnType<typeof createIngestService>;
   queryService: ReturnType<typeof createMediaQueryService>;
   readService: ReturnType<typeof createMediaReadService>;
   actionsService: ReturnType<typeof createMediaActionsService>;
+  archiveService: ReturnType<typeof createArchiveService>;
+  jobControlService: ReturnType<typeof createJobControlService>;
   indexService: ReturnType<typeof createIndexService>;
   reconcileService: ReturnType<typeof createReconcileService>;
   deleteService: ReturnType<typeof createDeleteJobService>;
@@ -43,15 +54,22 @@ type MediaServices = {
   dedupService: ReturnType<typeof createDedupService>;
 };
 
+/** Every queue this process holds a handle to, keyed by the name the UI shows.
+ *  The jobs routes read depths from these rather than opening a Redis client of
+ *  their own on every poll. */
+export type JobQueues = Record<string, Queue<unknown>>;
+
 declare module "fastify" {
   interface FastifyInstance {
     mediaServices: MediaServices;
+    jobQueues: JobQueues;
   }
 }
 
 export default fp(
   async app => {
     const redisConnection = buildRedisConnection(app.config.REDIS_URL);
+    const textQueue = new Queue<OcrJobData>(TEXT_QUEUE, { connection: redisConnection });
     const ocrQueue = new Queue<OcrJobData>(OCR_QUEUE, { connection: redisConnection });
     const thumbQueue = new Queue<ThumbJob>(THUMB_QUEUE, { connection: redisConnection });
     const unpackQueue = new Queue<UnpackJob>(UNPACK_QUEUE, { connection: redisConnection });
@@ -65,11 +83,13 @@ export default fp(
     const bundleRepository = new BundleRepository(app.prisma);
     const tagRuleRepository = new TagRuleRepository(app.prisma);
     const listTagRules = (userId: string) => tagRuleRepository.listEnabled(userId);
+    const getAutoTagOnIngest = async (userId: string) =>
+      (await app.preferencesService.getPreferences(userId)).autoTagOnIngest;
     const storage = app.storage;
 
-    // Publish media events on the shared redis client; the queueEvents plugin's
-    // subscriber bridges them back into the SSE stream (same channel the
-    // workers publish on, so API-side mutations refresh open views too).
+    // Publishes on the shared redis client, on the same channel the workers use.
+    // The queueEvents plugin relays it into the SSE stream, so a change made
+    // here reaches open views the same way a worker's does.
     const publishJobUpdate = (update: { userId: string; mediaId: string; field: string; value: string }) => {
       app.redis
         .publish(
@@ -80,15 +100,15 @@ export default fp(
     };
 
     const services: MediaServices = {
-      uploadService: createMediaUploadService({
-        repository,
-        storage,
-        bucket: app.config.STORAGE_BUCKET,
-        thumbQueue,
-        ocrQueue,
-        hashQueue,
+      ingestService: createIngestService({
+        mediaRepository: repository,
         logger: app.log,
+        getIngestConfig: async (userId: string) => {
+          const prefs = await app.preferencesService.getPreferences(userId);
+          return { folderPath: prefs.ingestFolderPath, allowedRoots: prefs.indexAllowedRoots };
+        },
         listTagRules,
+        getAutoTagOnIngest,
         publishJobUpdate,
       }),
       queryService: createMediaQueryService({ repository, redis: app.redis }),
@@ -98,19 +118,33 @@ export default fp(
         bucket: app.config.STORAGE_BUCKET,
         logger: app.log,
         ocrQueue,
+        textQueue,
       }),
       actionsService: createMediaActionsService({
         repository,
         bundleRepository,
         storage,
         bucket: app.config.STORAGE_BUCKET,
+        textQueue,
         ocrQueue,
         thumbQueue,
-        unpackQueue,
-        indexQueue,
-        redis: app.redis,
-        listTagRules,
         publishJobUpdate,
+      }),
+      archiveService: createArchiveService({
+        repository,
+        bundleRepository,
+        storage,
+        bucket: app.config.STORAGE_BUCKET,
+        unpackQueue,
+        logger: app.log,
+        listTagRules,
+        getAutoTagOnIngest,
+        publishJobUpdate,
+      }),
+      jobControlService: createJobControlService({
+        indexQueue,
+        reconcileQueue,
+        redis: app.redis,
       }),
       indexService: createIndexService({
         indexQueue,
@@ -131,19 +165,26 @@ export default fp(
       }),
       dedupService: createDedupService({
         repository,
-        hashQueue,
-        // Lazy per-call read: the preferences plugin registers separately, and
-        // roots must be current at scan time (they gate in-place source reads).
-        getAllowedRoots: async userId =>
-          (await app.preferencesService.getPreferences(userId)).indexAllowedRoots,
         logger: app.log,
       }),
     };
 
     app.decorate("mediaServices", services);
+    app.decorate("jobQueues", {
+      index: indexQueue,
+      reconcile: reconcileQueue,
+      thumb: thumbQueue,
+      text: textQueue,
+      ocr: ocrQueue,
+      hash: hashQueue,
+      unpack: unpackQueue,
+      organize: organizeQueue,
+      delete: deleteQueue,
+    } as JobQueues);
 
     app.addHook("onClose", async () => {
       await Promise.allSettled([
+        textQueue.close(),
         ocrQueue.close(),
         thumbQueue.close(),
         unpackQueue.close(),

@@ -3,32 +3,24 @@ import type { Readable } from "node:stream";
 import { requireAuth } from "../utils/authGuard.js";
 import { InvalidStorageKeyError } from "../adapters/storage/fsAdapter.js";
 import { parseRangeHeader } from "../lib/http/range.js";
+import { STREAM_WRITE } from "../lib/http/rateLimits.js";
 
 /**
- * Storage proxy routes — the transfer path for the filesystem backend.
- *
- * In `fs` mode the storage adapter's `presignPut` / `presignGet` return URLs
- * pointing here (there are no S3 presigned URLs for a plain filesystem), so the
- * browser uploads/downloads originals by streaming through these routes. In
- * `s3` mode the browser talks to MinIO directly and never hits these routes;
- * they remain registered but unused.
- *
- * Authorization: keys are namespaced by owner (`userId/mediaId/filename`), so a
- * request may only touch keys under its own `userId/` prefix — defense in depth
- * defense in depth across all deployments.
+ * Streams stored blobs to and from the browser. A plain filesystem has no
+ * separate server to sign URLs for, so `presignPut` and `presignGet` return URLs
+ * that point back here. Keys are namespaced by owner, and a request may only
+ * touch keys under its own `userId/` prefix.
  */
 export const storageRoutes: FastifyPluginAsync = async (app) => {
-  // Treat every request body as a raw stream (no buffering, no bodyLimit), so
-  // large uploads pass straight through to the storage backend. Encapsulated to
-  // this plugin — does not affect JSON parsing elsewhere.
+  // Raw stream bodies, with no buffering and no bodyLimit, so a large write
+  // passes straight through to storage. It applies to this plugin only.
   app.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
 
   const keyFromReq = (req: FastifyRequest): string =>
     (req.params as { "*"?: string })["*"] ?? "";
 
-  // Map common extensions to a content type so the browser can render originals
-  // inline (image/PDF preview), matching how S3/MinIO returns the stored type.
-  // Unknown types fall back to octet-stream (browser downloads them).
+  // A content type the browser can render inline. An unknown extension falls
+  // back to octet-stream, which the browser downloads instead.
   const EXT_CONTENT_TYPE: Record<string, string> = {
     pdf: "application/pdf",
     png: "image/png",
@@ -57,7 +49,7 @@ export const storageRoutes: FastifyPluginAsync = async (app) => {
     return EXT_CONTENT_TYPE[ext] ?? "application/octet-stream";
   };
 
-  /** Ensure the key belongs to the authenticated user. Returns false (and replies) if not. */
+  /** True when the key belongs to the authenticated user. Replies 403 when not. */
   const authorizeKey = (req: FastifyRequest, reply: FastifyReply, key: string): boolean => {
     if (!key || key.split("/")[0] !== req.userId) {
       void reply.forbidden("You do not have access to this object");
@@ -66,7 +58,7 @@ export const storageRoutes: FastifyPluginAsync = async (app) => {
     return true;
   };
 
-  app.put("/blob/*", { preHandler: [requireAuth] }, async (req, reply) => {
+  app.put("/blob/*", { preHandler: [requireAuth, app.userRateLimit("blob-write", STREAM_WRITE)] }, async (req, reply) => {
     const key = keyFromReq(req);
     if (!authorizeKey(req, reply, key)) return;
 

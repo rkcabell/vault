@@ -15,13 +15,8 @@ import {
   Layers,
 } from "lucide-react";
 import { ServiceCard, StatusDot, StatusText, type ServiceStatus, type QueueCounts } from "@/components/server/ServiceCard";
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
+import { JobsCard } from "@/components/server/JobsCard";
+import { formatBytes } from "@/lib/media/utils";
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -39,6 +34,7 @@ export default function ServerPage() {
   const [redis,   setRedis]   = useState<ServiceStatus>("checking");
   const [storage, setStorage] = useState<ServiceStatus>("checking");
 
+  const [textWorker,  setTextWorker]  = useState<ServiceStatus>("checking");
   const [ocrWorker,   setOcrWorker]   = useState<ServiceStatus>("checking");
   const [thumbWorker, setThumbWorker] = useState<ServiceStatus>("checking");
 
@@ -48,6 +44,7 @@ export default function ServerPage() {
   const [corsOrigin,     setCorsOrigin]     = useState("");
   const [memoryMB,       setMemoryMB]       = useState<number | null>(null);
   const [dbSizeBytes,    setDbSizeBytes]    = useState<number | null>(null);
+  const [textCounts,     setTextCounts]     = useState<QueueCounts | null>(null);
   const [ocrCounts,      setOcrCounts]      = useState<QueueCounts | null>(null);
   const [thumbCounts,    setThumbCounts]    = useState<QueueCounts | null>(null);
   const [storagePath,    setStoragePath]    = useState<string | null>(null);
@@ -103,11 +100,14 @@ export default function ServerPage() {
     }
     if (workersRes.status === "fulfilled") {
       const w = workersRes.value as {
+        text:  { active: boolean; counts: QueueCounts };
         ocr:   { active: boolean; counts: QueueCounts };
         thumb: { active: boolean; counts: QueueCounts };
       };
+      setTextWorker( w.text?.active  ? "healthy" : "unreachable");
       setOcrWorker(  w.ocr?.active   ? "healthy" : "unreachable");
       setThumbWorker(w.thumb?.active ? "healthy" : "unreachable");
+      setTextCounts( w.text?.counts  ?? null);
       setOcrCounts(  w.ocr?.counts   ?? null);
       setThumbCounts(w.thumb?.counts ?? null);
     }
@@ -286,8 +286,15 @@ export default function ServerPage() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <ServiceCard
               icon={<Cpu className="h-4 w-4" />}
+              name="Text Worker"
+              detail="Native extraction · BullMQ"
+              status={textWorker}
+              jobCounts={textCounts ?? undefined}
+            />
+            <ServiceCard
+              icon={<Cpu className="h-4 w-4" />}
               name="OCR Worker"
-              detail="Text extraction · BullMQ"
+              detail="Scanned-page OCR · BullMQ"
               status={ocrWorker}
               jobCounts={ocrCounts ?? undefined}
             />
@@ -299,6 +306,14 @@ export default function ServerPage() {
               jobCounts={thumbCounts ?? undefined}
             />
           </div>
+        </div>
+
+        {/* Jobs — queue depths and the stop controls */}
+        <div>
+          <h2 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+            Jobs
+          </h2>
+          <JobsCard />
         </div>
 
         {/* Configuration */}

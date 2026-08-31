@@ -1,13 +1,15 @@
 /**
- * Core logic for the admin `reset-password` CLI (apps/api/scripts/reset-password.ts).
+ * Sets a new password on an account from the command line, for an owner who
+ * has been locked out of the web app.
  *
- * Kept in src/ (within tsconfig rootDir) so it can be unit-tested; the script
- * is a thin shell that wires real dependencies (prisma, argon2, a TTY prompt).
+ * Everything here takes its database, hasher and terminal through arguments,
+ * so the command can be run against test doubles.
  */
 import { validatePassword } from "@vault/types";
 
 export type ParsedArgs = { email?: string; password?: string };
 
+/** Reads the email and password options out of `argv`. Both `--email x` and `--email=x` are accepted, and anything else is ignored. */
 export function parseArgs(argv: string[]): ParsedArgs {
   const out: ParsedArgs = {};
   for (let i = 0; i < argv.length; i++) {
@@ -22,6 +24,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
 type UserRecord = { id: string; email: string };
 
+/** Everything the reset needs from outside itself. `readPassword` is only consulted when no password was passed on the command line. */
 export type ResetDeps = {
   prisma: {
     user: {
@@ -36,7 +39,14 @@ export type ResetDeps = {
   error?: (msg: string) => void;
 };
 
-/** Resets a user's password. Returns a process exit code; no global/process state. */
+/**
+ * Sets the account's password and returns the exit code the command should
+ * finish with.
+ *
+ * 0 means the password was changed, 1 that the account or password was
+ * rejected, and 2 that the command was invoked wrongly. Nothing here reads or
+ * writes process state.
+ */
 export async function run(args: ParsedArgs, deps: ResetDeps): Promise<number> {
   const log = deps.log ?? ((m: string) => process.stdout.write(m + "\n"));
   const error = deps.error ?? ((m: string) => process.stderr.write(m + "\n"));
@@ -70,8 +80,8 @@ export async function run(args: ParsedArgs, deps: ResetDeps): Promise<number> {
   const hash = await deps.hasher.hash(password);
   await deps.prisma.user.update({
     where: { id: user.id },
-    // Bumping tokenVersion evicts any sessions that predate this reset
-    // (rejected at /auth/refresh).
+    // Raising tokenVersion stops every session opened before this reset from
+    // renewing itself.
     data: {
       passwordHash: hash,
       tokenVersion: { increment: 1 },

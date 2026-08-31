@@ -1,4 +1,7 @@
-// File: apps/api/src/services/ocr/ocrWithOcrmypdf.ts
+/**
+ * Reads the text out of a scanned document by running the ocrmypdf command,
+ * turning an image into a one-page PDF first where necessary.
+ */
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -28,8 +31,11 @@ export type OcrmypdfResult = {
 };
 
 /**
- * Run OCRmyPDF against a PDF or image buffer and return the OCR'd PDF buffer.
- * For images, normalize to a bitmap (PNG) then wrap in a one-page PDF first.
+ * Returns a copy of `input` with recognized text added to it, as a PDF.
+ *
+ * An image is converted to a single-page PDF before recognition, because
+ * ocrmypdf reads PDFs only. Existing text is replaced rather than added to, so
+ * a document that already has some is not left with two copies.
  */
 export async function ocrWithOcrmypdf (args: OcrmypdfArgs): Promise<OcrmypdfResult> {
   const workdir = await mkdtemp(join(tmpdir(), "ocrmypdf-"));
@@ -85,9 +91,10 @@ export async function ocrWithOcrmypdf (args: OcrmypdfArgs): Promise<OcrmypdfResu
   }
 }
 
-/**
- * Prefer sniffing bytes over trusting mimeType, since object stores often lie.
- */
+// Returns `input` as a PDF, converting it if it is an image.
+//
+// The leading bytes decide, not `mimeType`: a recorded type is often wrong, and
+// sending an image to ocrmypdf as though it were a PDF fails outright.
 async function toPdfBuffer (
   input: Buffer,
   mimeType?: string | null,
@@ -95,7 +102,7 @@ async function toPdfBuffer (
 ): Promise<Buffer> {
   if (looksLikePdf(input)) return input;
   if (mimeType && mimeType.toLowerCase().includes("pdf")) {
-    // MIME says pdf but bytes don't; treat as image anyway to avoid misrouting.
+    // The recorded type claims PDF but the bytes disagree. Treated as an image.
   }
 
   const isHeic =
@@ -112,7 +119,7 @@ async function toPdfBuffer (
 }
 
 function looksLikePdf (buf: Buffer): boolean {
-  // "%PDF-" at start
+  // Matches "%PDF-", one byte more than lib/fileSignatures' own check.
   if (buf.length < 5) return false;
   return (
     buf[0] === 0x25 && // %
@@ -123,7 +130,8 @@ function looksLikePdf (buf: Buffer): boolean {
   );
 }
 
-/** Return the page count of a PDF buffer, or null if pdf-lib fails to parse it. */
+// Returns how many pages a PDF has, or null when it cannot be read. Only used
+// to report progress, so an unreadable file is not an error here.
 async function getPdfPageCount (buffer: Buffer): Promise<number | null> {
   try {
     const { PDFDocument } = await getPdfLib();
@@ -141,10 +149,14 @@ type OcrmypdfRunResult = {
 };
 
 /**
- * Spawn the `ocrmypdf` process with the given arguments and collect stdout/stderr.
- * Both streams are fed to `onProgress` (if provided) for live page-count updates.
- * Output is ring-buffered to MAX_CAPTURE_BYTES so large files don't bloat memory.
- * Resolves with the exit code and captured output; never rejects on non-zero exit.
+ * Runs ocrmypdf and returns its exit code with whatever it printed.
+ *
+ * A non-zero exit is returned rather than raised, so the caller can decide
+ * whether to try again differently. Only the last part of the output is kept,
+ * so a run that prints a great deal cannot use up memory.
+ *
+ * Both output streams are also fed to `onProgress`, because ocrmypdf writes its
+ * progress to either one.
  */
 async function runOcrmypdf (
   cmdArgs: string[],
@@ -216,7 +228,6 @@ function createProgressParser (
 
       lastCurrent = current;
       lastTotal = total;
-      // console.info(`[ocrmypdf] progress ${current}/${total}`); //make this better long
       onProgress({ current, total });
     }
   };
@@ -231,32 +242,25 @@ function buildOcrmypdfError (result: OcrmypdfRunResult): Error {
   return new Error(extra ? `${baseMsg}\n${extra}` : baseMsg);
 }
 
-/**
- * Wrap a single image buffer in a one-page PDF suitable for ocrmypdf.
- *
- * Sharp normalises the image to PNG with a white background (handles alpha
- * channels and colour-space conversions) and applies any EXIF rotation before
- * embedding. The PDF page dimensions match the image pixel dimensions; DPI is
- * not set because ocrmypdf only needs the image pixels, not physical size.
- */
+// Returns `buffer`, an image, wrapped in a one-page PDF that ocrmypdf can read.
 async function imageToPdf (buffer: Buffer, rotation?: string | number | null): Promise<Buffer> {
   const angle = normalizeRotation(rotation);
   const { default: sharp } = await import("sharp");
   const { PDFDocument } = await getPdfLib();
 
-  // 1) Normalize to PNG with white background (Sharp supports this reliably)
+  // Flattened onto white so a transparent image does not come out black, and
+  // rotated first so the text is the right way up for recognition.
   const png = await sharp(buffer)
     .rotate(angle)
     .flatten({ background: { r: 255, g: 255, b: 255 } })
     .png()
     .toBuffer();
 
-  // 2) Wrap in a single-page PDF (pdf-lib)
   const pdfDoc = await PDFDocument.create();
   const img = await pdfDoc.embedPng(png);
 
-  // Page size equals image pixel size in PDF points; acceptable for OCR.
-  // If you want DPI-aware sizing, scale here.
+  // The page is sized in points to match the image in pixels. Recognition works
+  // from the pixels, so the physical size on paper does not matter.
   const page = pdfDoc.addPage([img.width, img.height]);
   page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
 

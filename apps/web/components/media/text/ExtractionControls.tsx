@@ -50,8 +50,10 @@ export function ExtractionActionButtons (props: ExtractionActionButtonsProps) {
     try {
       app.log.info('extraction control submit', { mediaId, mode })
       const payload = mode === 'force' ? { forceOcr: true } : {}
-      await rerunMediaTextExtraction(mediaId, payload)
-      onQueued()
+      const result = await rerunMediaTextExtraction(mediaId, payload)
+      // A refused re-run left the row UNSUPPORTED; flipping it to "Extracting"
+      // would claim work that was never queued.
+      if (result.queued) onQueued()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to re-run text extraction.'
       onError?.(message)
@@ -96,6 +98,8 @@ export function ExtractionControls (props: {
   isRunning: boolean
   isDeleting: boolean
   hasAnyText: boolean
+  /** UNSUPPORTED is terminal — the server refuses the re-run, so don't offer it. */
+  isUnsupported?: boolean
   onQueued: () => void
   onError?: (message: string) => void
   onLanguageApplied?: (language: string | null) => void
@@ -106,6 +110,7 @@ export function ExtractionControls (props: {
     isRunning,
     isDeleting,
     hasAnyText,
+    isUnsupported = false,
     onQueued,
     onError,
     onLanguageApplied,
@@ -130,7 +135,7 @@ export function ExtractionControls (props: {
   }, [language, rotation])
 
   const handleSubmit = async () => {
-    if (isSubmitting || isDeleting || isRunning) return
+    if (isSubmitting || isDeleting || isRunning || isUnsupported) return
     setIsSubmitting(true)
     const payload: { language?: string; rotation?: string } = {}
     if (language !== 'auto') payload.language = language
@@ -138,7 +143,9 @@ export function ExtractionControls (props: {
 
     try {
       app.log.info('extraction control submit', { mediaId, mode: 'default' })
-      await rerunMediaTextExtraction(mediaId, payload)
+      const result = await rerunMediaTextExtraction(mediaId, payload)
+      // See ExtractionActionButtons above.
+      if (!result.queued) return
       onQueued()
       onLanguageApplied?.(language === 'auto' ? null : language)
     } catch (err) {
@@ -203,7 +210,7 @@ export function ExtractionControls (props: {
           )}
           <Button
             onClick={handleSubmit}
-            disabled={isSubmitting || isDeleting || isRunning}
+            disabled={isSubmitting || isDeleting || isRunning || isUnsupported}
           >
             {buttonLabel}
           </Button>

@@ -1,4 +1,5 @@
 export * from "./events.js";
+export * from "./derivativeProgress.js";
 export * from "./media.js";
 export * from "./tags.js";
 export * from "./tagRules.js";
@@ -6,3 +7,5 @@ export * from "./reminders.js";
 export * from "./bundles.js";
 export * from "./preferences.js";
 export * from "./password.js";
+export * from "./sidecar.js";
+export * from "./uploadLimits.js";

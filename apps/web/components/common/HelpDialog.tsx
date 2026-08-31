@@ -7,7 +7,8 @@ import {
   Library,
   Layers,
   Bell,
-  Upload,
+  Compass,
+  FolderSearch,
   Tag,
   X,
 } from 'lucide-react';
@@ -16,13 +17,16 @@ import { Button } from '@/ui/Button';
 
 type Tab = 'features' | 'shortcuts' | 'about';
 
+// Ordered by what a new user does in sequence, deliberately not by the nav's
+// left-to-right layout. Not every entry is a page — Tags is a sidebar facility.
 const features = [
-  { icon: LayoutDashboard, name: 'Overview',   description: 'Recent uploads, quick stats, and at-a-glance activity.' },
+  { icon: FolderSearch,    name: 'Add files',  description: 'Index a folder in place, or send files to Vault from this device.' },
   { icon: Library,         name: 'Library',    description: 'Browse and filter all your media by tag, type, or search.' },
+  { icon: Tag,             name: 'Tags',       description: 'Apply tags in the Library and filter via the sidebar.' },
+  { icon: Compass,         name: 'Explore',    description: 'Wander the library by tag buckets instead of searching for it.' },
   { icon: Layers,          name: 'Bundles',    description: 'Curated collections — group related media together.' },
   { icon: Bell,            name: 'Reminders',  description: 'Set time-based reminders on any media item.' },
-  { icon: Upload,          name: 'Upload',     description: 'Drag-and-drop or pick files. Supports images, PDFs, and more.' },
-  { icon: Tag,             name: 'Tags',       description: 'Apply tags in the Library and filter via the sidebar.' },
+  { icon: LayoutDashboard, name: 'Overview',   description: 'Recent uploads, quick stats, and at-a-glance activity.' },
 ];
 
 const shortcuts = [
@@ -146,7 +150,7 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
               </div>
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Personal media and document management. Upload files, organize with tags and bundles, and set reminders to revisit them later.
+              Personal media and document management. Catalogue files where they already live, organize with tags and bundles, and set reminders to revisit them later.
             </p>
             <p className="text-xs text-muted-foreground">
               Contribute at{' '}

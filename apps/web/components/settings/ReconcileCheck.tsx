@@ -4,8 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toaster";
 import { Loader2, RefreshCw, Square } from "lucide-react";
-import { getReconcileState, startReconcile, type ReconcileStatus } from "@/lib/media/reconcile";
-import { stopIndex } from "@/lib/media/indexing";
+import { getReconcileState, startReconcile, stopReconcile, type ReconcileStatus } from "@/lib/media/reconcile";
 
 const POLL_MS = 1500;
 
@@ -43,31 +42,19 @@ function summarize (s: ReconcileStatus): string {
   return shown.length > 0 ? shown.join(", ") : "no changes";
 }
 
-/**
- * Runs the reconciliation sweep and reports it.
- *
- * The sweep matters because the other two mechanisms cannot see drift: the live
- * watcher only observes changes while Vault is running, and a normal scan skips
- * files it has already indexed. Anything deleted, moved or edited while the
- * server was down is invisible until this runs.
- */
+/** Runs the reconciliation sweep and reports it — see {@link ReconcileStatus}
+ *  for what the sweep covers that a scan and the watcher cannot. */
 export function ReconcileCheck ({ enabled }: { enabled: boolean }) {
   const [active, setActive] = useState<ReconcileStatus | null>(null);
   const [last, setLast] = useState<ReconcileStatus | null>(null);
   const [starting, setStarting] = useState(false);
   /**
    * A run this tab kicked off is still in flight, so the completion toast fires
-   * once and only for a run the user actually asked for.
-   *
-   * Deliberately not a jobId: one check enqueues a job per configured root, and
-   * with a single-concurrency worker they complete in enqueue order — so the
-   * first job's id is never the last-finished one, and matching on it meant the
-   * flag never cleared and the poll never stopped. Completion is instead "there
-   * is no longer an active sweep", which is true whatever the root count.
-   *
-   * Mirrored into a ref: the state drives the polling effect, the ref lets the
-   * `refresh` callback read the current value without being re-created (and so
-   * without restarting the interval on every tick).
+   * once and only for a run the user asked for. Deliberately not a jobId: one
+   * check enqueues a job per root, and the first job's id is never the
+   * last-finished one, which left the flag set and the poll running forever.
+   * Mirrored into a ref so reading it cannot re-create `refresh`, which would
+   * restart the polling interval every tick.
    */
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
@@ -78,29 +65,26 @@ export function ReconcileCheck ({ enabled }: { enabled: boolean }) {
 
   /**
    * `finishedAt` of the newest completed sweep, and the value it had when this
-   * tab last pressed the button. A run is done when a *newer* one has landed —
-   * "no active job" alone would fire the instant we start, before the queue read
-   * catches up, and announce a completion that never happened.
-   *
-   * Both are server timestamps compared against each other, never against
-   * `Date.now()`, so browser clock skew cannot affect the result. Job ids are no
-   * use here: they are deterministic per root, so re-checking one root produces
-   * the identical id.
+   * tab last pressed the button. A run is done when a *newer* one has finished —
+   * "no active job" alone fires the instant we start, before the queue read
+   * catches up. Both are server timestamps compared against each other, never
+   * against `Date.now()`, so browser clock skew cannot affect the result.
    */
   const lastFinishedAtRef = useRef(0);
   const baselineFinishedAtRef = useRef(0);
 
   const refresh = useCallback(async () => {
     const state = await getReconcileState();
+    if (state === null) return; // unreachable server — keep showing the last good state
+
     setActive(state.active);
     setLast(state.last);
     lastFinishedAtRef.current = state.last?.finishedAt ?? 0;
 
-    // Every root finished. `last` is whichever finished most recently, which is
-    // the summary worth reporting. Kept out of a state updater on purpose —
-    // updaters must stay pure, or StrictMode's double-invoke double-toasts.
-    const landed = lastFinishedAtRef.current > baselineFinishedAtRef.current;
-    if (pendingRef.current && !state.active && landed) {
+    // Kept out of a state updater on purpose — updaters must stay pure, or
+    // StrictMode's double-invoke double-toasts.
+    const finished = lastFinishedAtRef.current > baselineFinishedAtRef.current;
+    if (pendingRef.current && !state.active && finished) {
       markPending(false);
       if (state.last?.state === "failed") {
         toast("The check failed. Check the server logs.", { variant: "error" });
@@ -137,14 +121,17 @@ export function ReconcileCheck ({ enabled }: { enabled: boolean }) {
   }, [refresh, markPending]);
 
   const handleStop = useCallback(async () => {
-    await stopIndex(); // same abort epoch the index walk reads
+    try {
+      await stopReconcile();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not stop the check", { variant: "error" });
+    }
     await refresh();
   }, [refresh]);
 
-  // `running` gates the live-progress line, which reads `active` — so it must
-  // stay strictly "a job is active". `busy` also covers the gap between starting
-  // a check and the queue reporting it, when there is nothing to show yet but
-  // the button must not invite a second click.
+  // `running` gates the live-progress line, which reads `active`, so it stays
+  // strictly "a job is active"; `busy` also covers the gap before the queue
+  // reports a check we just started, when a second click must not be inviting.
   const running = active !== null;
   const busy = running || pending || starting;
 

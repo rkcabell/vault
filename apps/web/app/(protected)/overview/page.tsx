@@ -37,7 +37,7 @@ export default async function OverviewPage() {
               className="overview-secondary-btn rounded-md bg-black px-3 py-2 text-sm text-white hover:opacity-90 dark:bg-white dark:text-black"
               href="/upload"
             >
-              Upload
+              Add files
             </Link>
           </div>
         </header>

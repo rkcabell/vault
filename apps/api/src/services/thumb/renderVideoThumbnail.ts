@@ -1,3 +1,6 @@
+/**
+ * Grabs a still frame from a video to use as its thumbnail.
+ */
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,7 +11,7 @@ const execFileAsync = promisify(execFile);
 
 export type RenderVideoThumbnailArgs = {
   video?: Uint8Array | Buffer;
-  /** Pre-written temp file path — when provided, the writeFile step is skipped. Caller is responsible for cleanup. */
+  /** The video already on disk. Supplying it skips writing one, and the caller deletes it afterwards. */
   videoPath?: string;
   targetWidth?: number;
   maxWidth?: number;
@@ -17,20 +20,18 @@ export type RenderVideoThumbnailArgs = {
 };
 
 /**
- * Render a single-frame thumbnail from a video using ffmpeg.
- * Returns a PNG buffer suitable for passing into the sharp pipeline.
+ * Returns one frame of a video as a PNG, ready for the image pipeline.
  *
- * When `videoPath` is provided the function skips writing the source file and
- * uses the pre-existing path directly — useful when the caller has already
- * streamed the file to disk (avoids an extra buffer copy).
+ * The frame is taken `seekSeconds` in, because the very first frame of a video
+ * is often blank. Failure raises an error whose message begins
+ * FFMPEG_THUMBNAIL_FAILED.
  */
 export async function renderVideoThumbnail (args: RenderVideoThumbnailArgs): Promise<Buffer> {
   const { video, videoPath, maxWidth = 2000, targetWidth = 1200, seekSeconds = 1, ffmpegPath } = args;
 
   const ffmpegBinary = ffmpegPath ?? process.env.FFMPEG_PATH ?? "ffmpeg";
-  // Always create a workdir for the output PNG. When videoPath is provided we
-  // skip writing the input file (it's already on disk), but we still need a
-  // separate dir for the output so cleanup is straightforward.
+  // A working folder is made even when the video is already on disk, because
+  // the PNG still has to be written somewhere this function can delete.
   const workdir = await mkdtemp(join(tmpdir(), "vault-thumb-"));
   const inputPath = videoPath ?? join(workdir, "input.mp4");
   const outputPath = join(workdir, "thumb.png");
@@ -73,6 +74,6 @@ export async function renderVideoThumbnail (args: RenderVideoThumbnailArgs): Pro
     } catch {
       // ignore cleanup errors
     }
-    // videoPath dir cleanup is the caller's responsibility
+    // A video the caller placed on disk is the caller's to delete.
   }
 }

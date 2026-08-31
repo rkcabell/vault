@@ -1,3 +1,7 @@
+/**
+ * Runs a thumbnail job in a worker process, assembling what the thumbnail
+ * service needs out of the raw database and storage handles a worker holds.
+ */
 import type { PrismaClient } from "@prisma/client";
 import type { StorageAdapter } from "../adapters/storage/types.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
@@ -20,6 +24,7 @@ export type ThumbDeps = {
   publishJobUpdate?: ServiceThumbDeps["publishJobUpdate"];
 };
 
+/** Renders the thumbnail for one job and records the outcome on the item's row. */
 export async function processThumb (deps: ThumbDeps, job: ThumbJob) {
   const logger = deps.logger ?? createLogger("thumb-test");
   const serviceDeps: ServiceThumbDeps = {

@@ -10,6 +10,7 @@ import type { TagOrigin } from "@vault/types";
 import { Sheet, SheetContent } from "@/components/ui/Sheet";
 import { TAGS_UPDATED_EVENT } from "@/lib/tags";
 import { ThemeApplier } from "./ThemeApplier";
+import { DerivativeBacklogStrip } from "./DerivativeBacklogStrip";
 import { useAppInit } from "@/hooks/useAppInit";
 import { cn } from "@/lib/utils";
 
@@ -97,10 +98,27 @@ export function AppShell({
     };
   }, [fetchSidebarTags]);
 
+  // Without this, a file dropped anywhere but a drop zone makes the browser
+  // navigate to it and the app is gone. window is last in the bubble path, so
+  // the drop zones still handle their own drops normally.
+  useEffect(() => {
+    const swallow = (e: DragEvent) => {
+      if (!e.dataTransfer?.types?.includes("Files")) return;
+      e.preventDefault();
+    };
+    window.addEventListener("dragover", swallow);
+    window.addEventListener("drop", swallow);
+    return () => {
+      window.removeEventListener("dragover", swallow);
+      window.removeEventListener("drop", swallow);
+    };
+  }, []);
+
   return (
     <div className="flex h-screen flex-col">
       <ThemeApplier />
       <TopNav onMenuClick={() => setMobileMenuOpen(true)} />
+      <DerivativeBacklogStrip />
 
       <div className="flex flex-1 overflow-hidden relative">
         {showSidebar && (

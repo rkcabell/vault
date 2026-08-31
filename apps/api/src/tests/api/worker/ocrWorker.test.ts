@@ -85,6 +85,16 @@ function mockOcrDeps (overrides: Partial<OcrDeps["textDeps"]> = {}, onStorageRea
     storage: fakeStorage(onStorageRead),
     bucket: "test-bucket",
     enqueueOcr: async () => {},
+    // Every test in this file exercises the worker running extraction,
+    // so opt out of the shipping "onDemand" default, which would park images at
+    // NEEDS_OCR before any of it happens. The deferral behaviour itself is
+    // covered in services/ocrProcessingService.test.ts.
+    //
+    // Note this is not on its own enough: since the queue split, *no* mode runs
+    // Tesseract from a tier-1 job — `background` enqueues rather than executing.
+    // The jobs below therefore pass forceOcr, which is what a job pulled off
+    // ocr_queue carries.
+    getOcrMode: async () => "background",
     sleep: async () => {},
     textDeps: {
       getObjectBuffer: async () => Buffer.from("image-bytes"),
@@ -138,7 +148,7 @@ test("processOcrJob writes OCR text for non-PDF media", async () => {
     return { count: 1 };
   });
 
-  await processOcrJob(mockOcrDeps(), { mediaId: "media-1" });
+  await processOcrJob(mockOcrDeps(), { mediaId: "media-1", forceOcr: true });
 
   const upsertData = upsertArgs as { update: { textSource: string; rawText: string } };
   assert.equal(upsertData.update.textSource, "OCR");
@@ -153,7 +163,7 @@ test("processOcrJob throws when source is not ready", async () => {
 
   // A missing managed source reads back null → SOURCE_NOT_READY from processTextJob.
   await assert.rejects(
-    processOcrJob(mockOcrDeps({ getObjectBuffer: async () => null }), { mediaId: "media-2" }),
+    processOcrJob(mockOcrDeps({ getObjectBuffer: async () => null }), { mediaId: "media-2", forceOcr: true }),
     /Source object not ready/,
   );
 });

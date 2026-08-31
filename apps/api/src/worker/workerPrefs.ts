@@ -1,12 +1,16 @@
+/**
+ * Reads the settings a worker process needs at startup.
+ */
 import type { PrismaClient } from "@prisma/client";
 
 /**
- * Reads the `lowMemoryMode` preference from the first user record in the DB.
- * Used by worker entry points on startup so the setting toggled in the web UI
- * takes effect after the workers restart (Docker restarts them automatically
- * via `restart: on-failure`).
+ * True if the owner has switched low memory mode on.
  *
- * Returns false on any error so workers start normally if the DB is unreachable.
+ * Vault holds one account, so the setting is read from the only user record.
+ * A worker reads this once as it starts, which is why the setting takes effect
+ * only after the workers are restarted.
+ *
+ * Returns false if the database cannot be reached, so a worker still starts.
  */
 export async function readLowMemoryPreference(prisma: PrismaClient): Promise<boolean> {
   try {

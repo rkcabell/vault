@@ -12,7 +12,7 @@
 // in-flight refresh instead of stampeding the endpoint.
 let inflight: Promise<boolean> | null = null;
 
-// Guard so a failed refresh redirects to /auth exactly once.
+// Guard so a failed refresh redirects to /auth once.
 let redirecting = false;
 
 /**

@@ -1,5 +1,11 @@
+/**
+ * Reads and writes the account details a user sees and edits on their profile
+ * page.
+ */
 import type { PrismaClient } from "@prisma/client";
 
+// The fields a profile is allowed to expose. The password hash and the token
+// version are deliberately absent, so neither can reach a response by accident.
 const profileSelect = {
   id: true,
   email: true,

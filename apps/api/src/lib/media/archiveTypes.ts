@@ -1,3 +1,7 @@
+/**
+ * The archive types Vault can unpack.
+ */
+
 export const ARCHIVE_MIME_TYPES = new Set([
   "application/zip",
   "application/x-zip-compressed",

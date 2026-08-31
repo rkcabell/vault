@@ -1,5 +1,10 @@
+/**
+ * Splits a file's extracted text into the pieces the reader displays and
+ * scrolls through one at a time.
+ */
 import type { PdfTextPage } from "@/services/pdf/extractPdfText.js";
 
+/** One displayable piece of a file's text. `order` is its position in the file, counting from zero. */
 export type TextSegment = {
   segmentId: number;
   order: number;
@@ -8,6 +13,13 @@ export type TextSegment = {
 
 const DEFAULT_SEGMENT_LENGTH = 3500;
 
+/**
+ * Returns `rawText` split into displayable pieces.
+ *
+ * A PDF is split at its own page boundaries, so a segment matches a page. Any
+ * other text is split at whitespace near `maxLength`, so no word is cut in
+ * half.
+ */
 export function segmentExtractedText (args: {
   rawText: string;
   pages?: PdfTextPage[] | null;
@@ -26,6 +38,8 @@ export function segmentExtractedText (args: {
   return segmentByLength(rawText, maxLength);
 }
 
+// Splits text into pieces of at most `maxLength`, ending each at whitespace
+// where one is close enough to the limit.
 function segmentByLength (rawText: string, maxLength: number): TextSegment[] {
   const text = rawText ?? "";
   if (!text) return [];
@@ -54,6 +68,8 @@ function segmentByLength (rawText: string, maxLength: number): TextSegment[] {
   return segments;
 }
 
+// Returns the index of the last whitespace character before `end`, or -1 if
+// the whole span from `start` is unbroken.
 function findLastWhitespace (text: string, start: number, end: number): number {
   for (let i = end - 1; i > start; i -= 1) {
     if (/\s/.test(text[i])) return i;

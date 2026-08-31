@@ -1,17 +1,19 @@
 "use client";
 
-import { usePreferences, DEFAULT_PREFERENCES } from "@/hooks/usePreferences";
+import { usePreferences, DEFAULT_PREFERENCES, type Preferences } from "@/hooks/usePreferences";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 
 const GENERAL_PREF_KEYS = [
-  "autoTagOnUpload",
+  "autoTagOnIngest",
   "extractMetadata",
   "detectDuplicates",
   "lowMemoryMode",
   "autoUnpackArchives",
   "yellowHighlight",
   "soonWindowDays",
+  "ocrMode",
+  "ocrTimeoutCapMinutes",
 ] as const;
 
 function SettingRow({
@@ -73,12 +75,12 @@ export function GeneralSettingsCard() {
       </CardHeader>
       <CardContent className="px-6 pb-6 pt-2">
         <SettingRow
-          id="auto-tag-on-upload"
-          label="Auto-tag files on upload"
-          description="Automatically apply tags to newly uploaded media."
-          checked={prefs.autoTagOnUpload}
+          id="auto-tag-on-ingest"
+          label="Auto-tag files as they're added"
+          description="Apply your Tag Organizer rules to files when they're uploaded, indexed, or unpacked from an archive."
+          checked={prefs.autoTagOnIngest}
           disabled={!isLoaded}
-          onChange={v => updatePreferences({ autoTagOnUpload: v })}
+          onChange={v => updatePreferences({ autoTagOnIngest: v })}
         />
         <SettingRow
           id="extract-exif"
@@ -142,6 +144,56 @@ export function GeneralSettingsCard() {
               className="w-28 accent-primary"
             />
             <span className="text-sm font-medium w-12 text-right">{prefs.soonWindowDays}d</span>
+          </div>
+        </div>
+        <div className="flex items-start justify-between gap-6 py-3">
+          <div className="space-y-0.5">
+            <label htmlFor="ocr-mode" className="text-sm font-medium">
+              Text extraction for scans
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Documents that already contain text are always read at index time. This
+              controls the slow path — running OCR on scans and photos, which can take
+              hours on a large library.
+            </p>
+          </div>
+          <div className={`shrink-0 transition-opacity ${!isLoaded ? "opacity-50 pointer-events-none" : ""}`}>
+            <select
+              id="ocr-mode"
+              value={prefs.ocrMode}
+              disabled={!isLoaded}
+              onChange={e => updatePreferences({ ocrMode: e.target.value as Preferences["ocrMode"] })}
+              className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+            >
+              <option value="onDemand">When I open the file</option>
+              <option value="background">Continuously in the background</option>
+              <option value="off">Never</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex items-start justify-between gap-6 py-3">
+          <div className="space-y-0.5">
+            <label htmlFor="ocr-timeout-cap" className="text-sm font-medium">
+              OCR time limit per file
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Stops a stuck or oversized scan from occupying a worker slot past this
+              limit.
+            </p>
+          </div>
+          <div className={`flex items-center gap-2 shrink-0 transition-opacity ${!isLoaded ? "opacity-50 pointer-events-none" : ""}`}>
+            <input
+              id="ocr-timeout-cap"
+              type="range"
+              min={1}
+              max={60}
+              step={1}
+              value={prefs.ocrTimeoutCapMinutes}
+              disabled={!isLoaded}
+              onChange={e => updatePreferences({ ocrTimeoutCapMinutes: Number(e.target.value) })}
+              className="w-28 accent-primary"
+            />
+            <span className="text-sm font-medium w-12 text-right">{prefs.ocrTimeoutCapMinutes}m</span>
           </div>
         </div>
       </CardContent>

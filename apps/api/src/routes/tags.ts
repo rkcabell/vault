@@ -1,9 +1,13 @@
-//File: apps/api/src/routes/tags.ts
 import type { FastifyPluginAsync } from "fastify";
 import { z, ZodError } from "zod";
 import { requireAuth } from "../utils/authGuard.js";
 import { MediaRepository } from "../repositories/mediaRepository.js";
 import { normalizeTag, TagValidationError } from "../lib/tags/normalizeTags.js";
+
+/**
+ * Lists a user's tags for the sidebar, and renames, recolours or deletes one
+ * across the whole library.
+ */
 
 export const tagsRoutes: FastifyPluginAsync = async app => {
   const repository = new MediaRepository(app.prisma);
@@ -12,8 +16,24 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
     const Query = z.object({
       limit: z.coerce.number().int().min(1).max(200).default(30),
       offset: z.coerce.number().int().min(0).default(0),
+      // Comma-separated namespaces, e.g. `facets=type,year,folder`. The caller
+      // names them, so the server keeps no second copy of the sidebar's list.
+      facets: z.string().trim().min(1).optional(),
     });
-    const { limit, offset } = Query.parse(req.query);
+    const { limit, offset, facets } = Query.parse(req.query);
+
+    if (facets) {
+      const namespaces = [...new Set(
+        facets.split(",").map(n => n.trim().toLowerCase()).filter(Boolean),
+      )];
+      const tags = await repository.listFacetTags(req.userId!, namespaces);
+      return {
+        tags: tags.map(t => ({ name: t.tag, count: t.count, color: t.color, origin: t.origin })),
+        total: tags.length,
+        offset: 0,
+        limit: tags.length,
+      };
+    }
 
     const { tags, total } = await repository.listTopTags(req.userId!, limit, offset);
 
@@ -68,8 +88,8 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
       return { ok: true, tag, newName, affected };
     }
 
-    // color and/or origin update — each applied only when explicitly provided so
-    // an origin-only request doesn't clear the color (and vice versa).
+    // Each is applied only when the request carried it, so setting the origin
+    // does not also clear the colour.
     if (body.color !== undefined) {
       await repository.setTagColor(req.userId!, tag, body.color);
     }
@@ -79,7 +99,7 @@ export const tagsRoutes: FastifyPluginAsync = async app => {
     return { ok: true, tag };
   });
 
-  // Delete tags that are not referenced by any media rows for this user.
+  // Orphaned means no media row of this user's still references the tag.
   app.delete("/orphaned", { preHandler: [requireAuth] }, async req => {
     const deleted = await repository.deleteOrphanTags(req.userId!);
     return { ok: true, deleted };

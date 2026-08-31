@@ -1,11 +1,10 @@
-// Aggregates the whole vault into per-file-type-category totals (file count +
-// total bytes) for the overview "storage by type" graph.
-//
-// Reuses the same filename-aware `bucketOf` as the per-file storage treemap, so
-// the categories here line up exactly with the buckets/legend the user sees
-// elsewhere. Zero/negative-byte files are ignored — they contribute no area.
-
 import { bucketOf, type StorageBucket, type StorageItem } from "./storageTreemap.js";
+
+/**
+ * Totals the whole library by file-type category, for the overview's storage
+ * graph. Categories come from the same `bucketOf` the storage treemap uses, so
+ * the user sees one set of buckets in both places.
+ */
 
 export type CategorySlice = {
   bucket: StorageBucket;
@@ -21,8 +20,9 @@ export type CategoryBreakdown = {
 
 type CategoryInput = Pick<StorageItem, "filename" | "mimeType" | "sizeBytes">;
 
-/** Group files into type categories + sum count & bytes per category.
- *  Categories are returned largest-first by total bytes. */
+/** Groups files by type category and sums the count and bytes of each.
+ *  Categories come back largest-first by bytes. A file of zero bytes is
+ *  skipped. */
 export function buildCategoryBreakdown(items: CategoryInput[]): CategoryBreakdown {
   const byBucket = new Map<StorageBucket, CategorySlice>();
   let totalFiles = 0;

@@ -1,3 +1,13 @@
+/**
+ * Collects a stream into a single Buffer.
+ */
+
+/**
+ * Reads `stream` to its end and returns everything it produced.
+ *
+ * Accepts either a web ReadableStream or a Node readable stream, because
+ * storage adapters return one and file reads return the other.
+ */
 export async function streamToBuffer (
   stream: ReadableStream | NodeJS.ReadableStream,
 ): Promise<Buffer> {

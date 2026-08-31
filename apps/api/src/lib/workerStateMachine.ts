@@ -1,35 +1,29 @@
 /**
- * Central definition of valid MediaWorkerState transitions.
+ * Records which changes of `thumbState` and `textState` a worker is allowed to
+ * make, and how long a job may sit unfinished before it is given up on.
  *
- * Enforcement happens at the database layer via conditional WHERE clauses in
- * updateMany calls (see MediaRepository). Using WHERE instead of application-
- * level guards makes the checks atomic and race-condition safe: a late-arriving
- * worker can never overwrite a terminal state written by a cancel/retry path.
+ * The rules below are enforced by conditional WHERE clauses on the update
+ * statements in MediaRepository, not by any check in this file.
  *
- * Valid transitions:
+ * thumbState
+ *   PENDING     → READY        worker rendered a thumbnail
+ *   PENDING     → FAILED       render error, or the job never reported back
+ *   PENDING     → UNSUPPORTED  the type cannot be rendered, or the file is too large
+ *   any         → PENDING      the user asked for a fresh render, or a watched file changed
  *
- *   thumbState
- *     PENDING → READY        (worker success)
- *     PENDING → FAILED       (worker render error)
- *     PENDING → FAILED       (stall detection)
- *     PENDING → UNSUPPORTED  (type can't be thumbnailed)
- *     FAILED  → (none)       terminal — thumbnail is one-shot; no re-run path exists
- *     UNSUPPORTED → (none)   terminal — file is intrinsically not thumbnailable
+ * textState
+ *   PENDING     → READY        text was extracted
+ *   PENDING     → ERROR        extraction failed, or the job never reported back
+ *   PENDING     → UNSUPPORTED  the type produces no text, or the file is too large
+ *   PENDING     → NEEDS_OCR    the fast pass found no text, so the file is set aside for OCR
+ *   NEEDS_OCR   → READY|ERROR  an OCR run finished a file that had been set aside
+ *   NEEDS_OCR   → PENDING      an OCR run was started for a file that had been set aside
+ *   READY|ERROR → PENDING      the user asked for extraction to run again
  *
- *   textState
- *     PENDING → READY        (worker success)
- *     PENDING → ERROR        (worker non-transient failure or exhausted retries)
- *     PENDING → ERROR        (stall detection)
- *     PENDING → UNSUPPORTED  (mime can't produce text, or too large)
- *     READY   → PENDING      (user re-runs extraction)
- *     ERROR   → PENDING      (user re-runs extraction)
- *     UNSUPPORTED → (none)   terminal — file is intrinsically not extractable
- *
- * FAILED is used exclusively for thumbState (real render failures).
- * ERROR  is used exclusively for textState (real extraction failures).
- * UNSUPPORTED is shared by both: a terminal "won't process" state for files that are
- *   the wrong type or too large. It is never retried, and the human-readable reason is
- *   surfaced to the UI (thumbError for thumbnails; a derived reason for text).
+ * FAILED belongs to thumbnails and ERROR to text; the two never appear on the
+ * other column. UNSUPPORTED is shared, and means the work will never be
+ * attempted rather than that it failed. `hashState` and `sourceState` use the
+ * same set of values but are not part of the rules above.
  */
 
 /** How long a record may remain at PENDING before stall detection marks it terminal. */

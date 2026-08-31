@@ -1,17 +1,19 @@
+/**
+ * Answers the two questions a container runtime asks: is the process alive,
+ * and can it reach the database, Redis and its storage folder.
+ */
 import type { FastifyPluginAsync } from "fastify";
 import { access, constants } from "node:fs/promises";
 
 declare module "fastify" {
   interface FastifyInstance {
-    /** Optional injected storage readiness probe (tests). Defaults to a
-     *  writability check on STORAGE_FS_PATH. */
+    /** Stands in for the real storage check so a test does not touch the disk. */
     storageReadyCheck?: () => Promise<void>;
   }
 }
 
-/** Writability probe on the blob base path. ENOENT = base path not created yet
- *  (first boot, no uploads) — the fs adapter creates it lazily on first write,
- *  so that counts as healthy. */
+// Confirms the storage folder can be written to. A folder that does not exist
+// yet counts as healthy, because the storage adapter creates it on first write.
 async function defaultStorageCheck (basePath: string): Promise<void> {
   try {
     await access(basePath, constants.W_OK);

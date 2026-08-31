@@ -1,33 +1,26 @@
 /**
- * Decide whether a newly-seen file is really an existing item that moved.
- *
- * The OS gives no "move" event: dragging `a/photo.jpg` to `b/photo.jpg` arrives
- * as `unlink a/photo.jpg` + `add b/photo.jpg`, and a rename looks identical.
- * Treating those as a delete plus a fresh index destroys everything the user
- * added — tags, edited title, starred state, bundle membership, reminders,
- * extracted text, and the stable `Media.id` behind any bookmarked link.
- *
- * So the unlink side tombstones the row (`Media.missingSince`) rather than
- * deleting it, and the add side calls this to look for the row it belongs to.
- *
- * Pure and I/O-free on purpose: both the live watcher and the reconciliation
- * pass feed it candidates they already have in hand, and it is exhaustively
- * testable without a filesystem, a database, or a clock.
+ * Decides whether a newly-seen file is an existing item that moved. The
+ * operating system reports no move: `a/photo.jpg` becoming `b/photo.jpg` arrives
+ * as an unlink and an add. Treating that as a delete and a re-index would throw
+ * away the tags, title, bundles and reminders the user added, along with the id
+ * behind any bookmarked link, so an unlink tombstones the row instead and an add
+ * comes here to find it.
  */
 
-/** A tombstoned row that the incoming file might actually be. */
+import { sameMtime } from "./sourceMtime.js";
+
+/** A tombstoned row that the incoming file might be. */
 export type MoveCandidate = {
   id: string;
   /** Basename of the old source path (not the full path — a move changes dirs). */
   basename: string;
   sizeBytes: number;
-  /** Last known filesystem mtime in epoch ms; null on rows indexed before the
-   *  column existed, which simply makes the mtime tiers skip them. */
+  /** Last known file-modified time, in epoch milliseconds. Null on a row
+   *  indexed before the column existed, which makes the mtime tiers skip it. */
   mtimeMs: number | null;
   contentHash: string | null;
 };
 
-/** The file the watcher just saw appear. */
 export type IncomingFile = {
   basename: string;
   sizeBytes: number;
@@ -36,52 +29,33 @@ export type IncomingFile = {
   contentHash?: string | null;
 };
 
-/**
- * How the match was established, most to least certain. Callers log this so a
- * surprising rematch can be traced back to the rule that produced it.
- */
+/** Most to least certain; logged so a surprising rematch traces to its rule. */
 export type MatchVia = "size-mtime-name" | "size-mtime" | "content-hash";
 
 export type MatchResult<C extends MoveCandidate = MoveCandidate> =
-  /** Exactly one candidate is this file. Update that row in place. */
   | { kind: "matched"; candidate: C; via: MatchVia }
-  /** Several candidates are indistinguishable by cheap metadata. Hash the
-   *  incoming file and call again with `contentHash` set to break the tie. */
+  /** Ties the caller breaks by hashing and calling again with `contentHash` set. */
   | { kind: "ambiguous"; candidates: C[] }
-  /** Nothing plausible. The caller indexes it as a genuinely new file. */
   | { kind: "none" };
 
-/** Windows and macOS are case-insensitive about filenames; Linux is not. Being
- *  lenient here can only widen the candidate set, and ties are resolved by hash
- *  rather than guessed at, so leniency costs nothing. */
+/** Case-insensitive (Windows/macOS name rules) — only ever widens the candidate
+ *  set, and ties are resolved by hash rather than guessed at. */
 function sameName (a: string, b: string): boolean {
   return a.localeCompare(b, undefined, { sensitivity: "accent" }) === 0;
 }
 
-/** A real move preserves size and mtime exactly — both must be known to count. */
+/** A real move preserves size and mtime — both must be known to count, and the
+ *  mtime only to the precision the column survives (see {@link sameMtime}). */
 function sameSizeAndMtime (candidate: MoveCandidate, file: IncomingFile): boolean {
-  if (candidate.mtimeMs === null || file.mtimeMs === null) return false;
-  return candidate.sizeBytes === file.sizeBytes && candidate.mtimeMs === file.mtimeMs;
+  return candidate.sizeBytes === file.sizeBytes && sameMtime(candidate.mtimeMs, file.mtimeMs);
 }
 
 /**
- * Match `file` against tombstoned `candidates`, cheapest signal first.
- *
- * Order matters — a real move preserves size and mtime exactly, so those settle
- * the overwhelming majority of cases without reading a single byte. Hashing is
- * reserved for genuine ambiguity: hashing every added file would cost more than
- * the re-index this whole mechanism exists to avoid.
- *
- *   1. size + mtime + basename all agree  → moved to a new directory
- *   2. size + mtime agree, basename differs → renamed in place
- *   3. contentHash agrees                  → moved, when metadata was inconclusive
- *
- * A tier that produces more than one candidate is reported as `ambiguous`
- * instead of picking one, because guessing would graft one file's history onto
- * another — strictly worse than the re-index we are trying to prevent. The
- * caller answers that by hashing and calling again with `contentHash` set; on
- * that second pass the hash takes precedence over the metadata tiers and every
- * path resolves, so the exchange happens at most once.
+ * Matches `file` against tombstoned `candidates`, cheapest signal first: size and
+ * modified time, then content hash. A tier that produces more than one candidate
+ * reports `ambiguous` rather than guessing, which would attach one file's history
+ * to another. The caller then hashes and calls again with `contentHash` set,
+ * which outranks the metadata tiers.
  */
 export function matchIdentity<C extends MoveCandidate> (
   file: IncomingFile,
@@ -89,17 +63,16 @@ export function matchIdentity<C extends MoveCandidate> (
 ): MatchResult<C> {
   if (candidates.length === 0) return { kind: "none" };
 
-  // Once the hash is known it is decisive in the negative: a candidate whose
-  // recorded hash differs is provably different bytes, whatever its size and
-  // mtime say. Candidates with no hash yet stay in play.
+  // A known hash is decisive in the negative: a candidate with a different
+  // recorded hash is provably different bytes. Hash-less candidates stay in play.
   const pool = file.contentHash
     ? candidates.filter(c => c.contentHash === null || c.contentHash === file.contentHash)
     : candidates;
   if (pool.length === 0) return { kind: "none" };
 
-  // ...and decisive in the positive, so it outranks the metadata tiers when we
-  // have paid for it. Prefer a candidate that also kept its name; beyond that
-  // the matches are byte-identical and therefore interchangeable.
+  // ...and decisive in the positive: it outranks the metadata tiers once paid
+  // for. Prefer a candidate that also kept its name; otherwise the matches are
+  // byte-identical and interchangeable.
   if (file.contentHash) {
     const byHash = pool.filter(c => c.contentHash === file.contentHash);
     if (byHash.length > 0) {
@@ -109,11 +82,8 @@ export function matchIdentity<C extends MoveCandidate> (
     // Every candidate predates hashing. Fall through to the metadata tiers.
   }
 
-  /**
-   * Settle one tier. A tie is only reported as `ambiguous` while a hash could
-   * still break it — on the second pass we already know the bytes agree as far
-   * as anything can tell, so picking one both terminates and is harmless.
-   */
+  // A tie is `ambiguous` only while a hash could still break it — on the
+  // second pass the bytes already agree, so picking one is harmless.
   const settle = (set: C[], via: MatchVia): MatchResult<C> | null => {
     if (set.length === 0) return null;
     if (set.length === 1 || file.contentHash) {
@@ -133,8 +103,8 @@ export function matchIdentity<C extends MoveCandidate> (
   const tier2 = settle(sizeAndMtime, "size-mtime");
   if (tier2) return tier2;
 
-  // Metadata found nothing. This is exactly where hashing earns its cost, so
-  // ask for one — but only if some candidate has a hash to compare against.
+  // Metadata found nothing. This is where hashing earns its cost, so ask for
+  // one — but only if some candidate has a hash to compare against.
   if (!file.contentHash && pool.some(c => c.contentHash !== null)) {
     return { kind: "ambiguous", candidates: pool };
   }

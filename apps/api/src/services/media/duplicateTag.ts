@@ -1,8 +1,7 @@
 /**
- * Shared "tag byte-identical copies" step, used by both the thumbnail worker
- * (which hashes the buffer it already has in memory) and the hash worker
- * (which stream-hashes everything else), so tagging behavior stays identical
- * no matter which path computed the hash.
+ * Tags byte-identical copies of a file as duplicates. Called by the thumbnail
+ * worker, which hashes the buffer it already holds, and by the hash worker,
+ * which hashes everything else from a stream.
  */
 
 export type DuplicateTagRepository = {
@@ -10,7 +9,7 @@ export type DuplicateTagRepository = {
   addTagIfAbsent: (mediaId: string, tagName: string) => Promise<void>;
 };
 
-/** If another of the user's items shares `contentHash`, tag both "duplicate". */
+/** Tags both items "duplicate" when another of the user's items shares `contentHash`. */
 export async function tagDuplicatesForHash (
   repo: DuplicateTagRepository,
   userId: string,

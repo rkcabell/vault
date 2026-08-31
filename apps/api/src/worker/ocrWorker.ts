@@ -11,12 +11,19 @@ import {
 } from "../services/ocrProcessingService.js";
 import { createLogger } from "../lib/logger.js";
 
+/**
+ * Adapts a worker's own dependencies to the OCR processing service, building the
+ * repositories it needs from a Prisma client.
+ */
+
 export type OcrDeps = {
   prisma: PrismaClient;
   storage: StorageAdapter;
   bucket: string;
   allowedRoots?: string[];
   enqueueOcr: OcrProcessingDeps["enqueueOcr"];
+  getOcrMode?: OcrProcessingDeps["getOcrMode"];
+  getOcrTimeoutCapMinutes?: OcrProcessingDeps["getOcrTimeoutCapMinutes"];
   logger?: OcrProcessingDeps["logger"];
   queueName?: string;
   sleep?: OcrProcessingDeps["sleep"];
@@ -33,6 +40,8 @@ export async function processOcrJob (deps: OcrDeps, data: OcrJobData) {
     bucket: deps.bucket,
     allowedRoots: deps.allowedRoots,
     enqueueOcr: deps.enqueueOcr,
+    getOcrMode: deps.getOcrMode,
+    getOcrTimeoutCapMinutes: deps.getOcrTimeoutCapMinutes,
     logger,
     queueName: deps.queueName ?? process.env.OCR_QUEUE ?? "ocr_queue",
     sleep: deps.sleep,
